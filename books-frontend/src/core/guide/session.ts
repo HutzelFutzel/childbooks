@@ -69,6 +69,20 @@ export interface GuideMessage {
    * book holds nested arrays the transcript store cannot. Undo puts them back.
    */
   restore?: string;
+  /**
+   * Chat studio: the entry in the book's change log (`state/bookHistory.ts`)
+   * for the page-design changes this message made. Undo takes back that entry,
+   * and only it, so later changes (the reader's or the chat's) stay, and the
+   * thread keeps the message: whether it is undone is read from the entry.
+   */
+  changeId?: string;
+  /**
+   * Chat studio: on a reader line, the pages it named ("page 18", "the back
+   * cover"), as unit ids read by the app when it was sent. Kept as ids so a
+   * page added or moved later cannot make the chip point at another page; the
+   * number shown is read from the book now, and a page that is gone says so.
+   */
+  pageRefs?: string[];
   /** Chat studio: the configured lines this message said (confirm-once bookkeeping). */
   keys?: string[];
   /**
@@ -224,6 +238,13 @@ function normalizeMessage(input: unknown): GuideMessage | null {
     ...(isGuideComponentId(raw.about) ? { about: raw.about } : {}),
     ...(normalizeBefore(raw.before) ?? {}),
     ...(normalizeRestore(raw.restore) ?? {}),
+    ...(typeof raw.changeId === "string" && raw.changeId && raw.changeId.length <= 80 ? { changeId: raw.changeId } : {}),
+    ...(raw.role === "reader" && Array.isArray(raw.pageRefs)
+      ? (() => {
+          const refs = raw.pageRefs.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 80).slice(0, 12);
+          return refs.length > 0 ? { pageRefs: refs } : {};
+        })()
+      : {}),
     ...(Array.isArray(raw.keys) && raw.keys.every((k) => typeof k === "string")
       ? { keys: raw.keys.slice(0, 8) }
       : {}),

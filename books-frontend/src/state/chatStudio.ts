@@ -33,6 +33,7 @@ import {
   audienceQuestion,
   journeyEntry,
   openAskedFacts,
+  pagesStarted,
   readyToDraft,
   storyBriefWell,
   type BookViewId,
@@ -89,6 +90,9 @@ import type { GuideEntry, Project } from "../core/types";
 import { guideAskNextRemote, guideSpeakRemote, reportGuideTurnOutcomeRemote, storyDraftRemote } from "../platform/aiClient";
 import { peopleNeedingStatedAge } from "../core/guide/agent/requirements";
 import { updateCastMember } from "../ui/guide/bookActions";
+import { unitTarget } from "../ui/guide/book/units";
+import { useRedrawHold } from "./redrawHold";
+import { changesTheScene } from "../core/pipeline/editScope";
 import { useGuidePreference } from "../ui/guide/guidePreference";
 import { useAppConfigStore } from "./appConfigStore";
 import { quoteFor } from "./chatGeneration";
@@ -120,6 +124,11 @@ import { validateComposed } from "../core/guide/agent/compose";
 import type { AskOption, Beat, CommandArgs, CommandCall } from "../core/guide/agent/types";
 import { beat } from "../core/guide/agent/commands/shared";
 import { guideAnswerRemote } from "../platform/aiClient";
+import { describePages, pagesNamedIn } from "../core/book/pageRefs";
+import { pictureRectOnPage, regionOnPicture } from "../core/book/regionPicture";
+import type { NormRect } from "../core/design";
+import { diffDesign, labelForOps, newestApplied, EMPTY_LOG, type ChangeEntry } from "../core/book/changeLog";
+import { useBookHistory } from "./bookHistory";
 
 const TRANSCRIPT_WINDOW = 8;
 /** Longest a line waits for its phrasing before the configured sentence is shown instead. */
@@ -156,6 +165,10 @@ export interface RedrawRequest {
   mode?: RedrawMode;
   /** More people changed by the same message ("Aren and Amira"): drawn together with `target`, quoted and started as one. */
   more?: { castId: string; name: string; instruction: string; mode?: RedrawMode }[];
+  /** More pages or covers changed by the same message ("make the sky pink on pages 3 to 5"): same sentence, quoted and started as one with `target`. */
+  pages?: Extract<GuideTarget, { kind: "page" | "cover" }>[];
+  /** A spot the reader marked on this picture: only there may it change. */
+  region?: NormRect;
 }
 
 export interface SayExtra {
@@ -252,7 +265,13 @@ interface ChatStudioState {
    * message back to edit it (`quiet`) gets no "Undone." line; any other rewind
    * says so, so the thread never just carries on as if nothing happened.
    */
-  undo: (messageId: string, options?: { quiet?: boolean }) => Promise<void>;
+  /**
+   * Take back one message's change. `mode` answers the conflict card: only that
+   * change (`force`), or it and everything after it (`through`).
+   */
+  undo: (messageId: string, options?: { quiet?: boolean; mode?: "force" | "through" }) => Promise<void>;
+  /** Put back a change that was undone. */
+  redo: (messageId: string) => Promise<void>;
   skipFact: (fact: GuideFactId) => Promise<void>;
   retryStory: () => Promise<void>;
   /** "Write the story": the reader is done shaping it. */
@@ -296,6 +315,22 @@ interface ChatStudioState {
   said: (mark: string) => boolean;
   setView: (view: BookViewId | null) => void;
   setChip: (target: GuideTarget | null) => void;
+  /** Bring a page into view on the right (and select it). The book pane answers each new request once. */
+  pageJump: { unitId: string; nonce: number } | null;
+  /** The page a chat chip is pointing at while the pointer is on it: the book rings it. */
+  hoverUnit: string | null;
+  setHoverUnit: (unitId: string | null) => void;
+  /**
+   * A spot the reader marked on a picture ("put it here"). The next typed change
+   * to that picture is limited to it; it is dropped when used, when another
+   * picture is picked, or when the reader clears it.
+   */
+  pictureRegion: { unitId: string; rect: NormRect } | null;
+  setPictureRegion: (region: { unitId: string; rect: NormRect } | null) => void;
+  jumpToPage: (unitId: string) => void;
+  /** The order screen was asked for in a message. The studio answers each new request once. */
+  orderRequest: number;
+  requestOrder: () => void;
   setLooking: (pageIds: readonly string[]) => void;
   setCardDeck: (deck: CardDeck) => void;
   setFocus: (focus: boolean) => void;
@@ -808,13 +843,20 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         // earlier version of just those pages, so Undo puts them back too.
         if (before && restore) {
           const after = live();
-          if (after && after.design !== before.design) {
-            const withDesign = snapshot(before, after);
-            if (withDesign.length <= GUIDE_RESTORE_MAX_CHARS) {
+          const ops = after ? diffDesign(before.design, after.design) : [];
+          if (after && ops.length > 0) {
+            const entry = useBookHistory.getState().recordDesign({
+              projectId: before.id,
+              source: "chat",
+              label: label.slice(0, 120) || labelForOps(ops),
+              before: before.design,
+              after: after.design,
+            });
+            if (entry) {
               set((state) => ({
                 session: {
                   ...state.session,
-                  messages: state.session.messages.map((m) => (m.id === message.id ? { ...m, restore: withDesign } : m)),
+                  messages: state.session.messages.map((m) => (m.id === message.id ? { ...m, changeId: entry.id } : m)),
                 },
               }));
               persist();
@@ -985,6 +1027,14 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         if (get().projectId !== projectId) return;
         set({ session, loaded: true });
 
+        const first = live();
+        if (!first || first.id !== projectId) return;
+        // A book drawn in the editor already has its pages, so it is locked like one drawn
+        // here. Without this its chat would still be "before the pages": no page skills,
+        // and a typed sentence would redraw the selected picture instead of being read.
+        if (!authoringOf(first).lockedAt && pagesStarted(first)) {
+          await patchBook((b) => (b.id === projectId && !authoringOf(b).lockedAt ? withAuthoring(b, { lockedAt: Date.now() }) : b));
+        }
         const project = live();
         if (!project || project.id !== projectId) return;
         const state = authoringOf(project);
@@ -1073,7 +1123,12 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       const mark = options?.mark !== undefined ? options.mark : takeMark();
       const history = guideTranscriptWindow(get().session, TRANSCRIPT_WINDOW);
       const openWell = get().agentWell;
-      const line = guideMessage("reader", message, mark ? { quote: markExcerpt(mark.text, 240) } : {});
+      // The pages the message names are read now and kept as ids, so the thread can show them as chips.
+      const refs = pagesNamedIn(message, project).ids.slice(0, 12);
+      const line = guideMessage("reader", message, {
+        ...(mark ? { quote: markExcerpt(mark.text, 240) } : {}),
+        ...(refs.length > 0 ? { pageRefs: refs } : {}),
+      });
       if (mark) rememberMarkFor(line.id, mark);
       append(line);
       set({ sending: true, error: null, agentWell: null });
@@ -1143,6 +1198,23 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       // Once the book is finished a sentence can be about the words as much as
       // the picture, so the interpreter reads it first; a picture change that
       // no skill covers still reaches the redraw below (`interpretMessage`).
+      // A spot marked on a picture is the clearest aim there is: "remove that boy" is a change to that picture,
+      // whatever skill the interpreter might have matched it to (it would call it a change to the cast).
+      const spot = get().pictureRegion;
+      if (
+        locked &&
+        spot &&
+        chip &&
+        chip.kind !== "person" &&
+        chip.unitId === spot.unitId &&
+        !/\?\s*$/.test(message.trim()) &&
+        !/^\s*(undo|redo)\b/i.test(message) &&
+        pagesNamedIn(message, project).ids.every((id) => id === spot.unitId)
+      ) {
+        await routePictureChange(message, project, cast);
+        set({ sending: false });
+        return;
+      }
       if (chip && !locked) {
         await routePictureChange(message, project, cast);
         set({ sending: false });
@@ -1195,34 +1267,21 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     },
 
     undo: async (messageId, options) => {
-      const { session, sending } = get();
-      if (sending) return;
-      const target = session.messages.find((m) => m.id === messageId);
-      if (!target) return;
-      if (target.before || target.restore) {
-        const { audience, artStyles, storyCraft } = useAppConfigStore.getState();
-        const context = guidePatchContext({ audience, artStyles, storyCraft });
-        await patchBook((b) => {
-          const restored = target.restore ? applyRestore(b, target.restore) : b;
-          return target.before ? applyGuidePatch(restored, target.before, context).project : restored;
-        });
-        // Everything that was about the rewound turn goes with it: the card that
-        // was on screen, the picture it was aimed at, a clarification or redraw
-        // waiting on an answer. The cards are then drawn again from the book.
-        set({
-          session: rewoundGuideSession(get().session, messageId),
-          agentWell: null,
-          agentPending: null,
-          cardDeck: EMPTY_DECK,
-          chip: null,
-          pendingTarget: null,
-          redraw: null,
-        });
-        if (!options?.quiet) get().say([{ key: "undone", priority: "result" }]);
-      } else {
-        const index = session.messages.findIndex((m) => m.id === messageId);
-        set({ session: { ...session, messages: session.messages.slice(0, Math.max(0, index)) } });
+      if (get().sending) return;
+      await undoMessage(messageId, options);
+    },
+
+    redo: async (messageId) => {
+      if (get().sending) return;
+      const project = live();
+      const target = get().session.messages.find((m) => m.id === messageId);
+      if (!project || !target?.changeId) return;
+      const outcome = await useBookHistory.getState().redoEntry(project.id, target.changeId);
+      if (outcome.status === "conflict") {
+        await speak([{ key: "redoBlocked", priority: "result", vars: { what: pagesPhrase(project, outcome.newer) } }]);
+        return;
       }
+      if (outcome.status === "done") get().say([{ key: "redone", priority: "result" }]);
       persist();
     },
 
@@ -1380,7 +1439,33 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     // A chip is set from the tab it belongs to; keeping that tab open is what lets
     // setView know to close the card when the reader leaves it.
     setChip: (target) =>
-      set({ chip: target, pendingTarget: null, ...(target ? { view: targetHomeView(target) } : {}) }),
+      set((state) => ({
+        chip: target,
+        pendingTarget: null,
+        ...(target ? { view: targetHomeView(target) } : {}),
+        // A marked spot belongs to the picture it was drawn on.
+        ...(state.pictureRegion &&
+        !(target && target.kind !== "person" && target.unitId === state.pictureRegion.unitId)
+          ? { pictureRegion: null }
+          : {}),
+      })),
+
+    pageJump: null,
+    orderRequest: 0,
+    requestOrder: () => set((state) => ({ orderRequest: state.orderRequest + 1 })),
+    hoverUnit: null,
+    setHoverUnit: (unitId) => set((state) => (state.hoverUnit === unitId ? state : { hoverUnit: unitId })),
+    pictureRegion: null,
+    setPictureRegion: (region) => set({ pictureRegion: region }),
+    jumpToPage: (unitId) => {
+      const project = live();
+      const target = project ? unitTarget(project, unitId) : null;
+      set((state) => ({
+        pageJump: { unitId, nonce: (state.pageJump?.nonce ?? 0) + 1 },
+        view: "pages",
+        ...(target ? { chip: target, pendingTarget: null } : {}),
+      }));
+    },
 
     setLooking: (pageIds) =>
       set((state) =>
@@ -1669,7 +1754,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     // skills run after them, so "add Brian, he's 6" finds Brian's age written.
     if (agent.enabled && (outcome.commands.length > 0 || outcome.overflowCommands.length > 0)) {
       const receipt = receiptFor(live() ?? after, outcome.applied);
-      await runAgentCalls(outcome.commands, outcome.overflowCommands, receipt, pendingBefore, options.mark ?? null, project);
+      await runAgentCalls(outcome.commands, outcome.overflowCommands, receipt, pendingBefore, options.mark ?? null, project, message);
       set({ sending: false });
       report([...outcome.applied, ...outcome.commands.map((call) => `skill:${call.id}`)]);
       return;
@@ -1694,7 +1779,11 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     const selected = get().chip;
     if (
       outcome.applied.length === 0 &&
-      (selected ? outcome.intent === "revise" : outcome.intent === "revise" || outcome.intent === "other") &&
+      (selected
+        ? outcome.intent === "revise" ||
+          // A selected page and a sentence about how the people on it relate is a picture change, whatever the interpreter called it.
+          (selected.kind !== "person" && changesTheScene(message, after.anchors))
+        : outcome.intent === "revise" || outcome.intent === "other") &&
       ["target", "targets"].includes(resolveGuideTarget({ sentence: message, chip: selected, cast: drawn }).kind)
     ) {
       await routePictureChange(message, after, drawn);
@@ -1861,8 +1950,10 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     pendingBefore: AgentPending | null = null,
     mark: StoryMark | null = null,
     since: Project | null = null,
+    said?: string,
   ): Promise<void> {
     const turn = await executeAgentCalls(calls, {
+      ...(said ? { said } : {}),
       overflow,
       later: speakLater,
       mark,
@@ -1913,17 +2004,45 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     pendingBefore: AgentPending | null = null,
   ): Promise<void> {
     if (turn.restore) attachRestore(turn.restore);
+    if (turn.changeId) attachChange(turn.changeId);
     const beats = [...turn.beats];
+    let conflicted = false;
     if (turn.undo) {
       const undone = await undoLastSkillTurn();
-      beats.push({ key: undone ? "undone" : "nothingToUndo", priority: "result" });
+      conflicted = undone === "conflict";
+      if (!conflicted) beats.push({ key: undone === "done" ? "undone" : "nothingToUndo", priority: "result" });
+    }
+    if (turn.redo) {
+      const redone = await redoLast();
+      beats.push({ key: redone ? "redone" : "nothingToRedo", priority: "result" });
     }
     if (turn.skip && !(await skipPersonAsk(pendingBefore))) {
       const current = live();
       const open = current ? openAskedFacts(current) : [];
       if (open[0]) await patchBook((b) => withFactMarks(b, "skippedFacts", [open[0]!]));
     }
-    if (turn.redraws.length > 0) {
+    if (turn.goToPage) get().jumpToPage(turn.goToPage);
+    if (turn.openOrder) get().requestOrder();
+    if (turn.pageRedraw) {
+      const project = live();
+      const pageTargets = project ? turn.pageRedraw.unitIds.map((id) => unitTarget(project, id)) : [];
+      const [target, ...otherPages] = pageTargets;
+      if (target) {
+        // The reader selected one page and typed another: look first, then pay. Nothing starts on its own.
+        const pinned = get().chip;
+        const disagrees = Boolean(pinned && pinned.kind !== "person" && !turn.pageRedraw.unitIds.includes(pinned.unitId));
+        const key = await offerRedraw(target, turn.pageRedraw.instruction, turn.pageRedraw.mode, [], otherPages, disagrees);
+        // The skill said "tap redraw when you're ready"; say what actually happened instead.
+        const rest = beats.filter((b) => b.key !== "redrawReady");
+        beats.length = 0;
+        beats.push(...rest, redrawBeat(key, pageTargets, "result"));
+        // The first page stays selected, so the right side shows which picture the change is about.
+        // A page the reader already has open stays where it is (and stays Edit): only the pin follows.
+        const inView = turn.pageRedraw.unitIds.find((id) => get().looking.includes(id));
+        if (inView) get().setChip(unitTarget(project!, inView));
+        else get().jumpToPage(turn.pageRedraw.unitIds[0]!);
+      }
+    } else if (turn.redraws.length > 0) {
       const [first, ...others] = turn.redraws as [(typeof turn.redraws)[number], ...(typeof turn.redraws)[number][]];
       const targets: GuideTarget[] = turn.redraws.map((item) => ({ kind: "person", castId: item.castId, name: item.name }));
       const key = await offerRedraw(targets[0]!, first.instruction, first.mode, others);
@@ -1932,34 +2051,138 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       beats.length = 0;
       beats.push(...rest, redrawBeat(key, targets, "result"));
       set({ chip: null });
-    } else if (!turn.holdsFloor && !turn.well && !turn.undo) {
+    } else if (!turn.holdsFloor && !turn.well && !turn.undo && !turn.redo) {
       // What the message changed about somebody's look or age may make a
       // picture necessary: draw it when that is cheap, as the buttons would.
       const settled = await settlePictures(turn.startedFrom, turn.chose);
       if (settled) beats.push(settled);
     }
+    // The redraw is started or priced by now: the page's own card may speak for itself again.
+    useRedrawHold.getState().release();
     set((state) => ({
-      agentWell: turn.well,
+      // The conflict card the undo opened must outlive this turn's own well reset.
+      agentWell: conflicted ? state.agentWell : turn.well,
       agentPending: turn.pending,
       ...(turn.view ? { view: turn.view, chip: chipForView(state.chip, turn.view) } : {}),
     }));
-    await speak(beats, receipt, turn.well ? agentWellTopic(turn.well) : undefined);
+    if (!conflicted) await speak(beats, receipt, turn.well ? agentWellTopic(turn.well) : undefined);
     if (turn.entry) {
       await get().chooseEntry(turn.entry);
       return;
     }
-    if (!turn.holdsFloor && !turn.undo) await afterTurn(null);
+    if (!turn.holdsFloor && !turn.undo && !turn.redo) await afterTurn(null);
+  }
+
+  /** The pages a list of changes touched, as one phrase. */
+  function pagesPhrase(project: Project, entries: readonly ChangeEntry[]): string {
+    const ids = [...new Set(entries.flatMap((entry) => entry.pages))];
+    return ids.includes("*") ? "the book" : describePages(project, ids);
+  }
+
+  /** Keep the change-log entry on the reader's message, so Undo and Redo find it. */
+  function attachChange(changeId: string): void {
+    set((state) => {
+      const messages = [...state.session.messages];
+      const index = messages.findLastIndex((m) => m.role === "reader");
+      if (index < 0) return state;
+      // Two turns on one message (a confirmation after the ask) keep the first entry.
+      messages[index] = { ...messages[index]!, changeId: messages[index]!.changeId ?? changeId };
+      return { session: { ...state.session, messages } };
+    });
+    persist();
+  }
+
+  /** What is on screen about a turn goes when the turn is taken back. */
+  function clearTurnState(): void {
+    set({ agentWell: null, agentPending: null, cardDeck: EMPTY_DECK, chip: null, pendingTarget: null, redraw: null });
+  }
+
+  /** An older change was touched again since: ask whether to take the newer ones back too. */
+  async function offerUndoConflict(messageId: string, project: Project, newer: readonly ChangeEntry[]): Promise<void> {
+    const pages = pagesPhrase(project, newer);
+    set({ agentWell: { kind: "undoConflict", messageId, pages, count: newer.length } });
+    await speak([{ key: "undoConflict", priority: "confirm", vars: { what: pages } }], undefined, `undoConflict:${messageId}`);
+  }
+
+  /**
+   * Take back one message's change. A change made through the book's change
+   * log goes back alone (the message stays and offers Redo); one made before the
+   * log existed, or one that also changed the story and the people, goes back
+   * from its snapshot and rewinds the thread to that message.
+   */
+  async function undoMessage(
+    messageId: string,
+    options: { quiet?: boolean; mode?: "force" | "through" } = {},
+  ): Promise<"done" | "conflict" | "missing"> {
+    const session = get().session;
+    const target = session.messages.find((m) => m.id === messageId);
+    if (!target) return "missing";
+    const project = live();
+    const legacy = Boolean(target.before || target.restore);
+    if (target.changeId && project) {
+      const history = useBookHistory.getState();
+      const entry = history.entry(project.id, target.changeId);
+      if (entry && entry.state === "applied") {
+        const outcome =
+          options.mode === "through"
+            ? await history.undoThrough(project.id, entry.id)
+            : await history.undoEntry(project.id, entry.id, { force: options.mode === "force" });
+        if (outcome.status === "conflict") {
+          await offerUndoConflict(messageId, project, outcome.newer);
+          return "conflict";
+        }
+      }
+    }
+    if (legacy) {
+      const { audience, artStyles, storyCraft } = useAppConfigStore.getState();
+      const context = guidePatchContext({ audience, artStyles, storyCraft });
+      await patchBook((b) => {
+        const restored = target.restore ? applyRestore(b, target.restore) : b;
+        return target.before ? applyGuidePatch(restored, target.before, context).project : restored;
+      });
+      // Everything that was about the rewound turn goes with it: the card that
+      // was on screen, the picture it was aimed at, a clarification or redraw
+      // waiting on an answer. The cards are then drawn again from the book.
+      set({ session: rewoundGuideSession(get().session, messageId) });
+      clearTurnState();
+      if (!options.quiet) get().say([{ key: "undone", priority: "result" }]);
+    } else if (target.changeId) {
+      clearTurnState();
+      if (!options.quiet) get().say([{ key: "undone", priority: "result" }]);
+    } else {
+      const index = session.messages.findIndex((m) => m.id === messageId);
+      set({ session: { ...session, messages: session.messages.slice(0, Math.max(0, index)) } });
+    }
+    persist();
+    return "done";
+  }
+
+  /** "Put it back": the change that was undone last. */
+  async function redoLast(): Promise<boolean> {
+    const project = live();
+    if (!project) return false;
+    const outcome = await useBookHistory.getState().redo(project.id);
+    return outcome.status === "done";
   }
 
   /** "Undo that": take back the newest reader turn that changed the book, before this one. */
-  async function undoLastSkillTurn(): Promise<boolean> {
+  async function undoLastSkillTurn(): Promise<"done" | "conflict" | "none"> {
     const messages = get().session.messages;
     const last = messages.findLastIndex((m) => m.role === "reader");
-    const target = messages.slice(0, Math.max(0, last)).findLast((m) => m.role === "reader" && (m.before || m.restore));
-    if (!target) return false;
-    set({ sending: false });
-    await get().undo(target.id);
-    return true;
+    const earlier = messages.slice(0, Math.max(0, last));
+    const legacy = earlier.findLast((m) => m.role === "reader" && (m.before || m.restore));
+    const project = live();
+    const history = useBookHistory.getState();
+    const newest = project ? newestApplied(history.logs[project.id] ?? EMPTY_LOG) : undefined;
+    // Whoever changed the book last, the chat or the editor, is what "undo" takes back.
+    if (project && newest && (!legacy || newest.at >= legacy.at)) {
+      const owner = earlier.findLast((m) => m.changeId === newest.id);
+      if (owner) return (await undoMessage(owner.id, { quiet: true })) === "conflict" ? "conflict" : "done";
+      const outcome = await history.undo(project.id);
+      return outcome.status === "done" ? "done" : "none";
+    }
+    if (!legacy) return "none";
+    return (await undoMessage(legacy.id, { quiet: true })) === "conflict" ? "conflict" : "done";
   }
 
   async function answerQuestion(question: string): Promise<void> {
@@ -2012,6 +2235,17 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         source: "model",
       };
       await runAgentCalls([call], [], undefined);
+      return;
+    }
+    // A page the sentence names beats the one that happens to be selected: people mean what they type.
+    const named = pagesNamedIn(message, project);
+    if (named.ids.length > 0) {
+      const pageTargets = named.ids.slice(0, 8).map((id) => unitTarget(project, id));
+      const [first, ...others] = pageTargets as [GuideTarget, ...GuideTarget[]];
+      const mode: RedrawMode | undefined = asksForNewPicture(message) ? "new" : undefined;
+      const pinned = chip && chip.kind !== "person" && !named.ids.includes(chip.unitId);
+      const key = await offerRedraw(first, isBareRestart(message) ? "" : message, mode, [], others as NonNullable<RedrawRequest["pages"]>, Boolean(pinned));
+      get().say([redrawBeat(key, pageTargets, "answer")]);
       return;
     }
     if (resolution.kind === "ask") {
@@ -2073,15 +2307,36 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     instruction: string,
     mode?: RedrawMode,
     more: NonNullable<RedrawRequest["more"]> = [],
+    pages: NonNullable<RedrawRequest["pages"]> = [],
+    /** Show the priced button even when it is cheap: the reader's words and their selection disagree. */
+    hold = false,
   ): Promise<GuideLineKey> {
     const { autoStartRedraw } = await import("./typedPictures");
+    // The spot the reader marked belongs to one picture changed in place: not to
+    // a new picture, and not to a message that changed several at once.
+    // What the reader dragged is on the page as shown; the redraw needs it on the picture.
+    const marked = get().pictureRegion;
+    const project = live();
+    const region =
+      marked &&
+      project &&
+      target.kind !== "person" &&
+      target.unitId === marked.unitId &&
+      mode !== "new" &&
+      more.length === 0 &&
+      pages.length === 0
+        ? regionOnPicture(marked.rect, pictureRectOnPage(project, marked.unitId))
+        : null;
+    if (marked && target.kind !== "person" && target.unitId === marked.unitId) set({ pictureRegion: null });
     const request: RedrawRequest = {
       target,
       instruction,
       ...(mode ? { mode } : {}),
       ...(more.length > 0 ? { more } : {}),
+      ...(pages.length > 0 ? { pages } : {}),
+      ...(region ? { region } : {}),
     };
-    const outcome = await autoStartRedraw(request).catch(() => "declined" as const);
+    const outcome = hold ? ("declined" as const) : await autoStartRedraw(request).catch(() => "declined" as const);
     if (outcome === "started") return "redrawStarting";
     set({ redraw: request });
     return outcome === "needsSparks" ? "redrawNeedSparks" : "redrawReady";

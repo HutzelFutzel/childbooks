@@ -15,8 +15,12 @@ import type { Project } from "../../../core/types";
 import { useStudio } from "../../studio/StudioContext";
 import { useStudioPanelStore } from "../../studio/studioPanelStore";
 import { useGuideT } from "../intl";
+import { BusyLine, BusyPill } from "./BusyPill";
 import { ModeSwitch } from "./ModeSwitch";
-import { dispIndexOf } from "./units";
+import { sameTarget } from "../../../core/guide/target";
+import { useChatStudio } from "../../../state/chatStudio";
+import { cn } from "../../lib/cn";
+import { dispIndexOf, dispUnitIds, unitTarget } from "./units";
 
 const BookCanvas = dynamic(
   () => import("../../studio/BookCanvas").then((m) => m.BookCanvas),
@@ -57,7 +61,10 @@ export function PageFocus({
   showConversationToggle: boolean;
 }) {
   const t = useGuideT("chrome");
-  const { displays, setEditingDisp } = useStudio();
+  const { displays, setEditingDisp, editingDispId } = useStudio();
+  const chip = useChatStudio((st) => st.chip);
+  const setChip = useChatStudio((st) => st.setChip);
+  const open = displays.find((d) => d.id === editingDispId) ?? displays[Math.max(0, dispIndexOf(displays, unitId ?? ""))];
   const setInstructionsOff = useStudioPanelStore((s) => s.setInstructionsOff);
 
   useEffect(() => {
@@ -85,19 +92,55 @@ export function PageFocus({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col" data-project={project.id}>
-      <div className="relative flex shrink-0 items-center justify-center gap-2 px-3 py-2">
-        <ModeSwitch mode="edit" onChange={(next) => next === "preview" && onLeave()} />
-        {showConversationToggle && (
-          <button
-            type="button"
-            onClick={() => onOverlay(!overlayOpen)}
-            aria-expanded={overlayOpen}
-            className="absolute right-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium text-ink-600 transition hover:bg-white hover:text-ink-900 hover:shadow-soft"
-          >
-            <MessageCircle className="size-4" />
-            {t("conversation")}
-          </button>
-        )}
+      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-ink-900/10 bg-white/95 px-2.5 shadow-[0_1px_2px_rgba(20,22,58,0.03)] backdrop-blur-md sm:px-4">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {showConversationToggle && (
+            <>
+              <button
+                type="button"
+                onClick={() => onOverlay(!overlayOpen)}
+                aria-expanded={overlayOpen}
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+                  overlayOpen
+                    ? "bg-ink-900 text-white shadow-2xs"
+                    : "bg-white text-ink-700 ring-1 ring-ink-900/10 hover:bg-ink-50 hover:text-ink-900",
+                )}
+              >
+                <MessageCircle className="size-3.5" />
+                {t("conversation")}
+              </button>
+              <span aria-hidden className="h-4 w-px bg-ink-900/10" />
+            </>
+          )}
+          <div className="flex items-center gap-1" role="group" aria-label={t("pageNumbers")}>
+            {open &&
+              dispUnitIds(open).map((id) => {
+                const target = unitTarget(project, id);
+                const active = sameTarget(chip, target);
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setChip(active ? null : target)}
+                    aria-pressed={active}
+                    className={cn(
+                      "inline-flex h-7 items-center rounded-md px-2.5 text-xs font-semibold tabular-nums transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+                      active
+                        ? "bg-ink-900 text-white shadow-2xs"
+                        : "bg-ink-900/[0.04] text-ink-700 ring-1 ring-inset ring-ink-900/[0.07] hover:bg-ink-900/[0.08] hover:text-ink-900",
+                    )}
+                  >
+                    {target.kind === "page" ? t("page", { n: target.page }) : t("cover")}
+                  </button>
+                );
+              })}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <BusyPill project={project} className="max-sm:hidden" />
+          <ModeSwitch mode="edit" onChange={(next) => next === "preview" && onLeave()} />
+        </div>
       </div>
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <BookCanvas autoPreview={false} guided />
@@ -123,7 +166,12 @@ export function PageFocus({
           )}
         </AnimatePresence>
       </div>
-      <div className="mx-auto w-full max-w-2xl shrink-0 px-4 pt-2 pb-4">{composer}</div>
+      <div className="mx-auto w-full max-w-2xl shrink-0 px-4 pt-2 pb-4">
+        <div className="sm:hidden">
+          <BusyLine project={project} />
+        </div>
+        {composer}
+      </div>
     </div>
   );
 }

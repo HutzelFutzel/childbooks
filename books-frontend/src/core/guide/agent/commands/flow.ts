@@ -135,6 +135,17 @@ export const FLOW_COMMANDS: CommandDef[] = [
     run: () => ({ kind: "effect", effect: { kind: "undo" } }),
   },
   {
+    id: "redo",
+    area: "conversation",
+    suggest: false, // the undone message has its own Redo
+    summary: "Put back the change the reader just undid.",
+    args: [],
+    examples: ["Redo that", "Put it back", "Bring it back"],
+    help: "Puts back the change you just took back.",
+    requires: [],
+    run: () => ({ kind: "effect", effect: { kind: "redo" } }),
+  },
+  {
     id: "skipField",
     area: "conversation",
     suggest: false, // it answers a question; it is never a first move

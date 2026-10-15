@@ -14,6 +14,8 @@
  * Writes the book only through `projectsStore`; results are folded in by
  * `jobsStore` reconciliation, which drops anything made for an older version.
  */
+import { gainedCast } from "../core/book/pageCast";
+import { changesTheScene } from "../core/pipeline/editScope";
 import type { GenerationQuote, GenerationQuoteUnit } from "../core/billing/generationQuote";
 import { quoteIsCurrent } from "../core/billing/generationQuote";
 import {
@@ -34,7 +36,7 @@ import {
   portraitsToDraw,
   withPortraitAnchorReferences,
 } from "../core/guide/portrait";
-import { applyAutomaticBookFrame } from "../core/design";
+import { applyAutomaticBookFrame, type NormRect } from "../core/design";
 import { pickRandomActiveMaskId, type ImageMasksConfig } from "../core/config/imageMasks";
 import { getCursor } from "../core/versioning";
 import { authoringOf, withAuthoring } from "../core/guide/projectState";
@@ -485,7 +487,11 @@ function assertNotDrawing(project: Project): void {
  * how: an "edit" unit changes the picture that is there (the current portrait,
  * page or cover goes in with the sentence); a "fresh" unit draws it anew.
  */
-export async function startRedraw(quote: GenerationQuote, edit: string | Record<string, string>): Promise<boolean> {
+export async function startRedraw(
+  quote: GenerationQuote,
+  edit: string | Record<string, string>,
+  region?: NormRect,
+): Promise<boolean> {
   const project = useProjectsStore.getState().current();
   const unit = quote.units[0];
   if (!project || !unit || project.id !== quote.projectId) return false;
@@ -508,16 +514,32 @@ export async function startRedraw(quote: GenerationQuote, edit: string | Record<
     await createPortraitJob(project, items, quote.tier, { quoteId: quote.id, idempotencyKey: `redraw-${quote.id}` });
     return true;
   }
+  // One page, or several pages changed by the same sentence: one job, one price.
   await createRefreshJob(
     project,
     getResolvedModels(quote.tier),
-    [
-      {
-        id: unit.id,
-        status: "pending",
-        options: unit.kind === "edit" ? { edit: instructionFor(unit.id), useReference: true, inPlaceOnly: true } : {},
-      },
-    ],
+    quote.units
+      .filter((each) => each.action !== "portrait")
+      .map((each) => ({
+        id: each.id,
+        status: "pending" as const,
+        options:
+          each.kind === "edit"
+            ? {
+                edit: instructionFor(each.id),
+                useReference: true,
+                // Somebody added to the page is a new picture of it, not an edit that can stay in place; so
+                // is a change between subjects ("the same size as Amanda"), which no one subject can do alone.
+                ...(changesTheScene(instructionFor(each.id), project.anchors)
+                  ? { wholePage: true }
+                  : gainedCast(project, each.id)
+                    ? {}
+                    : { inPlaceOnly: true }),
+                // Only for one picture changed on its own: a spot means nothing across several.
+                ...(region && quote.units.length === 1 ? { region } : {}),
+              }
+            : {},
+      })),
     quote.tier,
     { quoteId: quote.id, idempotencyKey: `redraw-${quote.id}` },
   );

@@ -8,6 +8,7 @@
  */
 import { useRef } from "react";
 import { motion } from "framer-motion";
+import { Eye, SlidersHorizontal } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { useGuideT } from "../intl";
 import { frameMove } from "../motion";
@@ -42,10 +43,14 @@ export function ModeSwitch({
       role="radiogroup"
       aria-label={t("bookMode")}
       onKeyDown={onKeyDown}
-      className={cn("relative inline-flex items-center rounded-full bg-ink-100/80 p-0.5", className)}
+      className={cn(
+        "relative inline-flex h-8 shrink-0 items-center rounded-lg bg-ink-900/[0.055] p-0.5 ring-1 ring-inset ring-ink-900/[0.08]",
+        className,
+      )}
     >
       {MODES.map((id) => {
         const active = id === mode;
+        const Icon = id === "preview" ? Eye : SlidersHorizontal;
         return (
           <button
             key={id}
@@ -58,7 +63,7 @@ export function ModeSwitch({
             tabIndex={active ? 0 : -1}
             onClick={() => !active && onChange(id)}
             className={cn(
-              "relative min-h-8 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+              "relative inline-flex h-7 items-center gap-1 rounded-[6px] px-2 text-xs font-semibold tracking-[-0.01em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 sm:px-2.5",
               active ? "text-ink-900" : "text-ink-500 hover:text-ink-800",
             )}
           >
@@ -67,9 +72,16 @@ export function ModeSwitch({
                 aria-hidden
                 layoutId="guide-mode-pill"
                 transition={frameMove}
-                className="absolute inset-0 rounded-full bg-white shadow-soft ring-1 ring-ink-900/5"
+                className="absolute inset-0 rounded-[6px] bg-white shadow-[0_1px_2px_rgba(20,22,58,0.12),0_0_0_1px_rgba(20,22,58,0.08)]"
               />
             )}
+            <Icon
+              className={cn(
+                "relative size-3 shrink-0",
+                active ? "text-ink-900" : "text-ink-400",
+              )}
+              aria-hidden
+            />
             <span className="relative">{t(id === "preview" ? "modePreview" : "modeEdit")}</span>
           </button>
         );

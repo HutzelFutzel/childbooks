@@ -225,7 +225,7 @@ export async function generateScreenplay(
   );
 
   // Guarantee a physically printable layout regardless of model output.
-  return fixPagination(mapScreenplay(raw, included));
+  return fixPagination(mapScreenplay(raw, included, edit ? previous : undefined));
 }
 
 /**
@@ -289,7 +289,7 @@ export function matchAnchorNames(
 }
 
 /** Map LLM output (anchor names) into the stored doc (anchor ids). */
-function mapScreenplay(raw: RawScreenplay, anchors: Anchor[]): ScreenplayDoc {
+function mapScreenplay(raw: RawScreenplay, anchors: Anchor[], previous?: ScreenplayDoc): ScreenplayDoc {
   const allUnmatched = new Set<string>();
   const allAmbiguous = new Set<string>();
   const nameById = new Map(anchors.map((a) => [a.id, a.name]));
@@ -319,9 +319,10 @@ function mapScreenplay(raw: RawScreenplay, anchors: Anchor[]): ScreenplayDoc {
       illustration: raw.frontCover.illustration,
       ...toRefs(raw.frontCover.anchors),
     },
+    // The back cover carries no words of its own: only words the reader added survive a revision.
     backCover: {
-      title: raw.backCover.title,
-      subtitle: raw.backCover.subtitle,
+      title: previous?.backCover?.title ?? "",
+      subtitle: previous?.backCover?.subtitle ?? "",
       illustration: raw.backCover.illustration,
       ...toRefs(raw.backCover.anchors),
     },

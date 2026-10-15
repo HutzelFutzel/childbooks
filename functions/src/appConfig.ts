@@ -50,7 +50,9 @@ import {
   type StoryCraftConfig,
 } from "../../books-frontend/src/core/config/storyCraft";
 import {
+  createDefaultGuideConfig,
   guideConfigSchema,
+  type GuideVersionSummary,
   guideExtractionSchema,
   normalizeGuideConfig,
   type GuideConfig,
@@ -1070,7 +1072,7 @@ export async function saveTypographyConfig(input: unknown): Promise<TypographyCo
  * order is runnable. Refusing the write would mean an admin could reach a state
  * the dashboard cannot save its way out of.
  */
-export async function saveGuideConfig(input: unknown): Promise<GuideConfig> {
+export async function saveGuideConfig(input: unknown, who: string | null = null): Promise<GuideConfig> {
   /**
    * `extraction` is optional on the way IN, required on the way out.
    *
@@ -1089,9 +1091,85 @@ export async function saveGuideConfig(input: unknown): Promise<GuideConfig> {
       agent: guideConfigSchema.shape.agent.optional(),
     })
     .parse(input);
-  const normalized = normalizeGuideConfig({ ...parsed, updatedAt: Date.now() });
-  await writeDoc(GUIDE_DOC, normalized);
-  return normalized;
+  return publishGuideConfig(normalizeGuideConfig({ ...parsed, updatedAt: Date.now() }), who);
+}
+
+// --- Guide config history ----------------------------------------------------------------
+
+/** Where replaced guide settings are kept: server-only (no client rule opens this path). */
+const GUIDE_VERSIONS = "appConfigHistory/guide/versions";
+const GUIDE_VERSIONS_KEPT = 25;
+
+const stableJson = (value: unknown): string => JSON.stringify(value, (_key, v) =>
+  v && typeof v === "object" && !Array.isArray(v)
+    ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)))
+    : v);
+
+/** The areas of the guide settings that differ, two levels deep, ignoring the save time. */
+export function guideChangedAreas(before: GuideConfig, after: GuideConfig): string[] {
+  const out: string[] = [];
+  const a = before as unknown as Record<string, unknown>;
+  const b = after as unknown as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (key === "updatedAt") continue;
+    const left = a[key];
+    const right = b[key];
+    if (stableJson(left) === stableJson(right)) continue;
+    const isObj = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === "object" && !Array.isArray(v);
+    if (isObj(left) && isObj(right)) {
+      for (const sub of new Set([...Object.keys(left), ...Object.keys(right)])) {
+        if (stableJson(left[sub]) !== stableJson(right[sub])) out.push(`${key}.${sub}`);
+      }
+    } else {
+      out.push(key);
+    }
+  }
+  return out;
+}
+
+/** Write the guide settings, first keeping the ones they replace when something changed. */
+async function publishGuideConfig(next: GuideConfig, who: string | null): Promise<GuideConfig> {
+  ensureAdmin();
+  const db = getFirestore();
+  const snap = await db.doc(GUIDE_DOC).get();
+  // No stored document means the shipped defaults were live: the first save replaces
+  // those, and they are worth being able to go back to.
+  const previous = snap.exists ? normalizeGuideConfig(snap.data()) : createDefaultGuideConfig();
+  const changed = guideChangedAreas(previous, next);
+  if (changed.length > 0) {
+    const now = Date.now();
+    const id = `${now}-${Math.random().toString(36).slice(2, 7)}`;
+    await db.doc(`${GUIDE_VERSIONS}/${id}`).set({ replacedAt: now, replacedBy: who, changed, config: previous });
+    const old = await db.collection(GUIDE_VERSIONS).orderBy("replacedAt", "desc").offset(GUIDE_VERSIONS_KEPT).get();
+    await Promise.all(old.docs.map((doc) => doc.ref.delete()));
+  }
+  await writeDoc(GUIDE_DOC, next);
+  return next;
+}
+
+/** The kept versions, newest first. */
+export async function listGuideVersions(): Promise<GuideVersionSummary[]> {
+  ensureAdmin();
+  const snap = await getFirestore().collection(GUIDE_VERSIONS).orderBy("replacedAt", "desc").limit(GUIDE_VERSIONS_KEPT).get();
+  return snap.docs.map((doc) => {
+    const data = doc.data() as { replacedAt?: unknown; replacedBy?: unknown; changed?: unknown };
+    return {
+      id: doc.id,
+      replacedAt: typeof data.replacedAt === "number" ? data.replacedAt : 0,
+      replacedBy: typeof data.replacedBy === "string" ? data.replacedBy : null,
+      changed: Array.isArray(data.changed) ? data.changed.filter((c): c is string => typeof c === "string").slice(0, 12) : [],
+    };
+  });
+}
+
+/** Put a kept version back. The settings it replaces are kept in turn, so a restore can be restored. */
+export async function restoreGuideVersion(id: string, who: string | null): Promise<GuideConfig> {
+  ensureAdmin();
+  if (!/^[0-9]+-[a-z0-9]+$/.test(id)) throw new Error("That version doesn't exist.");
+  const snap = await getFirestore().doc(`${GUIDE_VERSIONS}/${id}`).get();
+  if (!snap.exists) throw new Error("That version doesn't exist.");
+  const kept = (snap.data() as { config?: unknown }).config;
+  return publishGuideConfig(normalizeGuideConfig({ ...(kept as object), updatedAt: Date.now() }), who);
 }
 
 export async function saveBookLanguagesConfig(input: unknown): Promise<BookLanguagesConfig> {

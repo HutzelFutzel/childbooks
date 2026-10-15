@@ -38,9 +38,12 @@ export function redrawModeOf(project: Project, request: RedrawRequest): RedrawMo
 
 /** A request split into one per picture: the target, then each person changed with it. */
 export function redrawEach(request: RedrawRequest): RedrawRequest[] {
-  const { more, ...first } = request;
+  const { more, pages, ...first } = request;
   return [
     first,
+    ...(pages ?? []).map(
+      (target): RedrawRequest => ({ target, instruction: request.instruction, ...(request.mode ? { mode: request.mode } : {}) }),
+    ),
     ...(more ?? []).map(
       (person): RedrawRequest => ({
         target: { kind: "person", castId: person.castId, name: person.name },
@@ -58,10 +61,10 @@ export function redrawNames(request: RedrawRequest): string[] {
 
 /** What each picture changes by: one sentence for one picture, else one per person. */
 export function redrawInstructions(request: RedrawRequest): string | Record<string, string> {
-  if (!request.more?.length) return request.instruction;
+  if (!request.more?.length && !request.pages?.length) return request.instruction;
   const out: Record<string, string> = {};
   for (const each of redrawEach(request)) {
-    if (each.target.kind === "person") out[each.target.castId] = each.instruction;
+    out[each.target.kind === "person" ? each.target.castId : each.target.unitId] = each.instruction;
   }
   return out;
 }
@@ -141,7 +144,7 @@ export async function autoStartRedraw(request: RedrawRequest): Promise<TypedStar
   if (!project) return "declined";
   const { units, extraKey } = redrawQuoteParts(project, request);
   return whileDeciding(async () => {
-    const outcome = await autoStart("redraw", units, extraKey, (quote) => startRedraw(quote, redrawInstructions(request)));
+    const outcome = await autoStart("redraw", units, extraKey, (quote) => startRedraw(quote, redrawInstructions(request), request.region));
     if (outcome === "started") {
       markStarted(
         redrawEach(request).flatMap((each) => (each.target.kind === "person" ? [each.target.castId] : [])),

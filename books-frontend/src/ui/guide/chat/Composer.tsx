@@ -2,7 +2,7 @@
 
 /**
  * The composer. White field, a 1px ink ring, send as a small ink circle. The
- * context chip and the chat language sit inside the field on the left. The
+ * context chip sits inside the field on the left. The
  * placeholder is the live question.
  *
  * Violet is only the moment work is running: a 1px violet edge traces the ring
@@ -16,9 +16,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowUp, PenLine, X } from "lucide-react";
-import { enabledBookLanguages } from "../../../core/config/bookLanguages";
-import { useAppConfigStore } from "../../../state/appConfigStore";
-import { Popover } from "../../components/Popover";
 import { cn } from "../../lib/cn";
 import { traceDuration } from "../motion";
 import { useGuideT } from "../intl";
@@ -30,14 +27,14 @@ export function Composer({
   onAcceptDefault,
   placeholder,
   chip,
+  chipTone = "pinned",
   onClearChip,
   context = null,
   quote = null,
   onClearQuote,
   tools,
+  mentions,
   focusSignal = 0,
-  locale,
-  onLocale,
   working,
   sending = false,
   quiet = false,
@@ -51,6 +48,11 @@ export function Composer({
   onAcceptDefault?: () => void;
   placeholder: string;
   chip: string | null;
+  /**
+   * `pinned`: the reader selected it (dark, can be cleared). `typed`: the pages the message names, shown
+   * as they type. `following`: the pages in view, which a message with no other aim is about.
+   */
+  chipTone?: "pinned" | "typed" | "following";
   onClearChip: () => void;
   /**
    * What the open tab is about ("Story"), when the reader has not aimed at
@@ -66,10 +68,10 @@ export function Composer({
   onClearQuote?: () => void;
   /** Small buttons beside send, such as the ideas menu. */
   tools?: ReactNode;
+  /** What "@" can name: pages of the finished book. `text` is what goes into the message. */
+  mentions?: readonly { id: string; label: string; text: string }[];
   /** Bumped by the book pane to move the cursor here. */
   focusSignal?: number;
-  locale: string;
-  onLocale: (locale: string) => void;
   working: boolean;
   /**
    * A turn is being answered. The field stays editable, so the next message
@@ -83,6 +85,20 @@ export function Composer({
 }) {
   const t = useGuideT("chrome");
   const field = useRef<HTMLTextAreaElement>(null);
+  const [menuIndex, setMenuIndex] = useState(0);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  // "@" after a space (or at the start) opens the page list; what follows filters it.
+  const token = mentions && mentions.length > 0 ? /(^|\s)@([\p{L}\d]*)$/u.exec(value) : null;
+  const options =
+    token && dismissed !== value
+      ? mentions!.filter((m) => m.label.toLowerCase().includes(token[2]!.toLowerCase())).slice(0, 8)
+      : [];
+  const pickMention = (option: { text: string }) => {
+    if (!token) return;
+    onChange(`${value.slice(0, token.index + token[1]!.length)}${option.text} `);
+    setMenuIndex(0);
+    field.current?.focus({ preventScroll: true });
+  };
 
   useEffect(() => {
     if (focusSignal > 0) field.current?.focus({ preventScroll: true });
@@ -113,6 +129,30 @@ export function Composer({
     <div className={cn("flex flex-col gap-2", className)}>
       <div className="relative">
         <Trace active={working} />
+        {options.length > 0 && (
+          <ul
+            role="listbox"
+            aria-label={t("mentionLabel")}
+            className="absolute bottom-full left-0 z-20 mb-2 max-h-56 w-56 overflow-y-auto rounded-xl bg-white p-1 shadow-lifted ring-1 ring-ink-200"
+          >
+            {options.map((option, index) => (
+              <li key={option.id} role="option" aria-selected={index === menuIndex}>
+                <button
+                  type="button"
+                  // Keep the field focused: a blur would close the list before the click lands.
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => pickMention(option)}
+                  className={cn(
+                    "flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-sm transition",
+                    index === menuIndex ? "bg-ink-100 text-ink-900" : "text-ink-600 hover:bg-ink-50",
+                  )}
+                >
+                  {option.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <div
           className={cn(
             "relative flex items-end gap-2 rounded-[1.1rem] bg-white py-2 pr-2 pl-3 ring-1 shadow-soft transition-shadow focus-within:shadow-lifted",
@@ -120,7 +160,6 @@ export function Composer({
           )}
         >
           <div className="flex shrink-0 items-center gap-1 self-center">
-            <LanguageCode locale={locale} onLocale={onLocale} />
             <AnimatePresence initial={false}>
               {chip && (
                 <motion.span
@@ -129,17 +168,26 @@ export function Composer({
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.9 }}
                   transition={{ duration: 0.15 }}
-                  className="inline-flex max-w-[9rem] items-center gap-1 rounded-full bg-ink-900 py-0.5 pr-1 pl-2.5 text-xs font-medium text-white"
+                  className={cn(
+                    "inline-flex max-w-[9rem] items-center gap-1 rounded-full py-0.5 text-xs font-medium",
+                    chipTone === "pinned"
+                      ? "bg-ink-900 pr-1 pl-2.5 text-white"
+                      : chipTone === "typed"
+                        ? "bg-ink-900/85 px-2.5 text-white"
+                        : "border border-ink-200 bg-white px-2.5 text-ink-600",
+                  )}
                 >
                   <span className="truncate">{chip}</span>
-                  <button
-                    type="button"
-                    onClick={onClearChip}
-                    aria-label={t("clearChip", { label: chip })}
-                    className="flex size-4 items-center justify-center rounded-full text-white/70 transition hover:bg-white/15 hover:text-white"
-                  >
-                    <X className="size-3" />
-                  </button>
+                  {chipTone === "pinned" && (
+                    <button
+                      type="button"
+                      onClick={onClearChip}
+                      aria-label={t("clearChip", { label: chip })}
+                      className="flex size-4 items-center justify-center rounded-full text-white/70 transition hover:bg-white/15 hover:text-white"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  )}
                 </motion.span>
               )}
               {!chip && quote && (
@@ -187,6 +235,24 @@ export function Composer({
             value={value}
             onChange={(event) => onChange(event.target.value)}
             onKeyDown={(event) => {
+              if (options.length > 0) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  const step = event.key === "ArrowDown" ? 1 : -1;
+                  setMenuIndex((i) => (i + step + options.length) % options.length);
+                  return;
+                }
+                if ((event.key === "Enter" || event.key === "Tab") && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  pickMention(options[Math.min(menuIndex, options.length - 1)]!);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setDismissed(value);
+                  return;
+                }
+              }
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 submit();
@@ -214,56 +280,6 @@ export function Composer({
         </div>
       </div>
     </div>
-  );
-}
-
-function LanguageCode({ locale, onLocale }: { locale: string; onLocale: (locale: string) => void }) {
-  const t = useGuideT("chrome");
-  const config = useAppConfigStore((s) => s.bookLanguages);
-  const languages = enabledBookLanguages(config);
-  if (languages.length <= 1) return null;
-  return (
-    <Popover
-      side="top"
-      align="start"
-      panelClassName="w-56"
-      trigger={
-        <span
-          role="button"
-          tabIndex={0}
-          aria-label={t("chatLanguage")}
-          title={t("chatLanguage")}
-          className="rounded-md px-1.5 py-1 font-mono text-[11px] tracking-tight text-ink-500 transition hover:bg-ink-50 hover:text-ink-800"
-        >
-          {locale}
-        </span>
-      }
-    >
-      {(close) => (
-        <ul className="max-h-72 overflow-y-auto p-1" role="listbox" aria-label={t("chatLanguage")}>
-          {languages.map((language) => (
-            <li key={language.id}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={language.id === locale}
-                onClick={() => {
-                  onLocale(language.id);
-                  close();
-                }}
-                className={cn(
-                  "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition hover:bg-ink-50",
-                  language.id === locale ? "font-medium text-ink-900" : "text-ink-600",
-                )}
-              >
-                <span>{language.endonym}</span>
-                <span className="font-mono text-[11px] text-ink-400">{language.id}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Popover>
   );
 }
 

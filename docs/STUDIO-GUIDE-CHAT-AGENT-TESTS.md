@@ -5,7 +5,8 @@ can check it end to end by hand. Each test says what to type or tap and what you
 should see. Tick the box when it behaves as described.
 
 Scope: everything before the pages start (story, people, portraits, look, book
-details, Sparks, account). Editing pages is out of scope.
+details, Sparks, account), plus section 14: changing the finished book (page
+look, page pictures, one shared Undo and Redo).
 
 ---
 
@@ -1402,6 +1403,243 @@ changes**, reload the studio, and check the effect.
 - [ ] **13.1 Steps is unchanged.** Switch a book to Steps.
       *Expected:* the Steps studio works as before. The skills and suggestion
       chips appear only in Chat.
+
+---
+
+## 14. After the pages are drawn
+
+Use a book whose pages are drawn (or being drawn).
+
+- [ ] **14.1 Page color on a named page.** Type *Make the background of page 4
+      cream.*
+      *Expected:* only page 4's paper changes and the line says what changed.
+      Pages 3 and 5 keep their color.
+- [ ] **14.2 Page color, whole book.** Type *Pale yellow paper on every page.*
+      *Expected:* every inside page changes; the covers keep their color. Adding
+      a page later uses the same paper.
+- [ ] **14.3 Low contrast.** With dark text, type *Make the pages black.*
+      *Expected:* the page color changes and the guide warns that the words may
+      be hard to read, offering to change the text color.
+- [ ] **14.4 Pages by number.** Type *Make the text bigger on pages 3-5*, then
+      *on page 25*, then *on the last page*.
+      *Expected:* three pages change; "The book doesn't have page 25. It has N
+      pages." and nothing changes; the last page changes. German: *Seite 4*,
+      *letzte Seite*.
+- [ ] **14.5 Words.** Try *Make the text bold*, *Italic on this page*, *More
+      space between the lines*, *Take the bold off*.
+      *Expected:* one visible step each; "bold" twice says it already is.
+- [ ] **14.6 A picture change.** Type *Give her an umbrella in her left hand on
+      page 18.*
+      *Expected:* page 18 is selected on the right with its chip; the guide
+      shows the price and the redraw button (or starts at once when it costs
+      no more than the admin's automatic limit). The change is made to the
+      picture that is there, and the old picture stays in the picture history.
+      With no page named or selected, the guide asks which page.
+- [ ] **14.7 One shared Undo.** Make two changes in the chat, then one in the
+      page editor. Press Cmd+Z in the editor, then type *undo*, then *redo*.
+      *Expected:* each step takes back exactly the newest change, whoever made
+      it; Redo puts it back; the chat's own Undo button on a message takes back
+      only that message's change.
+- [ ] **14.8 Older change, newer on the same thing.** Type *page 4 background
+      cream*, then *page 4 background light blue*. Press Undo on the first
+      message.
+      *Expected:* a card asks "Undo both" or "Undo only that one". Cancel
+      changes nothing. If the second change touched a different page, no card
+      shows and only the first is undone.
+- [ ] **14.9 Admin.** In **Guided studio → Skills**, the skills are grouped
+      under "After the pages are drawn", "While the book is being set up" and
+      "Any time", with a search box. Turning *Set page color* off stops the
+      chat from running it.
+
+- [ ] **14.10 Several pictures.** Type *Make the sky pink on pages 3 to 5.*
+      *Expected:* one price and one button ("Redraw page 3, page 4, page 5");
+      the pictures are changed, not drawn from scratch. A page with no picture
+      is left out. Naming more than 8 pages is refused with a short reason.
+- [ ] **14.11 Page chips and the book.** Type any message naming a page, e.g.
+      *Make page 4 cream.*
+      *Expected:* a "Page 4" chip sits above your message. Hovering it rings
+      page 4 on the right; clicking it scrolls the book to that page. Add a page
+      before page 4 and the chip now reads "Page 5". Delete the page and the
+      chip reads "Page gone", struck through and not clickable.
+- [ ] **14.12 The `@` menu.** Type `@` (or `@4`) in the message box.
+      *Expected:* a list of pages, the covers last; arrows, Enter or Tab insert
+      "page 4"; Escape closes it. It does not appear before the book is drawn.
+- [ ] **14.13 Ask about this page.** Hover a page on the right and use "Ask
+      about this page".
+      *Expected:* the page chip is set and the message box is focused; the next
+      message acts on that page without naming it.
+- [ ] **14.14 Page operations.** Try *Add a blank page after page 3*, *Duplicate
+      page 5*, *Move page 2 to the end*, *Delete page 6* (confirmation first),
+      *Go to page 8*, *What did I change?*.
+      *Expected:* each does what it says; the last page can't be removed; each
+      structural step is one Undo and one Redo, and the list of changes shows the
+      newest first.
+
+- [ ] **14.15 Speech bubble.** Type *Put a speech bubble on page 4 saying
+      "Look at me!"*, then *a thought bubble at the bottom left of page 6: I
+      wonder…*.
+      *Expected:* each bubble appears on that page with exactly those words, the
+      page is shown on the right, and the line says what was added. The words
+      are yours: a message that gives no words gets "What should it say?". Undo
+      removes the bubble; Redo puts it back. Two pages in one message asks
+      which first.
+- [ ] **14.16 Shapes.** Type *Add a yellow star to page 3*, then *Put a big red
+      heart in the bottom right of pages 5 and 6*, then *Add a blorple star to
+      page 2*.
+      *Expected:* the first two appear where asked, in the color asked; the
+      third says it doesn't know that color and adds nothing.
+- [ ] **14.17 Clearing extras.** Type *Remove the speech bubble on page 4*, then
+      *Take the shapes off page 3*, then *Remove the bubble on page 1*.
+      *Expected:* the first two take only that kind of extra off that page, the
+      picture and the story text stay; the last says there is nothing to remove.
+      Typing it with no page named asks which page; it never clears the book.
+- [ ] **14.18 Page words.** Type *Change the text on page 4 to "Aren ran home
+      as fast as she could."*, then *On page 7 change dog to cat*.
+      *Expected:* only that page's printed words change. The Story tab keeps
+      its own wording and the picture is not redrawn. Undo restores the old
+      words. A word that isn't on the page is reported. The covers say their
+      words are another skill.
+- [ ] **14.19 Out-of-date pictures.** Draw a book, then change a character's
+      look in the editor so some pages show "out of date". Type *Update the
+      pictures that are out of date.*
+      *Expected:* one price and one button naming exactly those pages (or an
+      automatic start under the admin's limit); nothing else is redrawn; with
+      nothing out of date the chat says so and spends nothing.
+- [ ] **14.20 Print check and order.** Type *Is my book ready to print?*, then
+      *Order the book*.
+      *Expected:* with undrawn pages or words too close to the edge, the chat
+      lists them (at most four, then "and N more") and ordering is refused. With
+      a clean book it says everything looks ready and *Order the book* opens
+      the order screen. Nothing is bought until you confirm there.
+- [ ] **14.21 Admin limits.** In **Guided studio → Skills → Per message** change
+      *Most pictures changed by one message* to 2 and save.
+      *Expected:* *Make the sky pink on pages 3 to 5* is refused with "up to 2
+      pictures at once"; naming 2 pages works. The same section has limits for
+      out-of-date pictures and for pages decorated or cleared at once.
+
+- [ ] **14.22 Change an extra that is already there.** With a speech bubble on
+      page 4 and a star on page 3, type *Make the bubble on page 4 blue*, *Make
+      the star bigger*, *Move the star to the bottom left*, then *Change what the
+      bubble says to "Hello!"*.
+      *Expected:* only that extra changes; the others on the page stay. With two
+      extras on a page and no word saying which, the chat asks which one. Undo
+      puts each change back, one at a time.
+- [ ] **14.23 Cover words.** Type *Change the title to "Aren and the Moon"*, then
+      *Add the subtitle "A bedtime story"*, then *Remove the subtitle*.
+      *Expected:* the cover shows each change (and the Book tab's title follows);
+      a hidden cover box is said so in the reply instead of failing silently.
+      Undo restores the old words. The pages' pictures are not redrawn.
+- [ ] **14.24 Mark a spot.** Open a page on the right, hover it and use *Mark a
+      spot*, then drag a box over the part to change. Type *Put an umbrella
+      here.*
+      *Expected:* the box stays on the page as a dashed outline labelled "This
+      spot only" and a small x to clear it. After the redraw only that area
+      differs; the rest of the picture is the same. Picking another page, or
+      the x, drops the box; a message naming several pages or asking for a new
+      picture ignores it. With a model that cannot paint inside a box, the
+      picture is changed from the sentence alone.
+- [ ] **14.25 Color names (admin).** In **Guided studio → Skills → Color names**
+      add a line such as `sunset = #f4a259` and save. Type *Make the pages
+      sunset.*
+      *Expected:* the pages take that color. Hiding a built-in name makes the
+      chat ask for another color instead.
+- [ ] **14.26 Saved versions (admin).** Change a setting in **Guided studio** and
+      save, then open **History**.
+      *Expected:* the list shows the save with who made it and the areas it
+      changed. *Restore* is disabled while there are unsaved edits. Restoring
+      puts the old settings live at once and adds what was live to the list.
+- [ ] **14.27 Try it (admin).** Open **Guided studio → Try it**, pick a book and
+      type *Make the text on page 3 bigger*. Then switch a skill off in the
+      Skills panel *without saving* and try again.
+      *Expected:* the first run lists the skill and its arguments; the second
+      shows it gone or refused, using the unsaved settings. The book is not
+      changed and nothing is charged.
+- [ ] **14.28 A book drawn in the editor.** Open a book that was drawn in the
+      classic editor (never in the chat), with a page selected, and type
+      *Make the text on page 2 bigger*.
+      *Expected:* the sentence is read like in any finished book (text size
+      changes, "Done."), and no picture is redrawn or charged. The book is
+      treated as past the point where the story and people are locked.
+
+For the paid steps below, set **Auto-start spend** to 0 first so you see the
+price card before anything is drawn (and then once with it on).
+
+- [ ] **14.29 Add a person from the cast.** In a book with a person called
+      Amanda, type *Add Amanda to page 3*.
+      *Expected:* Amanda is listed on page 3 (open it in the editor: she is in the
+      page's people) and the redraw uses her look, not a new girl. **Undo** takes
+      her off page 3 again.
+- [ ] **14.30 Add somebody who isn't in the book.** Type *Add Bella to page 3*.
+      *Expected:* the guide says it doesn't see Bella and offers **Draw them
+      anyway**. Tapping it goes ahead without a reference.
+- [ ] **14.31 A page you type beats the one you selected.** Select page 4, then
+      type *Make the sky purple on page 18*.
+      *Expected:* the field's pill changes to **Page 18** while you type, the
+      guide jumps to page 18 and shows the price card (it does not start by
+      itself because your selection and your words disagree).
+- [ ] **14.32 The pill follows you.** Select page 15, then click through other
+      pages in Preview and then in Edit. *Expected:* the pill in the field changes
+      with the page in view; on a spread with two pages it becomes a light
+      **Pages 4–5** pill (no ×). Type *Make the sky pink* there: the guide asks
+      **Which page?** with the two pages and **Both**.
+- [ ] **14.33 Cover words.** Change the author from *Papa* to *Papa & Katharine*.
+      *Expected:* the cover redraws (or shows the price card) and, until it is
+      redrawn, the cover shows **Out of date**. Undo restores the old words.
+- [ ] **14.34 Defaults.** Open the page editor: print guides are off. Create a new
+      book: its back cover has no text. The message field has no language control.
+- [ ] **14.35 Page numbers.** In Preview each page shows its number at the bottom
+      left, dark when selected. In Edit the pages in view are listed top left as
+      buttons that select them as the reference.
+- [ ] **14.36 Ordering.** On a finished book, the message field shows one quiet
+      **Order** line (no card) and the book pane has an **Order** button with a
+      green dot. Both open the order screen.
+
+- [ ] **14.37 No second redraw button.** Type *Replace the random girl on page 3
+      with Amanda*. *Expected:* the page never shows its own "Redraw page" card
+      while the guide starts the redraw; with auto-spend 0 you see exactly one
+      priced card (in the chat), not two.
+- [ ] **14.38 Between people.** Select page 3 and type *Make Arthur the same size
+      as Amanda* (also once with "on page 3"). *Expected:* the page is redrawn
+      with both of them and the rest of the scene kept; no "left the page as it
+      was" refusal. Neither person's portrait or notes change.
+
+- [ ] **14.39 Drawing is visible from everywhere.** Start a redraw of page 3, then
+      look at page 7, the People tab, and Edit mode. *Expected:* a **Drawing
+      page 3…** pill is in the book pane header on every tab (and in the Edit
+      header); above the message field a line says the book can't be printed
+      until it's done. Tapping the pill or **Show me** brings page 3 into view.
+      With several pictures it reads **Drawing 3 pictures…**.
+- [ ] **14.40 No printing while it draws.** During that redraw: the header
+      **Order** button is greyed (hover: *Waiting for the drawing to finish*), the
+      green dot and the quiet Order line in the chat are gone, typing *Order the
+      book* answers *Still drawing page 3. You can order when it finishes.*, and
+      opening the order screen (editor Order button) shows an amber note with the
+      same words and a disabled **Place order**. When the drawing ends, all of
+      these come back on their own.
+- [ ] **14.41 Server backstop.** Start a redraw in one browser tab, and press
+      **Place order** in a second tab that was already on the order screen.
+      *Expected:* the order is refused with *Your book is still being drawn.* and
+      nothing is charged.
+
+- [ ] **14.42 Marked spot, "remove that boy".** On a finished book, mark a spot
+  on a picture and type "remove that boy". The redraw is offered for that
+  picture (with the spot), not a line about the pages being drawn. A question
+  ending in "?" with a spot marked is answered, not redrawn.
+- [ ] **14.43 Cast change after the pages.** Type "remove Arthur from the book"
+  on a finished book. One plain line: the pages are drawn, so people, story and
+  look are fixed; select a page to change a picture. No card, no "Show me".
+- [ ] **14.44 No dead card.** Any blocked reply that has no button (everything
+  except sign in, portraits and Sparks) shows only its line. The book still
+  turns to the tab the line is about.
+- [ ] **14.45 No jump to the cover.** While drawing finishes, in Preview on page 7
+  or in Edit on page 3: the view stays. It opens at the cover only when no page
+  is on screen. A redraw of a page already open keeps Edit open; the chip follows.
+- [ ] **14.46 Busy pill landing.** With two pages drawing, tap the pill: it goes
+  to one already in front of you, else the first. In Edit it stays in Edit.
+
+Not covered, by design: story, people and the look after the pages have started.
+The studio locks those once the pages start, and the chat follows the same rule
+instead of working around it.
 
 ---
 

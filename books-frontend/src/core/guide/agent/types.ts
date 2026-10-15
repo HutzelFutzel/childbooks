@@ -53,6 +53,8 @@ export type CommandArea =
   | "path"
   | "book"
   | "design"
+  | "pictures"
+  | "pages"
   | "story"
   | "people"
   | "places"
@@ -84,7 +86,8 @@ export type ImpactEffect =
   | { kind: "renamesInStory"; from: string; to: string; count: number }
   | { kind: "outdatesPortraits"; names: string[] }
   | { kind: "retiresArtwork"; names: string[]; preset: string }
-  | { kind: "removesPlace"; name: string };
+  | { kind: "removesPlace"; name: string }
+  | { kind: "removesPage"; page: number; hasPicture: boolean; hasWords: boolean };
 
 export interface Impact {
   level: ImpactLevel;
@@ -159,12 +162,22 @@ export type CommandEffect =
   | { kind: "checkStory" }
   | { kind: "portraits"; castIds: string[] }
   | { kind: "redraw"; castId: string; name: string; instruction: string; mode?: RedrawMode }
+  /** Change one finished page or cover picture: the reader sees the price on the redraw card first. */
+  | { kind: "redrawPage"; unitIds: string[]; instruction: string; mode?: RedrawMode }
+  /** Show a page or cover on the right. Changes nothing. */
+  | { kind: "goToPage"; unitId: string }
+  /** Say the latest changes from the book's change log. */
+  | { kind: "listChanges" }
+  /** Open the order screen. The price and the buy button are there; nothing is bought here. */
+  | { kind: "openOrder" }
   | { kind: "drawBook" }
   | { kind: "sparks" }
   | { kind: "signIn" }
   | { kind: "view"; view: BookViewId }
   | { kind: "entry"; entry: GuideEntry }
   | { kind: "undo" }
+  /** Put back the change that was just undone. */
+  | { kind: "redo" }
   /** Take a picture back to its earlier version (free; nothing is drawn). */
   | { kind: "picture"; target: GuideTarget; delta: number }
   | { kind: "skip"; fact?: string; personField?: { personId: string; field: string } }
@@ -216,6 +229,16 @@ export interface CommandContext {
    * by the interpreter. Empty when no page is in view.
    */
   pages?: readonly string[];
+  /** The reader named those pages in the sentence ('page 18'), rather than the app reading them off the screen. Set by the app. */
+  pagesNamed?: boolean;
+  /** Pages whose picture no longer matches the people and places it shows. Read by the app from the book, never by the interpreter. */
+  stalePages?: readonly string[];
+  /** Why the book is being drawn right now ("Still drawing page 3…"), when it is: set by the app from the live jobs. */
+  drawingReason?: string;
+  /** The admin's limits for what one message may do to the finished pages. */
+  limits?: { pictureBatch: number; extrasPages: number; refreshBatch: number };
+  /** The admin's extra and refused color names. */
+  palette?: { colors: readonly { name: string; hex: string }[]; hidden: readonly string[] };
   /** A portrait is being drawn, which opens the Cast tab before any portrait is done. Set by the app from the running jobs. */
   portraitsRunning?: boolean;
   /** The fonts on offer for this book's language, for resolving "a serif font" to one. */
@@ -277,6 +300,13 @@ export interface CommandIdea {
 
 export interface CommandDef {
   id: GuideCommandId;
+  /**
+   * The skill acts on pages the reader names ("page 18"). A sentence that names a
+   * page the book does not have is answered with that, never run on another page.
+   */
+  aimsAtPages?: boolean;
+  /** The write reshapes the page list (pages added, removed, moved or copied): the change log keeps whole-book snapshots for it. */
+  structural?: boolean;
   area: CommandArea;
   /** When to use it, for the interpreter. One or two sentences. */
   summary: string;

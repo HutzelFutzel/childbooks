@@ -377,7 +377,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "covers",
-        "Also design the book's covers: a frontCover (catchy title + short subtitle + illustration brief), a backCover (a short blurb as 'title', optional subtitle, illustration brief), and a short spineText (usually the title).",
+        "Also design the book's covers: a frontCover (catchy title + short subtitle + illustration brief), a backCover (illustration brief only: leave its title and subtitle empty, the back cover carries no text unless the reader adds some), and a short spineText (usually the title).",
       ),
       blk(
         "anchorScope",

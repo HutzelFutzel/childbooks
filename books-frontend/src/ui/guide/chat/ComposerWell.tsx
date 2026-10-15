@@ -150,6 +150,22 @@ export function ComposerWell({
       </motion.section>
     );
   }
+  // Ordering is the way out of the conversation, not a question in it: one quiet line with one button,
+  // no card, so it never stands between the reader and the field. The book pane keeps its own Order button.
+  if (shown.kind === "order" && !personEditor) {
+    return (
+      <motion.div
+        key={id ?? undefined}
+        variants={wellIn}
+        initial={initial}
+        animate="show"
+        exit="exit"
+        className="flex w-full items-center justify-start px-1"
+      >
+        <OrderAction onOrder={onOrder} onDefault={onDefault} quiet />
+      </motion.div>
+    );
+  }
   return (
     <motion.section
       key={id ?? undefined}
@@ -593,6 +609,7 @@ function WellBody({
     case "agentAsk":
     case "agentBlocked":
     case "sparksOffer":
+    case "undoConflict":
       return <AgentWellBody well={well} onView={onView} onDefault={onDefault} />;
   }
 }
@@ -1333,20 +1350,28 @@ function RedrawAction({
   const units = useStableUnits(parts?.units ?? []);
   // One button for everyone the sentence named: one price, one tap.
   const text =
-    target.kind === "person" ? label("redrawTarget", { names: redrawNames(request) }) : label("redrawPage");
+    target.kind === "person" || request.pages?.length ? label("redrawTarget", { names: redrawNames(request) }) : label("redrawPage");
   return (
     <PaidAction
       purpose="redraw"
       units={units}
       extraKey={parts?.extraKey ?? ""}
       label={text}
-      start={echoWhenStarted(text, (quote) => startRedraw(quote, redrawInstructions(request)))}
+      start={echoWhenStarted(text, (quote) => startRedraw(quote, redrawInstructions(request), request.region))}
       onDefault={onDefault}
     />
   );
 }
 
-function OrderAction({ onOrder, onDefault }: { onOrder: () => void; onDefault: (run: (() => void) | null) => void }) {
+function OrderAction({
+  onOrder,
+  onDefault,
+  quiet = false,
+}: {
+  onOrder: () => void;
+  onDefault: (run: (() => void) | null) => void;
+  quiet?: boolean;
+}) {
   const label = useGuideLabel();
   const t = useGuideT("chrome");
   const price = useOrderPrice();
@@ -1355,11 +1380,16 @@ function OrderAction({ onOrder, onDefault }: { onOrder: () => void; onDefault: (
     <button
       type="button"
       onClick={onOrder}
-      className="inline-flex min-h-11 items-center gap-2 rounded-full bg-brand-500 px-5 text-[15px] font-semibold text-white shadow-soft transition hover:bg-brand-600 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2"
+      className={cn(
+        "inline-flex items-center gap-2 rounded-full transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2",
+        quiet
+          ? "min-h-9 bg-white px-4 text-sm font-medium text-ink-800 ring-1 ring-ink-200 hover:ring-ink-400"
+          : "min-h-11 bg-brand-500 px-5 text-[15px] font-semibold text-white shadow-soft hover:bg-brand-600",
+      )}
     >
       {label("orderBook")}
       {price && (
-        <span className="font-normal text-white/85">
+        <span className={quiet ? "font-normal text-ink-500" : "font-normal text-white/85"}>
           · {price.exact ? price.text : t("orderFrom", { price: price.text })}
         </span>
       )}

@@ -7,27 +7,14 @@ import { getCursor, updateNodeContent } from "../../core/versioning";
 import { joinPairDesign } from "../../core/book/pairSurface";
 import type { Project, ScreenplayDoc, ScreenplaySpread, SpreadKind } from "../../core/types";
 import { commitStudioProject } from "./studioUndo";
-
-function spreadUid(): string {
-  return `sp_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-interface NewSpreadOpts {
-  kind?: SpreadKind;
-  blankCanvas?: boolean;
-}
-
-function newSpread(opts: NewSpreadOpts = {}): ScreenplaySpread {
-  return {
-    id: spreadUid(),
-    kind: opts.kind ?? "single",
-    text: "",
-    illustration: "",
-    layoutNote: "",
-    anchorIds: [],
-    ...(opts.blankCanvas ? { blankCanvas: true, completion: "blank" as const } : {}),
-  };
-}
+import {
+  duplicateSpreadProject,
+  insertSpreadProject,
+  moveSpreadProject,
+  removeSpreadProject,
+  withSpreads,
+  type NewSpreadOpts,
+} from "../../core/book/pageEdits";
 
 /** Mark an interior page done without artwork, or clear that opt-out. */
 export function setSpreadCompletion(
@@ -49,60 +36,24 @@ export function setSpreadCompletion(
   );
 }
 
-function withSpreads(
-  p: Project,
-  transform: (spreads: ScreenplaySpread[]) => ScreenplaySpread[],
-): Project {
-  if (!p.screenplay) return p;
-  const tree = p.screenplay;
-  const doc = structuredClone(getCursor(tree).content) as ScreenplayDoc;
-  doc.spreads = transform(doc.spreads);
-  return { ...p, screenplay: updateNodeContent(tree, tree.cursorId, doc) };
-}
-
 /** Insert a new (optionally blank) page at the given index in `spreads`. */
 export function insertSpreadAt(docIndex: number, opts: NewSpreadOpts = {}): string {
-  const s = newSpread(opts);
-  commitStudioProject((p) =>
-    withSpreads(p, (spreads) => {
-      const next = [...spreads];
-      next.splice(Math.max(0, Math.min(docIndex, next.length)), 0, s);
-      return next;
-    }),
-  );
-  return s.id;
+  let id = "";
+  commitStudioProject((p) => {
+    const out = insertSpreadProject(p, docIndex, opts);
+    id = out.id;
+    return out.project;
+  });
+  return id;
 }
 
 /** Remove a page and drop its design overlay (+ illustration history entry). */
 export function removeSpread(spreadId: string): void {
-  commitStudioProject((p) => {
-    let next = withSpreads(p, (spreads) => spreads.filter((s) => s.id !== spreadId));
-    if (next.design?.pages[spreadId]) {
-      const pages = { ...next.design.pages };
-      delete pages[spreadId];
-      next = { ...next, design: { ...next.design, pages } };
-    }
-    if (next.illustrations?.[spreadId]) {
-      const illustrations = { ...next.illustrations };
-      delete illustrations[spreadId];
-      next = { ...next, illustrations };
-    }
-    return next;
-  });
+  commitStudioProject((p) => removeSpreadProject(p, spreadId));
 }
 
 export function moveSpread(spreadId: string, dir: -1 | 1): void {
-  commitStudioProject((p) =>
-    withSpreads(p, (spreads) => {
-      const i = spreads.findIndex((s) => s.id === spreadId);
-      if (i < 0) return spreads;
-      const j = i + dir;
-      if (j < 0 || j >= spreads.length) return spreads;
-      const next = [...spreads];
-      [next[i], next[j]] = [next[j], next[i]];
-      return next;
-    }),
-  );
+  commitStudioProject((p) => moveSpreadProject(p, spreadId, dir));
 }
 
 /**
@@ -125,27 +76,11 @@ export function moveSpreadBefore(draggedIds: string[], beforeId: string | null):
 
 /** Duplicate a page (text/brief + design overlay), placing the copy right after. */
 export function duplicateSpread(spreadId: string): string {
-  const id = spreadUid();
+  let id = "";
   commitStudioProject((p) => {
-    let next = withSpreads(p, (spreads) => {
-      const i = spreads.findIndex((s) => s.id === spreadId);
-      if (i < 0) return spreads;
-      const copy: ScreenplaySpread = { ...structuredClone(spreads[i]), id };
-      const out = [...spreads];
-      out.splice(i + 1, 0, copy);
-      return out;
-    });
-    const srcDesign = next.design?.pages[spreadId];
-    if (next.design && srcDesign) {
-      next = {
-        ...next,
-        design: {
-          ...next.design,
-          pages: { ...next.design.pages, [id]: structuredClone(srcDesign) },
-        },
-      };
-    }
-    return next;
+    const out = duplicateSpreadProject(p, spreadId);
+    id = out.id;
+    return out.project;
   });
   return id;
 }

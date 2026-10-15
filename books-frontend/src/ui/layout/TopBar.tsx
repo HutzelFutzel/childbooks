@@ -17,13 +17,15 @@ export function TopBar({ center, left, contextLabel, right }: TopBarProps) {
   const branding = useAppConfigStore((s) => s.branding);
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b border-ink-100 bg-white px-2 sm:px-4">
+    <header className="sticky top-0 z-30 flex h-13 items-center justify-between gap-2 border-b border-ink-900/[0.08] bg-white/95 px-2.5 backdrop-blur-md sm:px-4">
       <div className="flex min-w-0 shrink items-center gap-2">
         {left}
         {contextLabel ? (
-          <div className="flex min-w-0 items-center gap-2 border-l border-ink-200 pl-2 sm:pl-3">
-            <BookOpen className="hidden size-4 shrink-0 text-brand-600 sm:block" />
-            <p className="truncate text-sm font-semibold text-ink-900">{contextLabel}</p>
+          <div className="flex min-w-0 items-center gap-2 border-l border-ink-900/10 pl-2 sm:pl-3">
+            <span className="hidden size-6 shrink-0 items-center justify-center rounded-md bg-ink-900/[0.04] text-ink-700 ring-1 ring-inset ring-ink-900/[0.07] sm:inline-flex">
+              <BookOpen className="size-3.5" />
+            </span>
+            <p className="truncate text-sm font-semibold tracking-[-0.01em] text-ink-900">{contextLabel}</p>
           </div>
         ) : (
           <div className="flex min-w-0 items-center gap-2">

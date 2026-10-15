@@ -13,6 +13,7 @@ import type { HardcoverCheck } from "../../core/guide/hardcover";
 import type { Project } from "../../core/types";
 import { briefOf, namedCast } from "../../core/story/brief";
 import { staleIllustrationSpreadIds } from "../../state/ai";
+import { useRedrawHold } from "../../state/redrawHold";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useAuthStore } from "../../state/authStore";
 import {
@@ -84,11 +85,12 @@ export function useChatJourney(project: Project): ChatJourney {
   const startedPortraits = usePortraitStartStore((s) => s.started);
   const portraitsDeciding = usePortraitStartStore((s) => s.deciding > 0);
   // A portrait started from a choice counts as drawing before its task arrives.
+  const held = useRedrawHold((s) => s.units);
   const activeUnitIds = useMemo(() => {
     const started = Object.keys(startedPortraits);
-    if (started.length === 0) return jobUnitIds;
-    return new Set([...jobUnitIds, ...started]);
-  }, [jobUnitIds, startedPortraits]);
+    if (started.length === 0 && held.length === 0) return jobUnitIds;
+    return new Set([...jobUnitIds, ...started, ...held]);
+  }, [jobUnitIds, startedPortraits, held]);
   const failedUnits = useJobsStore((s) => s.failedUnits);
   const screenplayJob = useJobsStore((s) => s.screenplayJob);
   const accessLevel = useAuthStore((s) => s.accessLevel);
@@ -106,7 +108,13 @@ export function useChatJourney(project: Project): ChatJourney {
     const hardcover = hardcoverFor(project);
     const running = planRunning(project);
     const locked = Boolean(project.authoringState?.lockedAt);
-    const stalePages = locked ? staleIllustrationSpreadIds(project) : [];
+    // A page whose redraw is being offered or started by the chat doesn't also get its own card.
+    const offered = new Set<string>(held);
+    if (redraw) {
+      if (redraw.target.kind !== "person") offered.add(redraw.target.unitId);
+      for (const page of redraw.pages ?? []) offered.add(page.unitId);
+    }
+    const stalePages = locked ? staleIllustrationSpreadIds(project).filter((id) => !offered.has(id)) : [];
     const journey = deriveJourney(project, policies, {
       activeUnitIds,
       failedUnits,
@@ -213,7 +221,7 @@ export function useChatJourney(project: Project): ChatJourney {
     };
     // screenplayJob is read inside planRunning.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, policies, brief, audience, activeUnitIds, portraitsDeciding, failedUnits, screenplayJob, accessLevel, pendingTarget, redraw, printIssue, extractionRunning, analysisRunning, extractionError, pendingManuscript, starting, agentWell]);
+  }, [project, policies, brief, audience, activeUnitIds, portraitsDeciding, failedUnits, screenplayJob, accessLevel, pendingTarget, redraw, printIssue, extractionRunning, analysisRunning, extractionError, pendingManuscript, starting, agentWell, held]);
   return result;
 }
 
@@ -234,6 +242,13 @@ function agentWellItem(
         : { kind: "drawBook", pages: hardcover?.pages ?? 0 };
     case "agentSignIn":
       return guest ? { kind: "account", for: "drawBook" } : null;
+    case "agentBlocked":
+      // A card only when it has a button that does something. Otherwise the line says it all, and the
+      // book has already turned to the tab it is about (`contextualBookFocus`): a card with a dead
+      // "Show me" is just in the way.
+      return well.remedy.command === "signIn" || well.remedy.command === "drawPortraits" || well.remedy.command === "offerSparks"
+        ? well
+        : null;
     default:
       return well;
   }

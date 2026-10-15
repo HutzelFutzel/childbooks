@@ -14,6 +14,7 @@
  */
 import type { BookDesign } from "../../design";
 import type { Project } from "../../types";
+import { castSnapshot, pagesWithCastChange, restoreCast } from "../../book/pageCast";
 import { GUIDE_RESTORE_MAX_CHARS } from "../session";
 
 /** The book fields an undo snapshot holds. */
@@ -31,6 +32,26 @@ export function canUndo(project: Project): boolean {
   return snapshotJson(project).length <= GUIDE_RESTORE_MAX_CHARS;
 }
 
+/**
+ * The snapshot for a turn whose page-design changes are kept in the book's
+ * change log (`core/book/changeLog.ts`): only the usual fields, and only when
+ * the turn changed one of them. A turn that touched nothing but the pages needs
+ * no snapshot at all, so Undo can never put back more than it changed.
+ */
+export function snapshotForFields(before: Project, after: Project): string | null {
+  const changed = RESTORE_FIELDS.some(
+    (key) =>
+      JSON.stringify((before as unknown as Record<string, unknown>)[key] ?? null) !==
+      JSON.stringify((after as unknown as Record<string, unknown>)[key] ?? null),
+  );
+  const cast = pagesWithCastChange(before, after);
+  if (!changed && cast.length === 0) return null;
+  const out = JSON.parse(snapshotJson(before)) as Record<string, unknown>;
+  // Who is on a page lives in the page plan: a turn that put somebody on a page keeps the earlier list.
+  if (cast.length > 0) out.castBack = castSnapshot(before, cast);
+  return JSON.stringify(out);
+}
+
 type DesignBase = Omit<BookDesign, "pages">;
 
 function designBaseOf(design: BookDesign): DesignBase {
@@ -46,6 +67,8 @@ const sameJson = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(
  */
 export function snapshotForChange(before: Project, after: Project): string {
   const out = JSON.parse(snapshotJson(before)) as Record<string, unknown>;
+  const cast = pagesWithCastChange(before, after);
+  if (cast.length > 0) out.castBack = castSnapshot(before, cast);
   const was = before.design;
   const now = after.design;
   if (was && now && was !== now) {
@@ -73,4 +96,10 @@ export function restoreDesign(project: Project, saved: Record<string, unknown>):
   }
   // The book-wide settings come back whole, so one that did not exist yet goes away too.
   return { ...project, design: { ...(baseBack ?? designBaseOf(design)), pages } as BookDesign };
+}
+
+/** Put the earlier list of who is on a page back, for a turn that changed it. */
+export function restoreCastOf(project: Project, saved: Record<string, unknown>): Project {
+  const back = saved.castBack as Parameters<typeof restoreCast>[1] | undefined;
+  return back ? restoreCast(project, back) : project;
 }

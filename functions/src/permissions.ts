@@ -528,6 +528,8 @@ const ROUTE_RULES: RouteRule[] = [
   // whether readers see them, and splitting the two would let an admin build a
   // flow they cannot turn on.
   { test: /^\/admin\/config\/guide$/, gate: key("configuration.guide") },
+  // Saved versions are the same settings: whoever may save them may list and restore them.
+  { test: /^\/admin\/config\/guide\/versions(\/[^\/]+\/restore)?$/, gate: key("configuration.guide") },
 
   // Configuration → Business.
   { test: /^\/admin\/config\/pricing-settings$/, gate: key("configuration.financial") },

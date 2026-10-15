@@ -1025,7 +1025,7 @@ export interface ScreenplaySpread {
 
 /** Cover / spine art direction drafted alongside the screenplay. */
 export interface CoverSpec {
-  /** Book title (front cover) or blurb (back cover). */
+  /** Book title (front cover); empty on the back cover unless the reader adds words. */
   title?: string;
   subtitle?: string;
   /** Art brief for the cover illustration. */

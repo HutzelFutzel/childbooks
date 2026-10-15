@@ -16,7 +16,12 @@
  * (`useChatDrivers`), and every edit on the book pane goes through the same
  * project store the rest of the studio uses.
  */
+import type { AgentWell as ChatStudioAgentWell } from "../../state/guideAgent";
+import { BusyLine, BusyPill } from "./book/BusyPill";
+import { useBookBusy } from "../../state/useBookBusy";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { describePages, interiorUnitIds, pagesNamedIn } from "../../core/book/pageRefs";
+import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Loader2, MessageCircle, Sparkles, X } from "lucide-react";
 import { cardPlaceholderKind, ENTER_NEVER_ACCEPTS, guideActivity, type GuideActivity } from "../../core/guide/activity";
@@ -48,7 +53,7 @@ import { PageFocus } from "./book/PageFocus";
 import { PagesView } from "./book/PagesView";
 import { StoryView } from "./book/StoryView";
 import { StyleView } from "./book/StyleView";
-import { dispIndexOf, dispUnitIds } from "./book/units";
+import { dispIndexOf, dispUnitIds, unitTarget } from "./book/units";
 import { usePrintCheck } from "./book/usePrintCheck";
 import { ModeSwitch, type BookMode } from "./book/ModeSwitch";
 import { ViewSwitch } from "./book/ViewSwitch";
@@ -150,7 +155,7 @@ function ChatShell({
 
   const t = useGuideT("chrome");
   const label = useGuideLabel();
-  const { displays, pages, design } = useStudio();
+  const { displays, pages, design, editingDispId, setEditingDisp } = useStudio();
   const session = useChatStudio((s) => s.session);
   const loaded = useChatStudio((s) => s.loaded);
   const sending = useChatStudio((s) => s.sending);
@@ -177,8 +182,10 @@ function ChatShell({
   const bookLeads = journey.phase === "pages" || journey.phase === "order";
   // A finished book opens at its front cover.
   const finished = journey.phase === "order";
+  // Only when nothing of the pages is on screen: a reader looking at a page, in Preview or Edit, is never moved.
   useEffect(() => {
-    if (finished) setSpread(0);
+    if (finished && view !== "pages" && focusUnit === null) setSpread(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finished]);
   const selectionOnStage =
     layout === "mobile" &&
@@ -197,10 +204,58 @@ function ChatShell({
       if (target === "pages") {
         const index = dispIndexOf(displays, unitId);
         if (index >= 0) setSpread(index);
+        // In Edit the page on the canvas is the page: take it there, or the button seems to do nothing.
+        if (focusUnit) {
+          setFocusUnit(unitId);
+          if (index >= 0) setEditingDisp(displays[index]!.id);
+        }
+      } else if (focusUnit) {
+        setFocusUnit(null);
+        setOverlay(false);
+        store().setFocus(false);
       }
     },
-    [displays, store],
+    [displays, store, focusUnit, setEditingDisp],
   );
+
+  // What "@" names in the message field: the finished book's pages, in the words the chat reads back.
+  const mentions = useMemo(
+    () =>
+      journey.locked
+        ? [
+            ...interiorUnitIds(project).map((id, index) => ({
+              id,
+              label: t("page", { n: index + 1 }),
+              text: t("page", { n: index + 1 }).toLowerCase(),
+            })),
+            { id: COVER_FRONT_ID, label: t("mentionFrontCover"), text: t("mentionFrontCover") },
+            { id: COVER_BACK_ID, label: t("mentionBackCover"), text: t("mentionBackCover") },
+          ]
+        : undefined,
+    [journey.locked, project, t],
+  );
+
+  // "Order the book", typed: the order screen opens here. The price and the buy button are on it.
+  const orderRequest = useChatStudio((s) => s.orderRequest);
+  const lastOrder = useRef(orderRequest);
+  useEffect(() => {
+    if (orderRequest === lastOrder.current) return;
+    lastOrder.current = orderRequest;
+    onOrdering(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderRequest]);
+
+  // A reference in the chat ("show me page 12", a page the reader named) brings that page into view.
+  const pageJump = useChatStudio((s) => s.pageJump);
+  const lastJump = useRef(0);
+  useEffect(() => {
+    if (!pageJump || pageJump.nonce === lastJump.current) return;
+    lastJump.current = pageJump.nonce;
+    // A page that is already in front of the reader needs no move (and Edit stays Edit).
+    if (store().looking.includes(pageJump.unitId)) return;
+    openUnit(pageJump.unitId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageJump]);
 
   const send = (text: string) => {
     // A turn is still being answered: `send` would drop this message, so keep
@@ -227,7 +282,28 @@ function ChatShell({
     authoringOf(project).drawBook?.phase === "cast" ||
     authoringOf(project).drawBook?.phase === "pages" ||
     portraitActive;
-  const chipLabel = chip ? targetLabel(chip, t) : null;
+  // The pill follows the reader: what they selected; else the pages their sentence names, live as they type
+  // (a typo like "page 18" with page 4 selected shows page 18, which is what will happen); else the pages in view.
+  const looking = useChatStudio((s) => s.looking);
+  const typedPages =
+    journey.locked && view === "pages" && chip?.kind !== "person" && memory.draft.trim()
+      ? pagesNamedIn(memory.draft, project).ids
+      : [];
+  const pagesLabel = (ids: readonly string[]) => {
+    const text = describePages(project, ids);
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  };
+  const followingPages = journey.locked && view === "pages" && !chip && looking.length > 0;
+  const chipTone: "pinned" | "typed" | "following" =
+    typedPages.length > 0 ? "typed" : chip ? "pinned" : "following";
+  const chipLabel =
+    typedPages.length > 0
+      ? pagesLabel(typedPages)
+      : chip
+        ? targetLabel(chip, t)
+        : followingPages
+          ? pagesLabel(looking)
+          : null;
   const ideaPlaceholder = useIdeaPlaceholder(project, view);
   // On the Story tab the composer says where its words go: the story. The
   // manuscript is where it is read and typed; changes are asked for here.
@@ -301,7 +377,8 @@ function ChatShell({
 
   // The book turns to what the conversation just discussed. An edit on the
   // book changes the card without a new line, and leaves the open tab alone.
-  const focusContext = contextualBookFocus(liveWell, activity);
+  const blockedWell = useChatStudio((s) => s.agentWell);
+  const focusContext = contextualBookFocus(liveWell, activity, blockedWell);
   const lastMessageId = session.messages[session.messages.length - 1]?.id ?? "";
   const followedTurn = useRef<string | null>(null);
   useEffect(() => {
@@ -361,6 +438,7 @@ function ChatShell({
           onDefault={talk.beside ? ignoreDefault : registerDefault}
         />
       </div>
+      <BusyLine project={project} />
     </div>
   );
 
@@ -425,8 +503,10 @@ function ChatShell({
             }}
             placeholder={placeholder}
             chip={chipLabel}
+            chipTone={chipTone}
             onClearChip={() => store().setChip(null)}
             context={storyContext ? t("storyContext") : null}
+            mentions={mentions}
             quote={markedPassage ? markExcerpt(markedPassage.text, 60) : null}
             onClearQuote={() => useStoryMark.getState().setMark(null)}
             tools={
@@ -441,8 +521,6 @@ function ChatShell({
               />
             }
             focusSignal={composerFocus}
-            locale={locale}
-            onLocale={(next) => void store().setChatLocale(next)}
             working={working}
             sending={sending}
             quiet={cardOpen}
@@ -527,10 +605,30 @@ function ChatShell({
   // What "this page" means for a sentence about the finished pages: the page in
   // Edit, else the spread that is open.
   const openDisp = displays[Math.min(Math.max(0, spread), Math.max(0, displays.length - 1))];
-  const lookingAt = focusUnit ? [focusUnit] : openDisp && journey.locked ? dispUnitIds(openDisp) : [];
+  // In Edit, the spread open on the canvas: the reader pages through it there, not through `focusUnit`.
+  const editingDisp = focusUnit
+    ? displays.find((d) => d.id === editingDispId && dispUnitIds(d).length > 0) ??
+      displays[Math.max(0, dispIndexOf(displays, focusUnit))]
+    : undefined;
+  const lookingAt = focusUnit
+    ? editingDisp
+      ? dispUnitIds(editingDisp)
+      : [focusUnit]
+    : openDisp && journey.locked
+      ? dispUnitIds(openDisp)
+      : [];
   const lookingKey = lookingAt.join("|");
   useEffect(() => {
-    store().setLooking(lookingKey ? lookingKey.split("|") : []);
+    const now = lookingKey ? lookingKey.split("|") : [];
+    store().setLooking(now);
+    // A page the reader selected follows them when they turn to another: the reference in the field
+    // is never about a page that is no longer in front of them.
+    const pinned = store().chip;
+    if (pinned && pinned.kind !== "person" && now.length > 0 && !now.includes(pinned.unitId)) {
+      const next = now.length === 1 ? unitTarget(project, now[0]!) : null;
+      store().setChip(next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lookingKey, store]);
 
   const bookPane = (
@@ -617,8 +715,8 @@ function ChatShell({
               layout
               transition={layoutMove}
               className={cn(
-                "flex min-h-0 shrink-0 flex-col border-r border-ink-900/5",
-                bookLeads ? "w-104 xl:w-120" : "w-[min(44rem,58%)] min-w-96",
+                "flex min-h-0 shrink-0 flex-col border-r border-ink-900/8",
+                bookLeads ? "w-84 lg:w-96 xl:w-112" : "w-[min(38rem,50%)] min-w-80",
               )}
             >
               {thread}
@@ -631,7 +729,7 @@ function ChatShell({
               className={cn(
                 "flex min-h-0 min-w-0 flex-1 flex-col",
                 bookLeads
-                  ? "bg-[linear-gradient(180deg,rgba(15,23,42,0.015),rgba(15,23,42,0.035))]"
+                  ? "bg-[radial-gradient(ellipse_at_top,rgba(20,22,58,0.03),rgba(20,22,58,0.065))]"
                   : "bg-canvas",
               )}
             >
@@ -721,10 +819,12 @@ function EntryShortcuts({
 function contextualBookFocus(
   chatWell: ChatWell | null,
   activity: GuideActivity | null,
+  agentWell: ChatStudioAgentWell | null = null,
 ): { key: string; view: BookViewId } | null {
   const well = chatWell?.kind;
-  if (chatWell?.kind === "agentBlocked" && chatWell.remedy.view) {
-    return { key: `blocked-${chatWell.remedy.requirement}`, view: chatWell.remedy.view };
+  // A blocked request turns the book to where its way forward is, even when it shows no card.
+  if (agentWell?.kind === "agentBlocked" && agentWell.remedy.view) {
+    return { key: `blocked-${agentWell.remedy.requirement}`, view: agentWell.remedy.view };
   }
   if (well === "styleChoice") return { key: "look-choice", view: "style" };
   if (well === "drawingAssign" || well === "castFix" || well === "portraits") {
@@ -798,6 +898,9 @@ function BookPane({
   onMode: ((mode: BookMode) => void) | null;
 }) {
   const setView = useChatStudio((s) => s.setView);
+  const orderLabel = useGuideLabel();
+  const orderT = useGuideT("chrome");
+  const busy = useBookBusy(project);
   const viewKey = journey.views.join("\0");
   const seenViews = useRef<string | null>(null);
   const [arrivedKey, setArrivedKey] = useState<string | null>(null);
@@ -832,7 +935,7 @@ function BookPane({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-ink-900/5 px-4 sm:px-6">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-ink-900/10 bg-linear-to-b from-white to-ink-50/50 px-2.5 shadow-[0_1px_3px_rgba(20,22,58,0.04)] backdrop-blur-md sm:px-3.5">
         <ViewSwitch
           views={journey.views}
           active={view}
@@ -840,14 +943,38 @@ function BookPane({
           attention={attention}
           arrived={arrived}
         />
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           {!journey.locked && !project.config.storyText.trim() && journey.entry && (
             <StorySourceSwitch value={journey.entry} onChange={(entry) => void useChatStudio.getState().chooseEntry(entry)} />
           )}
-          {journey.locked && journey.pages.total > 0 && journey.pages.done < journey.pages.total && (
+          {journey.locked && journey.pages.total > 0 && journey.pages.done < journey.pages.total ? (
             <PagesProgress done={journey.pages.done} total={journey.pages.total} />
+          ) : (
+            journey.locked && <BusyPill project={project} />
           )}
           {onMode && <ModeSwitch mode="preview" onChange={onMode} />}
+          {journey.locked && journey.pages.total > 0 && (
+            <>
+              <span aria-hidden className="hidden h-4 w-px bg-ink-900/12 sm:block" />
+              <button
+                type="button"
+                disabled={busy.busy}
+                title={busy.busy ? orderT("busyOrderWait") : undefined}
+                onClick={() => useChatStudio.getState().requestOrder()}
+                className="relative inline-flex h-8 items-center gap-1.5 rounded-lg bg-linear-to-b from-ink-800 to-ink-900 px-2.5 text-xs font-semibold tracking-[-0.01em] text-white shadow-[0_1px_2px_rgba(20,22,58,0.22),inset_0_1px_0_rgba(255,255,255,0.16)] ring-1 ring-ink-900 transition hover:from-ink-700 hover:to-ink-800 active:scale-[0.99] disabled:pointer-events-auto disabled:cursor-not-allowed disabled:bg-ink-100 disabled:from-ink-100 disabled:to-ink-100 disabled:text-ink-400 disabled:shadow-none disabled:ring-ink-200 sm:px-3"
+              >
+                {!busy.busy && journey.phase === "order" && (
+                  <span
+                    aria-hidden
+                    className="size-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.95)]"
+                    title={orderT("statusReady")}
+                  />
+                )}
+                <span>{orderLabel("orderBook")}</span>
+                <ArrowRight className="hidden size-3.5 opacity-80 xl:block" aria-hidden />
+              </button>
+            </>
+          )}
         </div>
       </div>
       <div className="relative min-h-0 flex-1">
@@ -888,7 +1015,10 @@ function StorySourceSwitch({
 }) {
   const t = useGuideT("chrome");
   return (
-    <div className="flex items-center rounded-full bg-ink-100/80 p-0.5" aria-label={t("storySource")}>
+    <div
+      className="inline-flex h-8 items-center rounded-lg bg-ink-900/[0.05] p-0.5 ring-1 ring-inset ring-ink-900/[0.07]"
+      aria-label={t("storySource")}
+    >
       {(["guided", "own"] as const).map((entry) => (
         <button
           key={entry}
@@ -896,8 +1026,10 @@ function StorySourceSwitch({
           aria-pressed={value === entry}
           onClick={() => onChange(entry)}
           className={cn(
-            "rounded-full px-2.5 py-1 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
-            value === entry ? "bg-white text-ink-900 shadow-2xs" : "text-ink-500 hover:text-ink-800",
+            "inline-flex h-7 items-center rounded-[6px] px-2.5 text-xs font-semibold tracking-[-0.01em] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+            value === entry
+              ? "bg-white text-ink-900 shadow-[0_1px_2px_rgba(20,22,58,0.08),0_0_0_1px_rgba(20,22,58,0.06)]"
+              : "text-ink-500 hover:text-ink-800",
           )}
         >
           {entry === "guided" ? t("guidedSource") : t("ownSource")}
@@ -910,14 +1042,14 @@ function StorySourceSwitch({
 function PagesProgress({ done, total }: { done: number; total: number }) {
   return (
     <div
-      className="flex shrink-0 items-center gap-2 rounded-full bg-magic-50/80 px-2.5 py-1 text-xs font-medium text-magic-700 ring-1 ring-magic-200/70"
+      className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-magic-100/70 px-2.5 text-xs font-semibold text-magic-700 ring-1 ring-inset ring-magic-300/70"
       aria-live="polite"
     >
       <span className="relative flex size-1.5 shrink-0" aria-hidden>
-        <span className="absolute inline-flex size-full animate-ping rounded-full bg-magic-400/70 motion-reduce:hidden" />
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-magic-500/70 motion-reduce:hidden" />
         <span className="relative size-1.5 rounded-full bg-magic-500" />
       </span>
-      <span className="relative block h-1.5 w-16 overflow-hidden rounded-full bg-magic-200/70">
+      <span className="relative block h-1.5 w-14 overflow-hidden rounded-full bg-magic-300/50">
         <motion.span
           className="absolute inset-y-0 left-0 rounded-full bg-magic-500"
           initial={false}

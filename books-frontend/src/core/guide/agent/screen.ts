@@ -33,7 +33,7 @@ export interface ScreenedCommands {
 }
 
 /** Arguments whose value is written into the book as the reader typed it. */
-const GROUNDED_ARGS = new Set(["name", "newName", "title", "author"]);
+const GROUNDED_ARGS = new Set(["name", "newName", "title", "author", "says", "words", "from"]);
 /** Arguments only the app sets (confirmation choices, generated ids). */
 const APP_ARGS = new Set(["story", "id"]);
 const MAX_ARG_CHARS = 600;

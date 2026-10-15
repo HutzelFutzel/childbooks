@@ -85,8 +85,7 @@ export const REQUIREMENTS: Record<RequirementId, RequirementSpec> = {
     label: "The pages have not started",
     met: (p) => authoringOf(p).lockedAt === undefined,
     remedy: () => ({
-      what: "the pages are already being drawn, so changes now happen on the pages themselves.",
-      view: "pages",
+      what: "the pages are already drawn, so changes now happen on the pages themselves.",
     }),
   },
   pagesStarted: {

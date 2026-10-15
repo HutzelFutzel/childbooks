@@ -9,12 +9,16 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Copy, Info, PencilLine, RotateCcw, Sparkles } from "lucide-react";
+import { Check, Copy, Info, PencilLine, Redo2, RotateCcw, Sparkles } from "lucide-react";
 import { isQuietMessage } from "../../../core/guide/conversation";
 import { bookViewOf, type BookViewId } from "../../../core/guide/journey";
 import type { GuideMessage, ReceiptThumb } from "../../../core/guide/session";
-import type { Project } from "../../../core/types";
-import { messageText } from "../../../state/chatStudio";
+import { illustrationUnits } from "../../../core/book/units";
+import { pageNumberOf } from "../../../core/book/pageRefs";
+import { COVER_BACK_ID, type Project } from "../../../core/types";
+import { messageText, useChatStudio } from "../../../state/chatStudio";
+import { useBookHistory } from "../../../state/bookHistory";
+import { useProjectsStore } from "../../../state/projectsStore";
 import { useMessageThumbs } from "../../../state/messageThumbs";
 import { useBlobUrl } from "../../hooks/useBlobUrl";
 import { cn } from "../../lib/cn";
@@ -391,6 +395,46 @@ function ReceiptThumbButton({
   );
 }
 
+/**
+ * The pages a message named, as chips over it: hover rings the page on the
+ * left, a click brings it into view. The number is read from the book now, so a
+ * page that moved shows its new number and a page that is gone says so.
+ */
+function PageRefChips({ refs }: { refs: readonly string[] }) {
+  const t = useGuideT("chrome");
+  const project = useProjectsStore((s) => s.current());
+  const jump = useChatStudio((s) => s.jumpToPage);
+  const hover = useChatStudio((s) => s.setHoverUnit);
+  if (!project) return null;
+  return (
+    <div className="flex max-w-[85%] flex-wrap justify-end gap-1">
+      {refs.map((id) => {
+        const exists = illustrationUnits(project).some((unit) => unit.id === id);
+        const n = pageNumberOf(project, id);
+        const label = !exists ? t("pageGone") : n === null ? (id === COVER_BACK_ID ? t("mentionBackCover") : t("mentionFrontCover")) : t("page", { n });
+        return exists ? (
+          <button
+            key={id}
+            type="button"
+            onClick={() => jump(id)}
+            onMouseEnter={() => hover(id)}
+            onMouseLeave={() => hover(null)}
+            onFocus={() => hover(id)}
+            onBlur={() => hover(null)}
+            className="rounded-full bg-ink-900/90 px-2.5 py-0.5 text-[11px] font-medium text-white transition hover:bg-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
+          >
+            {label}
+          </button>
+        ) : (
+          <span key={id} className="rounded-full bg-ink-100 px-2.5 py-0.5 text-[11px] text-ink-400 line-through">
+            {label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function ReaderLine({
   message,
   editable,
@@ -406,7 +450,20 @@ function ReaderLine({
 }) {
   const t = useGuideT("chrome");
   const tapped = message.keys?.includes("tap") ?? false;
-  const undoable = editable && (!tapped || Boolean(message.restore || message.before));
+  const projectId = useProjectsStore((s) => s.currentId) ?? undefined;
+  const redo = useChatStudio((s) => s.redo);
+  // A change made through the book's change log can be taken back after the book
+  // is drawn too (it only touches pages); whether it is undone is read from the log.
+  useEffect(() => {
+    if (projectId && message.changeId) useBookHistory.getState().hydrate(projectId);
+  }, [projectId, message.changeId]);
+  const entryState = useBookHistory((s) =>
+    projectId && message.changeId ? s.logs[projectId]?.entries.find((e) => e.id === message.changeId)?.state : undefined,
+  );
+  const undone = entryState === "undone";
+  const legacy = Boolean(message.restore || message.before);
+  const undoable = !undone && ((editable && (!tapped || legacy)) || entryState === "applied");
+  const redoable = undone && !legacy;
   const [copied, setCopied] = useState(false);
   const copy = () => {
     void navigator.clipboard?.writeText(message.text).then(() => {
@@ -434,10 +491,12 @@ function ReaderLine({
           “{message.quote}”
         </blockquote>
       )}
+      {message.pageRefs && message.pageRefs.length > 0 && <PageRefChips refs={message.pageRefs} />}
       <p
         className={cn(
           "max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-ink-100/80 px-3.5 py-2 text-sm leading-relaxed text-ink-900 ring-1 ring-ink-200/80",
           message.failed && "ring-red-200",
+          undone && "opacity-60",
         )}
       >
         {message.text}
@@ -451,6 +510,11 @@ function ReaderLine({
         {undoable && (
           <LineAction label={t("undo")} onClick={() => onUndo(message.id)}>
             <RotateCcw className="size-3.5" />
+          </LineAction>
+        )}
+        {redoable && (
+          <LineAction label={t("redo")} onClick={() => void redo(message.id)}>
+            <Redo2 className="size-3.5" />
           </LineAction>
         )}
         {!tapped && (

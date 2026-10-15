@@ -1154,7 +1154,7 @@ export function PageStage({
         className={cn(
           "relative",
           fitParent && "max-h-full max-w-full",
-          !fitParent && !fillParent && "h-auto max-h-[70vh] w-full",
+          !fitParent && !fillParent && "h-auto w-full",
         )}
         style={{
           ...(fitParent || fillParent ? {} : { aspectRatio: String(aspect) }),

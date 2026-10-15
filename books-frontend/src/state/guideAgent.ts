@@ -25,8 +25,14 @@ import { addedPeople, personFollowUp } from "../core/guide/agent/followUps";
 import { presentBeats, type Utterance } from "../core/guide/agent/present";
 import { confirmStillValid, planTurn, type PendingConfirm, type Plan } from "../core/guide/agent/plan";
 import { GUIDE_COMMANDS } from "../core/guide/agent/registry";
-import { RESTORE_FIELDS, restoreDesign, snapshotForChange } from "../core/guide/agent/restore";
+import { RESTORE_FIELDS, restoreCastOf, restoreDesign, snapshotForChange, snapshotForFields } from "../core/guide/agent/restore";
+import { diffDesign, labelForOps } from "../core/book/changeLog";
+import { useBookHistory } from "./bookHistory";
+import { useRedrawHold } from "./redrawHold";
+import { bookBusyOf, busyReason } from "../core/guide/bookBusy";
+import { staleIllustrationSpreadIds } from "./ai";
 import { beat, withPersonAsk } from "../core/guide/agent/commands/shared";
+import { describePageNumbers, interiorUnitIds, pagesNamedIn } from "../core/book/pageRefs";
 import type {
   AskOption,
   Beat,
@@ -42,6 +48,7 @@ import type { RedrawMode } from "../core/guide/redrawMode";
 import { castOf } from "../core/guide/agent/resolve";
 import { PICTURE_CHOICE_COMMANDS } from "../core/guide/pictureSettling";
 import type { GuideEntry, Project } from "../core/types";
+import { authoringOf } from "../core/guide/projectState";
 import { deleteLikenessPhoto } from "../platform/likeness";
 import { guideComposeRemote, storyFitRemote } from "../platform/aiClient";
 import { startStoryRevision } from "../platform/storyRevisions";
@@ -61,7 +68,9 @@ export type AgentWell =
   | { kind: "sparksOffer" }
   | { kind: "agentSignIn" }
   | { kind: "agentPortraits"; castIds: string[]; names: string[] }
-  | { kind: "agentDrawBook" };
+  | { kind: "agentDrawBook" }
+  /** An older change can't be taken back alone: something newer touched the same place. */
+  | { kind: "undoConflict"; messageId: string; pages: string; count: number };
 
 /** A question the guide asked, so the next short reply ("5", "skip") finds its skill. */
 export interface AgentPending {
@@ -74,13 +83,22 @@ export interface AgentTurn {
   beats: Beat[];
   well: AgentWell | null;
   view: BookViewId | null;
-  /** JSON of the top-level book fields before this turn's writes; null when nothing was written. */
+  /** JSON of the top-level book fields before this turn's writes; null when none of them changed. */
   restore: string | null;
+  /** The change-log entry for this turn's page-design changes (`state/bookHistory.ts`); null when it changed none. */
+  changeId: string | null;
   pending: AgentPending | null;
   /** People whose portrait is to be redrawn, in the order asked: one batch. */
   redraws: { castId: string; name: string; instruction: string; mode?: RedrawMode }[];
+  /** A page or cover picture the reader asked to change: offered as a redraw with its price. */
+  pageRedraw: { unitIds: string[]; instruction: string; mode?: RedrawMode } | null;
+  /** A page to bring into view on the right. */
+  goToPage: string | null;
+  /** The reader asked to order a book that is ready: open the order screen. */
+  openOrder: boolean;
   entry: GuideEntry | null;
   undo: boolean;
+  redo: boolean;
   skip: boolean;
   /** The turn asked, confirmed or blocked: the journey's own next question waits. */
   holdsFloor: boolean;
@@ -115,6 +133,12 @@ export function agentContext(): CommandContext {
   const portraitsRunning = open ? castOf(open).some((m) => active.has(m.id)) : false;
   return {
     now: Date.now(),
+    palette: agentConfig().palette,
+    limits: {
+      pictureBatch: agentConfig().turn.pictureBatchMax,
+      extrasPages: agentConfig().turn.extrasPagesMax,
+      refreshBatch: agentConfig().turn.refreshBatchMax,
+    },
     fonts,
     ...(portraitsRunning ? { portraitsRunning } : {}),
     guest: useAuthStore.getState().accessLevel === "guest",
@@ -160,6 +184,8 @@ export function agentWellTopic(well: AgentWell): string {
       return "account";
     case "sparksOffer":
       return "sparksOffer";
+    case "undoConflict":
+      return `undoConflict:${well.messageId}`;
   }
 }
 
@@ -177,7 +203,7 @@ export function applyRestore(project: Project, restore: string): Project {
     if (saved[key] === null) delete next[key];
     else next[key] = saved[key];
   }
-  return restoreDesign(next as unknown as Project, saved);
+  return restoreCastOf(restoreDesign(next as unknown as Project, saved), saved);
 }
 
 function writeCalls(plan: Plan): CommandCall[] {
@@ -304,6 +330,31 @@ async function runEffect(effect: CommandEffect, turn: AgentTurn, mark: StoryMark
         ...(effect.mode ? { mode: effect.mode } : {}),
       });
       return;
+    case "openOrder":
+      turn.openOrder = true;
+      return;
+    case "goToPage":
+      turn.goToPage = effect.unitId;
+      turn.view = "pages";
+      return;
+    case "listChanges": {
+      const project = live();
+      const log = project ? useBookHistory.getState().logs[project.id] : undefined;
+      const recent = (log?.entries ?? []).filter((entry) => entry.state === "applied").slice(-5).reverse();
+      const text =
+        recent.length === 0
+          ? "Nothing has been changed on the pages yet."
+          : `Latest changes, newest first: ${recent.map((entry) => entry.label).join("; ")}. Say “undo” to take back the newest one.`;
+      turn.beats.push(beat("done", undefined, { text }));
+      return;
+    }
+    case "redrawPage":
+      turn.pageRedraw = {
+        unitIds: effect.unitIds,
+        instruction: effect.instruction,
+        ...(effect.mode ? { mode: effect.mode } : {}),
+      };
+      return;
     case "drawBook":
       turn.well = { kind: "agentDrawBook" };
       return;
@@ -322,6 +373,10 @@ async function runEffect(effect: CommandEffect, turn: AgentTurn, mark: StoryMark
     case "undo":
       turn.undo = true;
       return;
+    case "redo":
+      turn.redo = true;
+      return;
+
     case "picture":
       if (!(await stepPicture(effect.target, effect.delta))) {
         turn.beats = turn.beats.filter((b) => b.key !== "pictureBack");
@@ -348,6 +403,12 @@ async function runEffect(effect: CommandEffect, turn: AgentTurn, mark: StoryMark
  * arrive after the turn, to be said as their own message. No skill needs it
  * today: the story check is awaited so its card is part of the turn's message.
  */
+/** A call the reader's own words can aim at pages: a model call to a skill that takes a scope. */
+function pageScopedCall(call: CommandCall): boolean {
+  const def = GUIDE_COMMANDS[call.id];
+  return call.source === "model" && Boolean(def && (def.aimsAtPages || def.args.some((spec) => spec.name === "scope")));
+}
+
 export async function executeAgentCalls(
   calls: readonly CommandCall[],
   options: {
@@ -369,6 +430,12 @@ export async function executeAgentCalls(
      * it the turn is measured from the book as its skills found it.
      */
     since?: Project;
+    /**
+     * What the reader typed. The pages it names ("page 18", "pages 3-5", "the
+     * last page") are read here by the app, never by the interpreter: they set
+     * which pages a page-scoped skill acts on.
+     */
+    said?: string;
   },
 ): Promise<AgentTurn> {
   const turn: AgentTurn = {
@@ -376,10 +443,15 @@ export async function executeAgentCalls(
     well: null,
     view: null,
     restore: null,
+    changeId: null,
     pending: null,
     redraws: [],
+    pageRedraw: null,
+    goToPage: null,
+    openOrder: false,
     entry: null,
     undo: false,
+    redo: false,
     skip: false,
     holdsFloor: false,
     wrote: false,
@@ -391,31 +463,108 @@ export async function executeAgentCalls(
   turn.startedFrom = options.since ?? project;
   const config = agentConfig();
   const mark = options.mark ?? null;
+  const named = options.said ? pagesNamedIn(options.said, project) : null;
+  const scoped = named && (named.ids.length > 0 || named.all || named.missing.length > 0) ? named : null;
+  if (scoped && scoped.ids.length === 0 && !scoped.all && scoped.missing.length > 0 && calls.some((call) => pageScopedCall(call))) {
+    // A page the book does not have is said, not turned into another page.
+    turn.beats.push(
+      beat("noSuchPage", { what: describePageNumbers(scoped.missing), count: interiorUnitIds(project).length }, { priority: "result" }),
+    );
+    return turn;
+  }
+  if (scoped) {
+    calls = calls.map((call) =>
+      pageScopedCall(call) && GUIDE_COMMANDS[call.id]!.args.some((spec) => spec.name === "scope")
+        ? { ...call, args: { ...call.args, scope: scoped.all && scoped.ids.length === 0 ? "book" : "page" } }
+        : call,
+    );
+  }
+  if (scoped && scoped.ids.length > 0) {
+    // Remember which pages the sentence named, so a follow-up question about the same change keeps them.
+    const said = scoped.ids.length === 1 ? scoped.ids[0]! : "both";
+    calls = calls.map((call) => (call.id === "editPicture" ? { ...call, args: { ...call.args, pages: said } } : call));
+  }
+  const pagesNow = scoped && scoped.ids.length > 0 ? scoped.ids : pagesMeant(options.chip, options.looking);
+  const drawingNow = bookBusyOf(project, {
+    activeUnitIds: useJobsStore.getState().activeUnitIds,
+    held: useRedrawHold.getState().units,
+  });
+  const staleNow = authoringOf(project).lockedAt ? staleIllustrationSpreadIds(project) : [];
   const ctx: CommandContext = {
     ...agentContext(),
     ...(mark ? { marked: true } : {}),
     ...(options.chip ? { chip: options.chip } : {}),
-    ...(pagesMeant(options.chip, options.looking) ? { pages: pagesMeant(options.chip, options.looking) } : {}),
+    ...(pagesNow ? { pages: pagesNow } : {}),
+    ...(scoped && scoped.ids.length > 0 ? { pagesNamed: true } : {}),
+    ...(staleNow.length > 0 ? { stalePages: staleNow } : {}),
+    ...(drawingNow.busy ? { drawingReason: busyReason(drawingNow) } : {}),
   };
   const plan = planTurn({ project, calls, ctx, config, overflow: options.overflow, confirmed: options.confirmed });
+  if (scoped && scoped.missing.length > 0 && scoped.ids.length > 0) {
+    plan.beats.push(beat("pagesSkipped", { what: describePageNumbers(scoped.missing) }, { priority: "result" }));
+  }
+  // The page the reader named comes into view, so the right side shows what the line is about.
+  if (scoped && scoped.ids.length > 0 && calls.some(pageScopedCall) && plan.steps.length > 0) {
+    turn.goToPage = scoped.ids[0]!;
+  }
   turn.chose = plan.steps.some((step) => PICTURE_CHOICE_COMMANDS.has(step.call.id));
   turn.beats.push(...plan.beats);
   turn.view = plan.views[plan.views.length - 1] ?? null;
 
   const writes = writeCalls(plan);
   if (writes.length > 0) {
-    let before: string | null = null;
+    const held: { before: Project | null; after: Project | null; labels: string[] } = { before: null, after: null, labels: [] };
+    const reshapes = writes.some((call) => GUIDE_COMMANDS[call.id].structural);
+    // A change that ends in a redraw makes its pages out of date the moment it is saved: the redraw is
+    // offered by this turn, so the page's own card waits.
+    const redrawing = plan.steps.flatMap((step) =>
+      step.result.kind === "write" && step.result.then?.kind === "redrawPage" ? step.result.then.unitIds : [],
+    );
+    if (redrawing.length > 0) useRedrawHold.getState().hold(redrawing);
     await useProjectsStore.getState().patchCurrent((latest) => {
       const writeCtx = { ...ctx, now: Date.now() };
       let next = latest;
+      const labels: string[] = [];
       for (const call of writes) {
         const result = GUIDE_COMMANDS[call.id].run(next, call.args, writeCtx);
-        if (result.kind === "write") next = result.project;
+        if (result.kind === "write") {
+          next = result.project;
+          if (result.beat.receipt) labels.push(result.beat.receipt);
+        }
       }
-      before = snapshot(latest, next);
+      held.before = latest;
+      held.after = next;
+      held.labels = labels;
       return next;
     });
-    turn.restore = before;
+    if (held.before && held.after) {
+      turn.restore = snapshotForFields(held.before, held.after);
+      // The page design goes in the shared change log, so Undo takes back this
+      // and nothing else, and the editor's Undo sees it too.
+      const nowProject = useProjectsStore.getState().current();
+      const designNow = nowProject?.design;
+      const ops = diffDesign(held.before.design, designNow);
+      if (reshapes && nowProject) {
+        // Pages added, removed, moved or copied: whole snapshots, because no smaller unit makes sense.
+        const entry = useBookHistory.getState().recordStructural({
+          projectId: held.before.id,
+          source: "chat",
+          label: held.labels.join("; ") || "Changed the pages",
+          before: held.before,
+          after: nowProject,
+        });
+        turn.changeId = entry?.id ?? null;
+      } else if (ops.length > 0) {
+        const entry = useBookHistory.getState().recordDesign({
+          projectId: held.before.id,
+          source: "chat",
+          label: held.labels.join("; ") || labelForOps(ops),
+          before: held.before.design,
+          after: designNow,
+        });
+        turn.changeId = entry?.id ?? null;
+      }
+    }
     turn.wrote = true;
   }
 

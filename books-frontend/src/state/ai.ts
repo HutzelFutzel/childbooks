@@ -327,6 +327,8 @@ export function changedAnchorNamesForSpreads(
 export function isIllustrationStale(project: Project, spreadId: string): boolean {
   const tree = project.illustrations?.[spreadId];
   if (!tree) return false;
+  // Words painted into a cover that the book no longer says.
+  if ((spreadId === COVER_FRONT_ID || spreadId === COVER_BACK_ID) && coverTextDrift(project, spreadId)) return true;
   const byId = new Map((project.anchors ?? []).map((a) => [a.id, a]));
   const content = getCursor(tree).content;
   const used = content.references ?? [];

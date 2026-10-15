@@ -104,6 +104,12 @@ export interface GuideTurnPolicy {
    * it; anything dearer shows the priced button. 0: always show the button.
    */
   autoSpendSparks: number;
+  /** Most pictures one typed change may redraw together ("the sky pink on pages 3 to 8"). */
+  pictureBatchMax: number;
+  /** Most pages one message may put a shape on or clear. */
+  extrasPagesMax: number;
+  /** Most out-of-date pictures one "update the pictures" may redraw; more is the Draw the book button. */
+  refreshBatchMax: number;
 }
 
 export interface GuideHelpArticleSetting {
@@ -112,6 +118,18 @@ export interface GuideHelpArticleSetting {
   body: string;
   enabled: boolean;
 }
+
+/**
+ * Color names the chat understands on top of the built-in ones. A custom name
+ * is one exact color wherever it is used (text, paper, shapes); a hidden name
+ * is a built-in the chat should not accept.
+ */
+export interface GuidePalette {
+  colors: { name: string; hex: string }[];
+  hidden: string[];
+}
+
+export const PALETTE_LIMITS = { colors: 60, hidden: 60, nameChars: 30 } as const;
 
 export interface GuideAgentConfig {
   /** Master switch for skills. Off: the chat only collects facts, as before. */
@@ -127,6 +145,7 @@ export interface GuideAgentConfig {
   /** Admin edits to shipped help articles, and admin-added articles. */
   help: { articles: GuideHelpArticleSetting[] };
   ideas: { enabled: boolean; max: number; inPlaceholder: boolean; disabled: string[] };
+  palette: GuidePalette;
 }
 
 export const TURN_LIMITS = {
@@ -134,6 +153,9 @@ export const TURN_LIMITS = {
   commandFloor: { min: 0.3, max: 0.95 },
   confirmTtlMinutes: { min: 1, max: 60 },
   autoSpendSparks: { min: 0, max: 200 },
+  pictureBatchMax: { min: 1, max: 24 },
+  extrasPagesMax: { min: 1, max: 40 },
+  refreshBatchMax: { min: 1, max: 60 },
   budgetMs: { min: 400, max: 6000 },
   minConfidence: { min: 0.5, max: 0.99 },
   minWords: { min: 1, max: 12 },
@@ -184,7 +206,7 @@ export function createDefaultGuideAgentConfig(): GuideAgentConfig {
   ) as Record<GuideCommandId, GuideSkillSetting>;
   return {
     enabled: true,
-    turn: { maxCommands: 4, commandFloor: 0.6, confirmTtlMinutes: 10, typedYes: true, autoSpendSparks: 10 },
+    turn: { maxCommands: 4, commandFloor: 0.6, confirmTtlMinutes: 10, typedYes: true, autoSpendSparks: 10, pictureBatchMax: 8, extrasPagesMax: 12, refreshBatchMax: 24 },
     skills,
     people: { age: { askWhen: "now" }, role: { askWhen: "once" }, look: { askWhen: "never" } },
     persona: createDefaultGuidePersona(),
@@ -194,6 +216,7 @@ export function createDefaultGuideAgentConfig(): GuideAgentConfig {
     language: { followMessage: true, minConfidence: 0.8, minWords: 3 },
     help: { articles: [] },
     ideas: { enabled: true, max: 3, inPlaceholder: true, disabled: [] },
+    palette: { colors: [], hidden: [] },
   };
 }
 
@@ -308,6 +331,9 @@ export function normalizeGuideAgentConfig(input: unknown): GuideAgentConfig {
       confirmTtlMinutes: num(turn.confirmTtlMinutes, TURN_LIMITS.confirmTtlMinutes, def.turn.confirmTtlMinutes),
       typedYes: bool(turn.typedYes, def.turn.typedYes),
       autoSpendSparks: num(turn.autoSpendSparks, TURN_LIMITS.autoSpendSparks, def.turn.autoSpendSparks),
+      pictureBatchMax: num(turn.pictureBatchMax, TURN_LIMITS.pictureBatchMax, def.turn.pictureBatchMax),
+      extrasPagesMax: num(turn.extrasPagesMax, TURN_LIMITS.extrasPagesMax, def.turn.extrasPagesMax),
+      refreshBatchMax: num(turn.refreshBatchMax, TURN_LIMITS.refreshBatchMax, def.turn.refreshBatchMax),
     },
     skills,
     people: {
@@ -337,7 +363,27 @@ export function normalizeGuideAgentConfig(input: unknown): GuideAgentConfig {
       inPlaceholder: bool(ideas.inPlaceholder, def.ideas.inPlaceholder),
       disabled: list(ideas.disabled, 100, 60),
     },
+    palette: normalizePalette(raw.palette),
   };
+}
+
+/** Names fold to lower case with single spaces; a color must be a six-digit hex. Bad entries drop out. */
+export function normalizePalette(value: unknown): GuidePalette {
+  const palette = obj(value);
+  const fold = (name: string) => name.trim().toLowerCase().replace(/\s+/g, " ").slice(0, PALETTE_LIMITS.nameChars);
+  const seen = new Set<string>();
+  const colors: GuidePalette["colors"] = [];
+  for (const entry of Array.isArray(palette.colors) ? palette.colors : []) {
+    const item = obj(entry);
+    const name = typeof item.name === "string" ? fold(item.name) : "";
+    const hex = typeof item.hex === "string" ? item.hex.trim().toLowerCase() : "";
+    if (!name || seen.has(name) || !/^#[0-9a-f]{6}$/.test(hex)) continue;
+    seen.add(name);
+    colors.push({ name, hex });
+    if (colors.length >= PALETTE_LIMITS.colors) break;
+  }
+  const hidden = [...new Set(list(palette.hidden, PALETTE_LIMITS.hidden, PALETTE_LIMITS.nameChars).map(fold).filter(Boolean))];
+  return { colors, hidden };
 }
 
 /** Loose on the way in (the normalizer repairs values), strict about being an object. */
@@ -439,6 +485,23 @@ export const GUIDE_AGENT_META: Record<string, AdminFieldMeta> = {
     effect: "When a parent types a picture change (\"make Dad's hair blue\", \"draw Amanda\") and the price is at most this, the picture starts at once and the chat says it started. Dearer than this, or not enough Sparks, shows the priced button instead. 0 always shows the button.",
     appearsIn: "Redraws and named portraits asked for in the chat",
     caution: "The earlier picture always stays in the history, so a redraw can be undone for free. Drawing the whole book is never started this way.",
+  },
+  "turn.pictureBatchMax": {
+    label: "Most pictures changed by one message",
+    effect: "\"Make the sky pink on pages 3 to 8\" redraws up to this many pictures at once, for one price. Naming more is refused with a short reason, so a runaway list can never turn into a big bill.",
+    appearsIn: "Picture changes on the finished pages",
+    caution: "The price is always shown first unless it is under the automatic start limit above, and every old picture stays in its history.",
+  },
+  "turn.extrasPagesMax": {
+    label: "Most pages decorated or cleared at once",
+    effect: "How many pages one message may put a star, heart or other shape on, or take bubbles and shapes off. Free and undoable, so this only guards against a typo like \"every page\" meaning more than intended.",
+    appearsIn: "Shapes and bubbles on the finished pages",
+  },
+  "turn.refreshBatchMax": {
+    label: "Most out-of-date pictures updated by one message",
+    effect: "\"Update the pictures that are out of date\" redraws up to this many pages at once. With more, the parent is pointed to Draw the book, which updates everything together.",
+    appearsIn: "After a character or place changed under finished pictures",
+    caution: "Each redraw costs Sparks; the price shows first unless it is under the automatic start limit.",
   },
   "turn.typedYes": {
     label: "Typing \"yes\" confirms",
@@ -580,6 +643,18 @@ export const GUIDE_AGENT_META: Record<string, AdminFieldMeta> = {
     effect: "When the guide isn't asking anything, the empty composer shows one suggestion as its placeholder.",
     appearsIn: "Idle composer",
   },
+  "palette.colors": {
+    label: "Extra color names",
+    effect: "Names the chat accepts for colors, each one exact color (for example “sunset orange” = #ff7a3d). A name here beats a built-in of the same name.",
+    appearsIn: "Text color, page color, shapes and bubbles",
+    example: "“Make the page sunset orange” paints exactly #ff7a3d.",
+    caution: "Names are used on paper too, exactly as given, so a dark one can make the words hard to read; the chat still warns about weak contrast.",
+  },
+  "palette.hidden": {
+    label: "Built-in color names to refuse",
+    effect: "Built-in names the chat should not accept (for example one that prints poorly). The parent is told the color isn't known and can pick another or give a hex code.",
+    appearsIn: "Text color, page color, shapes and bubbles",
+  },
   "ideas.disabled": {
     label: "Hidden suggestions",
     effect: "Suggestion ids that never show.",
@@ -596,6 +671,8 @@ const META_LEAF_CONTAINERS = new Set([
   "persona.examples",
   "help.articles",
   "ideas.disabled",
+  "palette.colors",
+  "palette.hidden",
 ]);
 
 /** Every setting path an admin can change. The invariant checks each has meta. */

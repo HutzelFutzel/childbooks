@@ -91,12 +91,9 @@ import {
   stepForDestination,
   type StudioDestination,
 } from "./studioRoutes";
-import {
-  applyStudioSnapshot,
-  bindStudioProjectCommit,
-  takeStudioSnapshot,
-  type StudioSnapshot,
-} from "./studioUndo";
+import { commitStudioProject } from "./studioUndo";
+import { labelForOps, diffDesign } from "../../core/book/changeLog";
+import { canRedoSelector, canUndoSelector, useBookHistory } from "../../state/bookHistory";
 import {
   patchStorySnapshot,
   storySnapshotsEqual,
@@ -659,18 +656,13 @@ export function StudioProvider({
   const [styleSetupOpen, setStyleSetupOpen] = useState(destination === "style");
   const [snap, setSnap] = useState(true);
   const [grid, setGrid] = useState(false);
-  const [guides, setGuides] = useState(true);
+  const [guides, setGuides] = useState(false);
   const [bleedVisible, setBleedVisible] = useState(false);
-  const history = useRef<{ past: StudioSnapshot[]; future: StudioSnapshot[] }>({
-    past: [],
-    future: [],
-  });
   const storyHistory = useRef<{ past: StorySnapshot[]; future: StorySnapshot[] }>({
     past: [],
     future: [],
   });
   const [storyHistoryVersion, setStoryHistoryVersion] = useState(0);
-  const [designHistoryVersion, setDesignHistoryVersion] = useState(0);
   const storyCoalesceKey = useRef<string | null>(null);
   const storyCoalesceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Active coalesce key — see {@link HistoryOpts.coalesce}. */
@@ -1138,29 +1130,6 @@ export function StudioProvider({
     [storyHistoryVersion],
   );
 
-  const pushHistory = useCallback((p: Project) => {
-    history.current.past.push(takeStudioSnapshot(p));
-    if (history.current.past.length > 80) history.current.past.shift();
-    history.current.future = [];
-    setDesignHistoryVersion((v) => v + 1);
-  }, []);
-
-  /**
-   * Design-only undo snapshot. Shares screenplay/illustrations refs (those trees
-   * are replaced immutably elsewhere) so text gestures don't deep-clone the
-   * whole book on the first keystroke.
-   */
-  const pushDesignHistory = useCallback((p: Project) => {
-    history.current.past.push({
-      design: p.design ? structuredClone(p.design) : undefined,
-      screenplay: p.screenplay,
-      illustrations: p.illustrations,
-    });
-    if (history.current.past.length > 80) history.current.past.shift();
-    history.current.future = [];
-    setDesignHistoryVersion((v) => v + 1);
-  }, []);
-
   /** Clear selection when its page no longer exists after undo/redo. */
   const sanitizeSelection = useCallback((p: Project) => {
     setSelection((sel) => {
@@ -1183,7 +1152,10 @@ export function StudioProvider({
       if (!p?.design) return;
       const key = opts?.coalesce;
       const merging = key != null && key === coalesceKey.current;
-      if (!merging) pushDesignHistory(p);
+      // A discrete edit keeps its own copy of the earlier design, so a mutator
+      // that edits in place can never corrupt what Undo puts back. A gesture's
+      // many small steps share the reference: only the first needs the copy.
+      const was = merging ? p.design : structuredClone(p.design);
       coalesceKey.current = key ?? null;
       // Structural share: mutators replace only the pages they touch. Avoids
       // deep-cloning the whole design on every coalesced keystroke / drag sample.
@@ -1202,68 +1174,54 @@ export function StudioProvider({
       } else {
         void setDesign(next);
       }
+      // Recorded from what the book holds now (saving may adjust the cover's lettering).
+      const ops = diffDesign(was, useProjectsStore.getState().current()?.design);
+      if (ops.length > 0) {
+        useBookHistory.getState().recordDesign({
+          projectId: p.id,
+          source: "editor",
+          label: labelForOps(ops),
+          before: was,
+          after: useProjectsStore.getState().current()?.design,
+          ...(key ? { coalesceKey: key, merge: merging } : {}),
+        });
+      }
     },
-    [pushDesignHistory, setDesign],
+    [setDesign],
   );
 
-  /**
-   * Full-project mutation as one undo step (page add/remove/move/duplicate).
-   * Snapshots design + screenplay + illustrations together.
-   */
-  const commitProject = useCallback(
-    (mutate: (p: Project) => Project) => {
-      const p = useProjectsStore.getState().current();
-      if (!p) return;
-      pushHistory(p);
-      coalesceKey.current = null;
-      void useProjectsStore.getState().patchCurrent(mutate);
-    },
-    [pushHistory],
-  );
-
-  // Let pageOps (and other non-React callers) share this undo stack.
-  useEffect(() => bindStudioProjectCommit(commitProject), [commitProject]);
+  const projectId = project.id;
+  useEffect(() => {
+    useBookHistory.getState().hydrate(projectId);
+  }, [projectId]);
 
   const undo = useCallback(() => {
-    const p = useProjectsStore.getState().current();
-    const past = history.current.past;
-    if (!p || past.length === 0) return;
     coalesceKey.current = null;
-    history.current.future.push(takeStudioSnapshot(p));
-    const snap = past.pop()!;
-    setDesignHistoryVersion((v) => v + 1);
-    void useProjectsStore
+    void useBookHistory
       .getState()
-      .patchCurrent((cur) => applyStudioSnapshot(cur, snap))
+      .undo(projectId)
       .then(() => {
         const next = useProjectsStore.getState().current();
         if (next) sanitizeSelection(next);
       });
-  }, [sanitizeSelection]);
+  }, [projectId, sanitizeSelection]);
 
   const redo = useCallback(() => {
-    const p = useProjectsStore.getState().current();
-    const future = history.current.future;
-    if (!p || future.length === 0) return;
     coalesceKey.current = null;
-    history.current.past.push(takeStudioSnapshot(p));
-    const snap = future.pop()!;
-    setDesignHistoryVersion((v) => v + 1);
-    void useProjectsStore
+    void useBookHistory
       .getState()
-      .patchCurrent((cur) => applyStudioSnapshot(cur, snap))
+      .redo(projectId)
       .then(() => {
         const next = useProjectsStore.getState().current();
         if (next) sanitizeSelection(next);
       });
-  }, [sanitizeSelection]);
+  }, [projectId, sanitizeSelection]);
 
+  const historyCanUndo = useBookHistory(canUndoSelector(projectId));
+  const historyCanRedo = useBookHistory(canRedoSelector(projectId));
   const designHistoryAvailability = useMemo(
-    () => ({
-      canUndo: history.current.past.length > 0,
-      canRedo: history.current.future.length > 0,
-    }),
-    [designHistoryVersion],
+    () => ({ canUndo: historyCanUndo, canRedo: historyCanRedo }),
+    [historyCanUndo, historyCanRedo],
   );
 
   const mutatePage = useCallback(

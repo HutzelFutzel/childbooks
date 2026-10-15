@@ -149,9 +149,22 @@ export function sideAspect(left: SpreadSide, right: SpreadSide): number {
   return fromPage(left) ?? fromPage(right) ?? 1;
 }
 
+/** Width-to-height aspect ratio of the rendered display unit (single page for covers, full spread for pairs/spreads). */
+export function dispAspect(disp: DisplaySpread): number {
+  if (disp.cover) {
+    const side = disp.kind === "pair" ? coverSideOf(disp) : null;
+    const entry = side && side.kind === "page" ? side.entry : disp.kind === "full" ? disp.entry : null;
+    return entry?.page.aspect || 1;
+  }
+  if (disp.kind === "full") {
+    return disp.entry.page.aspect || 1;
+  }
+  return sideAspect(disp.left, disp.right) * 2;
+}
+
 export const COVER_META: Record<CoverKind, { title: string; hint: string }> = {
   front: { title: "Front cover", hint: "The first thing readers see — title and headline art." },
-  back: { title: "Back cover", hint: "The closing panel — blurb, and the back of the printed book." },
+  back: { title: "Back cover", hint: "The closing panel, and the back of the printed book." },
 };
 
 /** Pull the cover's page side (front sits on the right, back on the left). */

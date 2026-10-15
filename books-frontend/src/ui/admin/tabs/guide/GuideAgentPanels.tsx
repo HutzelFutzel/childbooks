@@ -8,7 +8,7 @@
  * watch out for. The code's floors are shown, not editable: a skill that always
  * confirms shows its confirmation locked on, and a person's age stays required.
  */
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Plus, RotateCcw, Trash2 } from "lucide-react";
 import {
   GUIDE_AGENT_META,
@@ -21,6 +21,7 @@ import {
   createDefaultAnswerStyle,
   createDefaultGuideAgentConfig,
   createDefaultGuidePersona,
+  normalizePalette,
   type AnswerStyle,
   type GuideAgentConfig,
   type GuideHelpArticleSetting,
@@ -197,6 +198,8 @@ const AREA_LABELS: Record<CommandArea, string> = {
   path: "How the book starts",
   book: "Book details",
   design: "Finished pages",
+  pictures: "Page pictures",
+  pages: "Pages in the book",
   story: "Story",
   people: "People",
   places: "Places and things",
@@ -206,6 +209,30 @@ const AREA_LABELS: Record<CommandArea, string> = {
   conversation: "Conversation",
 };
 
+/** When in the book's life a skill works: the parent's mental model, read from what it requires. */
+type SkillStage = "after" | "before" | "any";
+
+const STAGES: { id: SkillStage; title: string; hint: string }[] = [
+  {
+    id: "after",
+    title: "After the pages are drawn",
+    hint: "Changing the finished book: how the pages look, and the pictures. Everything here works on the book as it is now.",
+  },
+  {
+    id: "before",
+    title: "While the book is being set up",
+    hint: "Story, people and look. These stop working once the pages are being drawn, because changing them would no longer match the pictures.",
+  },
+  { id: "any", title: "Any time", hint: "Help, going back, and showing parts of the book." },
+];
+
+function stageOf(id: GuideCommandId): SkillStage {
+  const requires = GUIDE_COMMANDS[id].requires;
+  if (requires.includes("pagesStarted")) return "after";
+  if (requires.includes("notLocked")) return "before";
+  return "any";
+}
+
 function skillName(id: GuideCommandId): string {
   const words = id.replace(/([A-Z])/g, " $1").toLowerCase();
   return words.charAt(0).toUpperCase() + words.slice(1);
@@ -213,14 +240,27 @@ function skillName(id: GuideCommandId): string {
 
 export function GuideSkillsPanel({ agent, onChange, readOnly }: PanelProps) {
   const defaults = createDefaultGuideAgentConfig();
+  const [query, setQuery] = useState("");
+  // One block per stage, and inside it one card per area: "what can a parent do to the finished book" in one place.
   const areas = useMemo(() => {
-    const out = new Map<CommandArea, GuideCommandId[]>();
-    for (const id of GUIDE_COMMAND_IDS) {
-      const area = GUIDE_COMMANDS[id].area;
-      out.set(area, [...(out.get(area) ?? []), id]);
+    const needle = query.trim().toLowerCase();
+    const matches = (id: GuideCommandId) => {
+      if (!needle) return true;
+      const def = GUIDE_COMMANDS[id];
+      return [skillName(id), def.help, ...def.examples, AREA_LABELS[def.area]].some((text) => text.toLowerCase().includes(needle));
+    };
+    const out: { stage: SkillStage; area: CommandArea; ids: GuideCommandId[]; first: boolean }[] = [];
+    for (const stage of STAGES) {
+      const byArea = new Map<CommandArea, GuideCommandId[]>();
+      for (const id of GUIDE_COMMAND_IDS) {
+        if (stageOf(id) !== stage.id || !matches(id)) continue;
+        const area = GUIDE_COMMANDS[id].area;
+        byArea.set(area, [...(byArea.get(area) ?? []), id]);
+      }
+      [...byArea.entries()].forEach(([area, ids], index) => out.push({ stage: stage.id, area, ids, first: index === 0 }));
     }
-    return [...out.entries()];
-  }, []);
+    return out;
+  }, [query]);
   const setSkill = (id: GuideCommandId, patch: Partial<GuideAgentConfig["skills"][GuideCommandId]>) =>
     onChange({ ...agent, skills: { ...agent.skills, [id]: { ...agent.skills[id], ...patch } } });
   const setTurn = (patch: Partial<GuideAgentConfig["turn"]>) => onChange({ ...agent, turn: { ...agent.turn, ...patch } });
@@ -272,6 +312,27 @@ export function GuideSkillsPanel({ agent, onChange, readOnly }: PanelProps) {
             onChange={(autoSpendSparks) => setTurn({ autoSpendSparks })}
             readOnly={readOnly}
           />
+          <NumberSetting
+            path="turn.pictureBatchMax"
+            value={agent.turn.pictureBatchMax}
+            range={TURN_LIMITS.pictureBatchMax}
+            onChange={(pictureBatchMax) => setTurn({ pictureBatchMax })}
+            readOnly={readOnly}
+          />
+          <NumberSetting
+            path="turn.refreshBatchMax"
+            value={agent.turn.refreshBatchMax}
+            range={TURN_LIMITS.refreshBatchMax}
+            onChange={(refreshBatchMax) => setTurn({ refreshBatchMax })}
+            readOnly={readOnly}
+          />
+          <NumberSetting
+            path="turn.extrasPagesMax"
+            value={agent.turn.extrasPagesMax}
+            range={TURN_LIMITS.extrasPagesMax}
+            onChange={(extrasPagesMax) => setTurn({ extrasPagesMax })}
+            readOnly={readOnly}
+          />
           <div className="sm:pt-6">
             <ToggleSetting
               path="turn.typedYes"
@@ -292,7 +353,10 @@ export function GuideSkillsPanel({ agent, onChange, readOnly }: PanelProps) {
             </>
           ) : (
             <>Typed picture changes always show their priced button.</>
-          )}
+          )}{" "}
+          On the finished pages one message changes up to <strong>{agent.turn.pictureBatchMax}</strong> pictures, updates
+          up to <strong>{agent.turn.refreshBatchMax}</strong> out-of-date pictures, and decorates or clears up to{" "}
+          <strong>{agent.turn.extrasPagesMax}</strong> pages.
         </p>
       </Section>
 
@@ -303,9 +367,23 @@ export function GuideSkillsPanel({ agent, onChange, readOnly }: PanelProps) {
             {off} of {GUIDE_COMMAND_IDS.length} skills are off.
           </p>
         )}
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Find a skill: “page color”, “umbrella”, “undo”…"
+          aria-label="Find a skill"
+        />
+        {areas.length === 0 && <p className="text-sm text-ink-500">No skill matches “{query}”.</p>}
         <div className="space-y-5">
-          {areas.map(([area, ids]) => (
-            <div key={area} className="overflow-hidden rounded-xl bg-white ring-1 ring-ink-100">
+          {areas.map(({ stage, area, ids, first }) => (
+            <Fragment key={`${stage}:${area}`}>
+              {first && (
+                <div className="pt-2">
+                  <h3 className="text-sm font-semibold text-ink-900">{STAGES.find((x) => x.id === stage)!.title}</h3>
+                  <p className="text-xs text-ink-500">{STAGES.find((x) => x.id === stage)!.hint}</p>
+                </div>
+              )}
+            <div className="overflow-hidden rounded-xl bg-white ring-1 ring-ink-100">
               <div className="grid grid-cols-[1fr_5rem_7rem] gap-4 border-b border-ink-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
                 <span>{AREA_LABELS[area]}</span>
                 <span>On</span>
@@ -341,6 +419,16 @@ export function GuideSkillsPanel({ agent, onChange, readOnly }: PanelProps) {
                             Confirms when it would remove something
                           </span>
                         )}
+                        {stageOf(id) === "after" && !def.paid && (
+                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                            Free, nothing is redrawn
+                          </span>
+                        )}
+                        {def.aimsAtPages && (
+                          <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-semibold text-ink-600">
+                            Understands “page 18”
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs leading-relaxed text-ink-600">{def.help}</p>
                       {def.examples[0] && (
@@ -370,10 +458,96 @@ export function GuideSkillsPanel({ agent, onChange, readOnly }: PanelProps) {
                 );
               })}
             </div>
+            </Fragment>
           ))}
         </div>
       </Section>
+
+      <ColorNames agent={agent} onChange={onChange} readOnly={readOnly} />
     </div>
+  );
+}
+
+// --- Color names ---------------------------------------------------------------------
+
+/** "sunset orange = #ff7a3d", one per line. */
+function colorLines(colors: GuideAgentConfig["palette"]["colors"]): string {
+  return colors.map((color) => `${color.name} = ${color.hex}`).join("\n");
+}
+
+function parseColorLines(text: string): GuideAgentConfig["palette"]["colors"] {
+  return normalizePalette({
+    colors: text
+      .split("\n")
+      .map((line) => line.split("=").map((part) => part.trim()))
+      .filter((parts) => parts.length === 2)
+      .map(([name, hex]) => ({ name, hex })),
+  }).colors;
+}
+
+function ColorNames({ agent, onChange, readOnly }: PanelProps) {
+  const palette = agent.palette;
+  const [colors, setColors] = useState(() => colorLines(palette.colors));
+  const [hidden, setHidden] = useState(() => listText(palette.hidden));
+  const set = (patch: Partial<GuideAgentConfig["palette"]>) => onChange({ ...agent, palette: { ...palette, ...patch } });
+  const parsed = parseColorLines(colors);
+  const lines = colors.split("\n").filter((line) => line.trim()).length;
+  return (
+    <Section
+      title="Color names"
+      hint="The colors a parent can name for text, pages, shapes and bubbles. Hex codes always work."
+      action={
+        <ResetButton
+          readOnly={readOnly}
+          onClick={() => {
+            setColors("");
+            setHidden("");
+            onChange({ ...agent, palette: createDefaultGuideAgentConfig().palette });
+          }}
+        />
+      }
+    >
+      <Setting path="palette.colors">
+        <Textarea
+          rows={5}
+          value={colors}
+          disabled={readOnly}
+          placeholder={"sunset orange = #ff7a3d\nsky = #7ec8e3"}
+          onChange={(e) => {
+            // Into the draft on every keystroke, not on blur: a Save pressed with the cursor still in
+            // the box (Enter, a shortcut, a script) must not quietly leave the names out.
+            setColors(e.target.value);
+            set({ colors: parseColorLines(e.target.value) });
+          }}
+        />
+        <p className="text-[11px] text-ink-400">
+          One per line as <code>name = #rrggbb</code>. {parsed.length} saved
+          {lines > parsed.length ? `; ${lines - parsed.length} line${lines - parsed.length === 1 ? " is" : "s are"} not valid and will be dropped` : ""}.
+        </p>
+        {parsed.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {parsed.map((color) => (
+              <span key={color.name} className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs text-ink-700 ring-1 ring-ink-100">
+                <span className="size-3.5 rounded-full ring-1 ring-ink-200" style={{ backgroundColor: color.hex }} />
+                {color.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </Setting>
+      <Setting path="palette.hidden">
+        <Input
+          value={hidden}
+          disabled={readOnly}
+          placeholder="gold, lila"
+          onChange={(e) => {
+            setHidden(e.target.value);
+            set({ hidden: normalizePalette({ hidden: parseList(e.target.value) }).hidden });
+          }}
+        />
+        <p className="text-[11px] text-ink-400">Comma-separated built-in names, English or German.</p>
+      </Setting>
+    </Section>
   );
 }
 

@@ -165,6 +165,23 @@ export interface GenerationJob extends JobLease {
 }
 
 /**
+ * The JSON-serializable subset of `IllustrationRunOptions`. `region` is a spot the
+ * reader marked on the picture (fractions of its width and height): the worker
+ * turns it into an inpainting mask over the picture that is there, so only that
+ * spot can change.
+ */
+export interface RefreshTaskOptions {
+  useReference?: boolean;
+  edit?: string;
+  fromNodeId?: string;
+  restyle?: boolean;
+  inPlaceOnly?: boolean;
+  /** The change is about how subjects sit together: redraw the page from every sheet on it, skipping the in-place paths. */
+  wholePage?: boolean;
+  region?: { x: number; y: number; w: number; h: number };
+}
+
+/**
  * A refresh task names a spread to (re)render through the full illustration
  * pipeline on the worker. The worker resolves prompts/references from the
  * project snapshot, so the client doesn't pre-assemble anything.
@@ -174,7 +191,7 @@ export interface RefreshTask {
   status: JobStatus;
   error?: string;
   /** A subset of `IllustrationRunOptions` that is JSON-serializable. */
-  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean; inPlaceOnly?: boolean };
+  options?: RefreshTaskOptions;
   /** Render output for the client to fold into the version tree. */
   result?: IllustrationRender;
   stats?: TaskStats;
@@ -212,7 +229,7 @@ export interface AnchorTask {
   status: JobStatus;
   error?: string;
   /** A subset of `AnchorRunOptions` that is JSON-serializable. */
-  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean; inPlaceOnly?: boolean };
+  options?: RefreshTaskOptions;
   result?: AnchorRender;
   stats?: TaskStats;
 }
@@ -433,7 +450,7 @@ export interface TaskDoc {
   /** image-kind payload (pre-assembled request). */
   request?: ImageRenderRequest;
   /** refresh/anchor-kind payload (pipeline options). */
-  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean; inPlaceOnly?: boolean };
+  options?: RefreshTaskOptions;
   /** image-kind provenance, stamped onto the version on reconcile. */
   referenceUses?: ReferenceUse[];
   /** portrait-kind payload: what the portrait was quoted for. */

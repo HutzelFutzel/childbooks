@@ -1244,6 +1244,41 @@ async function portraitEditMask(args: {
   }
 }
 
+/**
+ * An inpainting mask over the spot the reader marked on a picture, so an edit can
+ * change only there. Null — and the edit goes through the normal path — when no
+ * spot was marked, it is too small or covers most of the picture, the model can't
+ * take a mask, or the picture that is there can't be read. The spot comes from
+ * the browser, so it is clamped and checked here rather than trusted.
+ */
+async function markedRegionMask(args: {
+  uid: string;
+  project: Project;
+  spreadId: string;
+  region: { x: number; y: number; w: number; h: number } | undefined;
+  canMask: boolean;
+}): Promise<{ base64: string; mimeType: string } | null> {
+  const { region } = args;
+  if (!region || !args.canMask) return null;
+  const nums = [region.x, region.y, region.w, region.h];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  const x = Math.min(1, Math.max(0, region.x));
+  const y = Math.min(1, Math.max(0, region.y));
+  const width = Math.min(1 - x, Math.max(0, region.w));
+  const height = Math.min(1 - y, Math.max(0, region.h));
+  if (width < 0.03 || height < 0.03 || width * height > 0.6) return null;
+  const tree = args.project.illustrations?.[args.spreadId];
+  const blobId = tree?.cursorId ? tree.nodes[tree.cursorId]?.content.blobId : undefined;
+  if (!blobId) return null;
+  try {
+    const original = await downloadBlob(args.uid, blobId);
+    const mask = await buildHoleMask({ page: original, box: { x, y, width, height }, paddingFrac: 0.05 });
+    return { base64: bufToBase64(mask), mimeType: "image/png" };
+  } catch {
+    return null;
+  }
+}
+
 type ImageQualityControl = (input: {
   result: ImageResult;
   request: ImageRequest;
@@ -1943,8 +1978,21 @@ async function renderTask(
       generationTuning,
       action,
     );
+    const regionMask = await markedRegionMask({
+      uid,
+      project,
+      spreadId: spread.id,
+      region: task.options?.region,
+      canMask: capabilitiesFor(models.imageModel, capabilities).operations.maskEditing,
+    });
+    const { region: _region, ...runOptions } = task.options ?? {};
     const { value: render, events, stats } = await withUsage(() =>
-      renderIllustration(project, spread, { ...(task.options ?? {}), signal }, env),
+      renderIllustration(
+        project,
+        spread,
+        { ...runOptions, ...(regionMask ? { mask: regionMask, useReference: true } : {}), signal },
+        env,
+      ),
     );
     const renderKind = kindOf(task.options);
     const estimateProfile = estimateProfileForAction({

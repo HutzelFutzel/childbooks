@@ -1,4 +1,4 @@
-import { illustrationUnits } from "../../../core/book/units";
+import { pageNumberOf } from "../../../core/book/pageRefs";
 import type { GuideTarget } from "../../../core/guide/target";
 import { COVER_BACK_ID, COVER_FRONT_ID, type Project } from "../../../core/types";
 import { contentSpreadIds, type DisplaySpread } from "../../studio/spreadModel";
@@ -10,16 +10,28 @@ export function dispUnitIds(disp: DisplaySpread): string[] {
   return contentSpreadIds(disp);
 }
 
-/** The inside page number of a unit, counting from 1; null for a cover. */
-export function pageNumberOf(project: Project, unitId: string): number | null {
-  if (unitId === COVER_FRONT_ID || unitId === COVER_BACK_ID) return null;
-  const inside = illustrationUnits(project).filter((u) => u.id !== COVER_FRONT_ID && u.id !== COVER_BACK_ID);
-  const index = inside.findIndex((u) => u.id === unitId);
-  return index >= 0 ? index + 1 : null;
+/**
+ * Where each unit sits on the displayed spread, in percent of its width. A page
+ * alone beside an empty side (the first page, the last) takes its own side, not
+ * the whole spread; a picture across both pages takes both; a cover is the
+ * middle half, as drawn.
+ */
+export function unitSlots(disp: DisplaySpread): { unitId: string; left: number; width: number }[] {
+  if (disp.cover) return dispUnitIds(disp).map((unitId) => ({ unitId, left: 0, width: 100 }));
+  if (disp.kind === "full") return [{ unitId: disp.entry.page.id, left: 0, width: 100 }];
+  const slots: { unitId: string; left: number; width: number }[] = [];
+  [disp.left, disp.right].forEach((side, index) => {
+    if (side.kind === "page" && side.entry.subject.kind === "spread") {
+      slots.push({ unitId: side.entry.page.id, left: index * 50, width: 50 });
+    }
+  });
+  return slots;
 }
 
+export { pageNumberOf };
+
 /** The chip for a unit on the book. */
-export function unitTarget(project: Project, unitId: string): GuideTarget {
+export function unitTarget(project: Project, unitId: string): Extract<GuideTarget, { kind: "page" | "cover" }> {
   const page = pageNumberOf(project, unitId);
   return page === null ? { kind: "cover", unitId } : { kind: "page", unitId, page };
 }

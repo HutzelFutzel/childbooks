@@ -273,6 +273,16 @@ for (const path of guideAgentSettingPaths()) {
 }
 
 {
+  // A change to the people after the pages are drawn: one plain line, and nowhere to be "shown".
+  const drawn = { ...twins, authoringState: { ...(twins.authoringState ?? {}), lockedAt: 1 } } as unknown as typeof twins;
+  const plan = planTurn({ project: drawn, calls: [call("removePerson", { person: "Arthur" })], ctx, config: defaults });
+  check(plan.steps.length === 0 && plan.blocked.length === 1, "Removing a person from a drawn book was not blocked.");
+  check(plan.beats.some((b) => b.key === "lockedBlocked"), "A drawn book's blocked change did not use the plain line.");
+  check(!plan.beats.some((b) => b.key === "blocked"), "A drawn book's blocked change still says the app's raw reason.");
+  check(plan.views.length === 0 && !plan.blocked[0]!.remedy.view, "A drawn book's blocked change sends the reader to a view it does not help.");
+}
+
+{
   // Removing someone the story mentions: confirm, with the choice.
   const plan = planTurn({ project: twins, calls: [call("removePerson", { person: "Arthur" })], ctx, config: defaults });
   check(plan.steps.length === 0, "Removing a person ran before it was confirmed.");
@@ -666,7 +676,7 @@ for (const path of guideAgentSettingPaths()) {
 // --- Suggestion chips ------------------------------------------------------------------------
 
 /** What the finished pages offer: how the words look, nothing about the story or the people. */
-const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "changeFont", "moveText"];
+const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "changeFont", "moveText", "pageColor", "changePicture", "addPage", "addBubble"];
 
 {
   const ideas = suggestionsFor(twins, defaults, { guest: false });
@@ -1100,6 +1110,36 @@ const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "chang
     normalizeGuideAgentConfig({ turn: { autoSpendSparks: value } }).turn.autoSpendSparks;
   check(cap(undefined) === defaults.turn.autoSpendSparks && defaults.turn.autoSpendSparks > 0, "The default cap for starting a typed picture is missing.");
   check(cap(5000) === 200 && cap(-3) === 0, "The cap for starting a typed picture is not bounded.");
+}
+
+{
+  const limit = (key: "pictureBatchMax" | "extrasPagesMax" | "refreshBatchMax", value: unknown) =>
+    normalizeGuideAgentConfig({ turn: { [key]: value } }).turn[key];
+  check(limit("pictureBatchMax", undefined) === defaults.turn.pictureBatchMax && defaults.turn.pictureBatchMax >= 1, "The default picture batch limit is missing.");
+  check(limit("pictureBatchMax", 500) === 24 && limit("pictureBatchMax", 0) === 1, "The picture batch limit is not bounded.");
+  check(limit("extrasPagesMax", 500) === 40 && limit("refreshBatchMax", 500) === 60, "The page extras and refresh limits are not bounded.");
+}
+
+{
+  const palette = normalizeGuideAgentConfig({
+    palette: {
+      colors: [
+        { name: "  Sunset   Orange ", hex: "#FF7A3D" },
+        { name: "sunset orange", hex: "#000000" },
+        { name: "bad", hex: "red" },
+        { name: "", hex: "#123456" },
+        { name: "gold", hex: "#ffd700" },
+      ],
+      hidden: ["Lila", "lila", " "],
+    },
+  }).palette;
+  check(palette.colors.length === 2 && palette.colors[0]!.name === "sunset orange" && palette.colors[0]!.hex === "#ff7a3d", "The palette keeps one valid color per name and folds the name.");
+  check(palette.hidden.length === 1 && palette.hidden[0] === "lila", "The refused color names are not folded and unique.");
+  check(resolveTextColor("Sunset Orange", palette) === "#ff7a3d" && resolveTextColor("sunset orange") === null, "A custom color name works only with the admin's palette.");
+  check(resolveTextColor("gold", palette) === "#ffd700", "A custom name beats the built-in of the same name.");
+  check(resolveTextColor("lila", palette) === null && resolveTextColor("lila") !== null, "A refused built-in name is not accepted, and only with the palette.");
+  check(resolveTextColor("#abc", palette) === "#aabbcc", "A hex code always works, whatever the palette.");
+  check(normalizeGuideAgentConfig({ palette: "nope" }).palette.colors.length === 0, "A broken palette falls back to empty.");
 }
 
 // --- The finished pages: size, color, alignment, font and position by words ----------------------

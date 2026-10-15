@@ -264,6 +264,45 @@ export function interpretGuideTurnRemote(
   );
 }
 
+/** What the admin's "try it" reads out of one sentence. Nothing is applied. */
+export interface GuideTryResult {
+  skillsOn: boolean;
+  intent: string;
+  reply: string;
+  confidence: number;
+  commands: { id: string; args: Record<string, unknown>; evidence: string; confidence: number }[];
+  overflowCommands: { id: string; args: Record<string, unknown> }[];
+  refusedCommands: { id: string; reason: string; evidence: string }[];
+  facts: string[];
+  refusedFacts: number;
+}
+
+/**
+ * Admin-only: read a sentence against a book with the guide settings as edited
+ * (the unsaved draft) and report which skills would run. Writes nothing.
+ */
+export function tryGuideTurnRemote(
+  project: Project,
+  message: string,
+  draft: unknown,
+  signal?: AbortSignal,
+): Promise<GuideTryResult> {
+  return postAi<GuideTryResult>(
+    "/ai/guide/try",
+    {
+      project: slimProjectForRender(project, {
+        keepScreenplay: true,
+        keepAnchorVersions: true,
+        keepAnalysis: true,
+        illustrationTargets: Object.keys(project.illustrations ?? {}).map((id) => ({ id })),
+      }),
+      message,
+      draft,
+    },
+    signal,
+  );
+}
+
 /**
  * Tell the server what the browser did with a proposal.
  *

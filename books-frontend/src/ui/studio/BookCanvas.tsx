@@ -388,7 +388,7 @@ export function BookCanvas({
         <div className="flex min-h-0 min-w-0 flex-1 flex-row">
           <div className="relative min-h-0 min-w-0 flex-1">
             <div
-              className="absolute inset-0 flex flex-col bg-ink-50/40 p-3 sm:p-5"
+              className="absolute inset-0 flex flex-col bg-ink-50/40 p-2 sm:p-3"
               onMouseDown={(e) => {
                 // Click anywhere in the empty canvas area (outside the page surface
                 // and the floating element toolbox, which is a separate subtree) to

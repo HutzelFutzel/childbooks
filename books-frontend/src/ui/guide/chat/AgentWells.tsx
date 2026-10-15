@@ -23,10 +23,10 @@ import { useSparksUiStore } from "../../../state/sparksUiStore";
 import { cn } from "../../lib/cn";
 import { useGuideLabel, useGuideT } from "../intl";
 
-export type AgentWellItem = Extract<AgentWell, { kind: "agentConfirm" | "agentAsk" | "agentBlocked" | "sparksOffer" }>;
+export type AgentWellItem = Extract<AgentWell, { kind: "agentConfirm" | "agentAsk" | "agentBlocked" | "sparksOffer" | "undoConflict" }>;
 
 export function isAgentWellItem(well: { kind: string }): well is AgentWellItem {
-  return ["agentConfirm", "agentAsk", "agentBlocked", "sparksOffer"].includes(well.kind);
+  return ["agentConfirm", "agentAsk", "agentBlocked", "sparksOffer", "undoConflict"].includes(well.kind);
 }
 
 function Choice({
@@ -101,12 +101,25 @@ function ImpactLine({ effect }: { effect: ImpactEffect }) {
       );
     case "removesPlace":
       return <li>{t("impactRemovesPlace", { name: effect.name })}</li>;
+    case "removesPage":
+      return (
+        <li>
+          {effect.hasPicture && effect.hasWords
+            ? t("impactRemovesPageBoth", { page: effect.page })
+            : effect.hasPicture
+              ? t("impactRemovesPagePicture", { page: effect.page })
+              : effect.hasWords
+                ? t("impactRemovesPageWords", { page: effect.page })
+                : t("impactRemovesPageEmpty", { page: effect.page })}
+        </li>
+      );
   }
 }
 
 export function agentWellTitle(well: AgentWellItem, t: ReturnType<typeof useGuideT>): string {
   switch (well.kind) {
     case "agentConfirm":
+    case "undoConflict":
       return t("taskConfirm");
     case "agentAsk":
       return t("taskChoose");
@@ -135,7 +148,44 @@ export function AgentWellBody({
       return <BlockedRemedy well={well} onView={onView} onDefault={onDefault} />;
     case "sparksOffer":
       return <SparksOffer />;
+    case "undoConflict":
+      return <UndoConflictCard well={well} />;
   }
+}
+
+/** An older change was touched again: take back only it, or the newer ones too. */
+function UndoConflictCard({ well }: { well: Extract<AgentWell, { kind: "undoConflict" }> }) {
+  const t = useGuideT("agent");
+  const label = useGuideLabel();
+  const undo = useChatStudio((s) => s.undo);
+  const tap = useChatStudio((s) => s.tap);
+  const clear = useChatStudio((s) => s.clearAgentWell);
+  const sending = useChatStudio((s) => s.sending);
+  return (
+    <div className="flex w-full flex-col items-start gap-3">
+      <ul className="list-disc space-y-1 pl-5 text-sm leading-snug text-ink-700">
+        <li>{t("impactOverwritesNewer", { pages: well.pages, count: well.count })}</li>
+      </ul>
+      <div className="flex flex-wrap gap-2">
+        <Choice
+          primary
+          disabled={sending}
+          onClick={() => void tap(label("undoBoth"), () => undo(well.messageId, { mode: "through" }))}
+        >
+          {label("undoBoth")}
+        </Choice>
+        <Choice
+          disabled={sending}
+          onClick={() => void tap(label("undoOnlyThis"), () => undo(well.messageId, { mode: "force" }))}
+        >
+          {label("undoOnlyThis")}
+        </Choice>
+        <Choice subtle onClick={() => clear()}>
+          {label("cancel")}
+        </Choice>
+      </div>
+    </div>
+  );
 }
 
 function ConfirmCard({

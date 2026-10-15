@@ -32,7 +32,7 @@ export function GuideModeToggle({ bookId }: { bookId?: string | null }) {
 
   return (
     <div
-      className="hidden items-center gap-0.5 rounded-xl bg-ink-100 p-0.5 sm:flex"
+      className="hidden h-8 items-center gap-0.5 rounded-lg bg-ink-900/[0.05] p-0.5 ring-1 ring-inset ring-ink-900/[0.07] sm:flex"
       role="group"
       aria-label="Studio flow"
     >
@@ -74,9 +74,11 @@ function Option({
       title={title}
       aria-pressed={active}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-[0.625rem] px-2 py-1 text-xs font-semibold transition-colors",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
-        active ? "bg-white text-ink-800 shadow-sm" : "text-ink-500 hover:text-ink-700",
+        "inline-flex h-7 items-center gap-1.5 rounded-[6px] px-2.5 text-xs font-semibold tracking-[-0.01em] transition-colors",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+        active
+          ? "bg-white text-ink-900 shadow-[0_1px_2px_rgba(20,22,58,0.08),0_0_0_1px_rgba(20,22,58,0.06)]"
+          : "text-ink-500 hover:text-ink-800",
       )}
     >
       {icon}

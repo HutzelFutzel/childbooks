@@ -67,6 +67,7 @@ import {
   createDefaultGuideConfig,
   normalizeGuideConfig,
   type GuideConfig,
+  type GuideVersionSummary,
 } from "../core/config/guide";
 import {
   createDefaultModelCostTable,
@@ -638,6 +639,10 @@ interface AppConfigState {
    * response — not the draft that was sent — is what lands in the store.
    */
   saveGuide: (config: GuideConfig) => Promise<void>;
+  /** What the guide settings were before each of the last saves (admin-only). */
+  loadGuideVersions: () => Promise<GuideVersionSummary[]>;
+  /** Put a kept version back; the settings it replaces are kept in turn. */
+  restoreGuideVersion: (id: string) => Promise<void>;
   saveModelCosts: (table: ModelCostTable) => Promise<void>;
   savePricingSettings: (settings: PricingSettings) => Promise<void>;
   saveSparksConfig: (config: SparksConfig) => Promise<void>;
@@ -1298,6 +1303,23 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveGuide(config) {
     set({ guide: normalizeGuideConfig(await putJson("/admin/config/guide", config)) });
+  },
+
+  async loadGuideVersions() {
+    const res = await backendFetch("/admin/config/guide/versions");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load the saved versions.");
+    const body = (await res.json()) as { versions?: GuideVersionSummary[] };
+    return Array.isArray(body.versions) ? body.versions : [];
+  },
+
+  async restoreGuideVersion(id) {
+    const res = await backendFetch(`/admin/config/guide/versions/${encodeURIComponent(id)}/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not restore that version.");
+    set({ guide: normalizeGuideConfig(await res.json()) });
   },
 
   async saveModelCosts(table) {

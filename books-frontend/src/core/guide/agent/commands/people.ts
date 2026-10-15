@@ -211,7 +211,7 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
     id: "removePerson",
     area: "people",
     suggest: false, // removing someone is never a thing to nudge toward
-    summary: "Take a person out of the book. Runs at once and Undo brings them back; if the story mentions them, the reader first chooses whether the story is rewritten.",
+    summary: "Take a person out of the book for good (the cast, the story and every page they are in). Not for taking someone out of one drawn picture: 'remove the boy on page 3' or 'remove that boy' with a spot marked is editPicture. Runs at once and Undo brings them back; if the story mentions them, the reader first chooses whether the story is rewritten.",
     args: [
       { name: "person", kind: "person", required: true, hint: "who to remove" },
       { name: "story", kind: "choice", required: false, hint: "never set this; the confirmation card sets it", options: ["rewrite", "keep"] },

@@ -276,6 +276,12 @@ export interface IllustrationRunOptions {
    * whole picture. Fails with {@link InPlaceEditError} instead.
    */
   inPlaceOnly?: boolean;
+  /**
+   * The edit compares or places subjects ("make Arthur the same size as
+   * Amanda"): no single subject can do it in place, so the page is redrawn
+   * from every sheet on it, keeping the scene. Skips edit-intent resolution.
+   */
+  wholePage?: boolean;
   signal?: AbortSignal;
 }
 
@@ -1572,7 +1578,7 @@ async function renderPage(
   // Best-effort: on failure everything falls back to substring heuristics.
   const editText = options.edit?.trim();
   let editOps: ResolvedEditOp[] | null = null;
-  if (editText && hasCompositionRef && !inpaint) {
+  if (editText && hasCompositionRef && !inpaint && !options.wholePage) {
     const intentModel = env.models.intentModel ?? env.models.textModel;
     try {
       const intentKey = env.apiKeyFor(intentModel.provider);

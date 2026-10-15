@@ -67,6 +67,8 @@ import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import type { DesignPage } from "../design/designInit";
 import { buildCoverPlan } from "../design/printTargets";
+import { busyReason } from "../../core/guide/bookBusy";
+import { useBookBusy } from "../../state/useBookBusy";
 import { FormatPicker } from "./FormatPicker";
 import { VariantPicker } from "./VariantPicker";
 import {
@@ -684,7 +686,10 @@ export function OrderCheckout({
       (!taxIdRequired || taxId.trim()) &&
       copies >= 1,
   );
+  // What prints is the saved book: a picture that is still being drawn would print as it was.
+  const drawing = useBookBusy(project);
   const canOrder =
+    !drawing.busy &&
     marketsLoaded &&
     countryOptions.some((option) => option.value === country) &&
     shippingChoices.some((option) => option.value === shipping) &&
@@ -697,7 +702,9 @@ export function OrderCheckout({
     !requirementError &&
     !addressNeedsReview;
 
-  const checkoutBlockReason = !accessGate.ok
+  const checkoutBlockReason = drawing.busy
+    ? busyReason(drawing)
+    : !accessGate.ok
     ? "This binding requires an eligible membership."
     : requirementError
       ? requirementError
@@ -882,12 +889,23 @@ export function OrderCheckout({
         </div>
       </header>
 
+      {drawing.busy && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800"
+        >
+          <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin motion-reduce:animate-none" />
+          <span>{busyReason(drawing)} Ordering is on hold so the book prints as you see it.</span>
+        </div>
+      )}
+
       <div className="fixed inset-x-4 bottom-4 z-30 rounded-2xl border border-ink-200 bg-white/95 p-2.5 shadow-lifted backdrop-blur lg:hidden">
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1 pl-1">
             <p className="text-[11px] font-medium text-ink-500">Estimated total</p>
             <p className="truncate text-sm font-bold text-ink-900">
-              {quote ? money(String(quote.total), quote.currency) : checkoutBlockReason}
+              {quote && !drawing.busy ? money(String(quote.total), quote.currency) : checkoutBlockReason}
             </p>
           </div>
           <Button

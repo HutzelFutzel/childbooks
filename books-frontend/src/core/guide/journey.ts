@@ -15,6 +15,7 @@
  */
 import { coverWordsSettled } from "./coverWords";
 import { illustrationUnits } from "../book/units";
+import { pageNumberOf } from "../book/pageRefs";
 import { unitIsDone } from "../book/pageCompletion";
 import { anchorsToPrepare } from "../book/anchorFreshness";
 import { briefOf, namedCast } from "../story/brief";
@@ -430,7 +431,8 @@ export function deriveJourney(
   if (!entry) phase = "opening";
   else if (locked) {
     phase =
-      pagesComplete && pendingAnchors.length === 0 && !signals.printIssue
+      // Something drawing means the book is not ready to print: what prints is the saved book.
+      pagesComplete && pendingAnchors.length === 0 && !signals.printIssue && !working
         ? "order"
         : "pages";
   }
@@ -619,7 +621,8 @@ export function deriveJourney(
       const unit = units.find((u) => u.id === id);
       return unit ? unitIsDone(project, unit) : false;
     });
-    const page = firstFailed ? units.findIndex((u) => u.id === firstFailed) + 1 : 0;
+    // The number the book on the left shows: inside pages only, so a cover is 0.
+    const page = firstFailed ? (pageNumberOf(project, firstFailed) ?? 0) : 0;
     const runError = authoringOf(project).drawBook?.error;
     if (!drawingNow && !working && (failedAnchors.length > 0 || undrawn.length > 0)) {
       well = {

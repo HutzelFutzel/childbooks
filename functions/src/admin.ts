@@ -57,6 +57,8 @@ import {
   saveTypographyConfig,
   saveBookLanguagesConfig,
   saveGuideConfig,
+  listGuideVersions,
+  restoreGuideVersion,
   saveBrandingInfo,
   saveModelConfig,
   saveModelSetup,
@@ -604,7 +606,25 @@ export function registerAdminRoutes(app: Express): void {
 
   app.put("/admin/config/guide", json, async (req: Request, res: Response) => {
     try {
-      res.json(await saveGuideConfig(req.body));
+      res.json(await saveGuideConfig(req.body, (req as AuthedRequest).authToken?.email ?? (req as AuthedRequest).uid ?? null));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // What the guide settings were before each save, so a bad edit can be put back.
+  app.get("/admin/config/guide/versions", async (_req: Request, res: Response) => {
+    try {
+      res.json({ versions: await listGuideVersions() });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.post("/admin/config/guide/versions/:id/restore", json, async (req: Request, res: Response) => {
+    try {
+      const who = (req as AuthedRequest).authToken?.email ?? (req as AuthedRequest).uid ?? null;
+      res.json(await restoreGuideVersion(String(req.params.id), who));
     } catch (err) {
       handleError(res, err);
     }

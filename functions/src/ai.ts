@@ -81,6 +81,7 @@ import {
   patchedSlotIds,
   type GuideTurn,
 } from "../../books-frontend/src/core/pipeline/guideInterpret";
+import { normalizeGuideConfig } from "../../books-frontend/src/core/config/guide";
 import { guidePatchContext } from "../../books-frontend/src/core/guide/patch";
 import { resolveGuidePlaylist } from "../../books-frontend/src/core/guide/playlist";
 import { askGuideNext, speakGuideLines } from "../../books-frontend/src/core/guide/speech";
@@ -945,6 +946,82 @@ export function registerAiRoutes(app: Express): void {
       }).catch(() => null);
 
       res.json({ ...value, turnId });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  /**
+   * Admin "try it": read one sentence against a book with the guide settings AS
+   * EDITED (the unsaved draft), and say which skills would run with which
+   * arguments, which were refused and why. Nothing is written, logged, metered or
+   * counted against a quota — the book is only read, and the result is not applied.
+   * Admin-only; a customer gets the same refusal as for any admin route.
+   */
+  app.post("/ai/guide/try", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      if (!(await isAdminUid(req.uid!))) {
+        res.status(403).json({ error: { message: "Admins only." } });
+        return;
+      }
+      const { project, message: rawMessage, draft } = req.body as {
+        project: Project;
+        message?: unknown;
+        draft?: unknown;
+      };
+      const message = typeof rawMessage === "string" ? rawMessage.trim().slice(0, 2000) : "";
+      if (!message || !project?.id) {
+        res.status(400).json({ error: { message: "Pick a book and type a sentence." } });
+        return;
+      }
+      const guide = draft ? normalizeGuideConfig(draft) : await getGuideConfig();
+      const [model, prompts, audience, artStyles, storyCraft] = await Promise.all([
+        resolveText("guideInterpret"),
+        loadPromptContext(),
+        getAudienceConfig(),
+        getArtStylesConfig(),
+        getStoryCraftConfig(),
+      ]);
+      const playlist = resolveGuidePlaylist(guide.playlist);
+      const { value } = await withUsage(
+        () =>
+          interpretGuideTurn({
+            project,
+            message,
+            playlist,
+            transcript: [],
+            patchContext: guidePatchContext({ audience, artStyles, storyCraft }),
+            creds: { apiKey: apiKeyFor(model.provider) },
+            model: model.id,
+            providerId: model.provider,
+            prompts,
+            thresholds: guide.extraction.thresholds,
+            repairAttempts: guide.extraction.repairAttempts,
+            temperature: guide.extraction.temperature,
+            ...(guide.agent.enabled
+              ? {
+                  skills: {
+                    enabled: enabledSkills(guide.agent),
+                    floor: guide.agent.turn.commandFloor,
+                    max: guide.agent.turn.maxCommands,
+                  },
+                }
+              : {}),
+            signal: requestDeadline(),
+          }),
+        model.params,
+      );
+      res.json({
+        skillsOn: guide.agent.enabled,
+        intent: value.intent,
+        reply: value.reply,
+        confidence: value.confidence,
+        commands: value.commands ?? [],
+        overflowCommands: value.overflowCommands ?? [],
+        refusedCommands: value.refusedCommands ?? [],
+        facts: value.claims.map((c) => c.slot),
+        refusedFacts: value.refused.length,
+      });
     } catch (err) {
       sendError(res, err);
     }

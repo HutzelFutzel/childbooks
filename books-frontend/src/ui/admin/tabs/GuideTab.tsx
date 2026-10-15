@@ -50,6 +50,8 @@ import {
   GuideSkillsPanel,
 } from "./guide/GuideAgentPanels";
 import { GuideFactsPanel } from "./guide/GuideFactsPanel";
+import { GuideHistoryPanel } from "./guide/GuideHistoryPanel";
+import { GuideTryPanel } from "./guide/GuideTryPanel";
 import { GuideStoryPanel } from "./guide/GuideStoryPanel";
 import { GuideStepFlowPanel } from "./guide/GuideStepFlowPanel";
 import { GuideWordingPanel } from "./guide/GuideWordingPanel";
@@ -184,6 +186,8 @@ const PANELS = [
   { id: "wording", label: "Wording" },
   { id: "confidence", label: "Confidence" },
   { id: "steps", label: "Step flow" },
+  { id: "try", label: "Try it" },
+  { id: "history", label: "History" },
 ] as const;
 
 type PanelId = (typeof PANELS)[number]["id"];
@@ -331,6 +335,8 @@ export function GuideTab() {
               readOnly={readOnly}
             />
           )}
+          {panel === "try" && <GuideTryPanel draft={draft} />}
+          {panel === "history" && <GuideHistoryPanel dirty={dirty} readOnly={readOnly} />}
           {panel === "steps" && (
             <Section
               title="Step flow questions"

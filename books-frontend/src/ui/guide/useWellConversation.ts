@@ -28,6 +28,7 @@ export function wellTopic(well: ChatWell): string {
     case "agentAsk":
     case "agentBlocked":
     case "sparksOffer":
+    case "undoConflict":
       return agentWellTopic(well);
     case "pageFix":
     case "printFix":
@@ -108,7 +109,7 @@ export function wellIntro(
     case "pageFix":
       return [
         {
-          key: well.error === IN_PLACE_EDIT_FAILED ? "pageKeepFailed" : "pageAttention",
+          key: well.error === IN_PLACE_EDIT_FAILED ? "pageKeepFailed" : well.page === 0 ? "coverAttention" : "pageAttention",
           priority: "blocking",
           vars: { n: well.page },
         },
@@ -127,9 +128,13 @@ export function wellIntro(
     case "agentAsk":
       return [{ key: "askWhich", priority: "question" }];
     case "agentBlocked":
-      return [{ key: "blocked", priority: "question", vars: { what: well.remedy.what } }];
+      return well.remedy.requirement === "notLocked"
+        ? [{ key: "lockedBlocked", priority: "question" }]
+        : [{ key: "blocked", priority: "question", vars: { what: well.remedy.what } }];
     case "sparksOffer":
       return [{ key: "sparksOffer", priority: "question" }];
+    case "undoConflict":
+      return [{ key: "undoConflict", priority: "question", vars: { what: well.pages } }];
     case "skipFact":
       return null;
   }

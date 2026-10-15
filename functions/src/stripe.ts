@@ -16,6 +16,7 @@
  */
 import express, { type Express, type Request, type Response } from "express";
 import { holdQuoteForCheckout } from "./generationQuotes";
+import { bookIsBeingDrawn } from "./bookBusy";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 import { serverConfig } from "./config";
@@ -1402,6 +1403,14 @@ export function registerStripeUserRoutes(app: Express): void {
       }
       if (STATE_CODE_REQUIRED.has(destinationCountry) && !recipient.address.stateOrCounty) {
         clientError(res, `Orders to ${countryLabel(destinationCountry)} require a state or province code.`);
+        return;
+      }
+
+      // What prints is the saved book: not while one of its pictures is being replaced. (The merchant
+      // reference is the book's id.)
+      const drawingBook = body.merchantReference?.trim();
+      if (drawingBook && (await bookIsBeingDrawn(uid, drawingBook))) {
+        clientError(res, "Your book is still being drawn. You can order when it finishes.", 409);
         return;
       }
 

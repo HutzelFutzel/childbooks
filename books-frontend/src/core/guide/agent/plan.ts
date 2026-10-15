@@ -218,7 +218,11 @@ export function planTurn(input: PlanInput): Plan {
   }
 
   for (const { remedy } of plan.blocked.slice(0, 1)) {
-    plan.beats.push(beat("blocked", { what: remedy.what }, { priority: "blocking" }));
+    plan.beats.push(
+      remedy.requirement === "notLocked"
+        ? beat("lockedBlocked", {}, { priority: "blocking" })
+        : beat("blocked", { what: remedy.what }, { priority: "blocking" }),
+    );
     if (remedy.view) plan.views.push(remedy.view);
   }
   if (confirmCalls.length > 0) {

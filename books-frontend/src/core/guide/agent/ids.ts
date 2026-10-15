@@ -49,6 +49,25 @@ export const GUIDE_COMMAND_IDS = [
   "setTextAlign",
   "setTextFont",
   "moveText",
+  "setPageColor",
+  "editPicture",
+  "refreshPictures",
+  "goToPage",
+  "addPage",
+  "removePage",
+  "duplicatePage",
+  "movePage",
+  "listChanges",
+  "setTextEmphasis",
+  "setLineSpacing",
+  "addBubble",
+  "addShape",
+  "removeDecorations",
+  "editExtra",
+  "editPageWords",
+  "editCoverWords",
+  "checkPrint",
+  "orderBook",
   // Making the book
   "drawBook",
   // Account and Sparks
@@ -57,6 +76,7 @@ export const GUIDE_COMMAND_IDS = [
   // Conversation
   "openView",
   "undo",
+  "redo",
   "skipField",
 ] as const;
 

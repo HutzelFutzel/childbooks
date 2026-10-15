@@ -3,7 +3,7 @@
  * (the same units the editor shows) with the same PageStage used for editing —
  * just non-interactive — so what you preview is exactly what prints and binds.
  */
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { BookOpen, ChevronLeft, ChevronRight, X } from "lucide-react";
@@ -17,6 +17,7 @@ import {
   COVER_META,
   coverSideOf,
   DeadPageFill,
+  dispAspect,
   PairPreview,
   sideAspect,
   type DisplaySpread,
@@ -91,6 +92,30 @@ export function BookPreview({
   }, [count, onClose]);
 
   const disp = displays[Math.min(index, count - 1)];
+  const stageRef = useRef<HTMLDivElement>(null);
+  const aspect = disp ? dispAspect(disp) : 1;
+  const [fitBox, setFitBox] = useState<{ w: number; h: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const host = stageRef.current;
+    if (!host) return;
+    const update = () => {
+      const pw = host.clientWidth;
+      const ph = host.clientHeight;
+      if (pw <= 0 || ph <= 0) return;
+      let w = pw;
+      let h = w / aspect;
+      if (h > ph) {
+        h = ph;
+        w = h * aspect;
+      }
+      setFitBox({ w: Math.max(1, Math.floor(w)), h: Math.max(1, Math.floor(h)) });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, [aspect]);
 
   return createPortal(
     <motion.div
@@ -130,12 +155,13 @@ export function BookPreview({
         <div className="hidden sm:block">
           <NavArrow dir="left" disabled={index === 0} onClick={() => go(index - 1, -1)} />
         </div>
-        <div className="flex h-full max-h-[78vh] w-full max-w-5xl items-center justify-center">
+        <div ref={stageRef} className="flex h-full min-h-0 min-w-0 flex-1 items-center justify-center">
           {disp && (
             <AnimatePresence mode="wait" custom={dir}>
               <motion.div
                 key={disp.id}
-                className="flex w-full items-center justify-center"
+                className="flex items-center justify-center"
+                style={fitBox ? { width: fitBox.w, height: fitBox.h } : { width: "100%" }}
                 custom={dir}
                 initial={
                   reduceMotion ? { opacity: 0 } : { opacity: 0, x: dir * 40, rotateY: dir * 8 }
@@ -207,10 +233,10 @@ function PreviewCover({ disp }: { disp: DisplaySpread }) {
 
   return (
     <div className="relative flex w-full items-center justify-center">
-      {/* Closed-book cover presentation sized to exactly one page (50% width of the spread) so height matches page spreads */}
+      {/* Closed-book cover presentation sized to fill its aspect-fitted stage container */}
       <div
         className={cn(
-          "relative w-1/2 overflow-hidden bg-white shadow-lifted transition-all",
+          "relative w-full overflow-hidden bg-white shadow-lifted ring-1 ring-ink-900/8 transition-all",
           isFront ? "rounded-r-xs rounded-l-sm" : "rounded-l-xs rounded-r-sm",
         )}
       >
@@ -277,14 +303,14 @@ export function PreviewSpread({ disp }: { disp: DisplaySpread }) {
   }
   if (disp.kind === "full") {
     return (
-      <div className="relative w-full overflow-hidden bg-white shadow-lifted">
+      <div className="relative w-full overflow-hidden rounded-[3px] bg-white shadow-[0_14px_36px_-12px_rgba(20,22,58,0.22),0_2px_6px_rgba(20,22,58,0.08)] ring-1 ring-ink-900/10">
         <PreviewPage entry={disp.entry} />
       </div>
     );
   }
   if (isPlainPagePair(disp)) {
     return (
-      <div className="relative w-full overflow-hidden bg-white shadow-lifted">
+      <div className="relative w-full overflow-hidden rounded-[3px] bg-white shadow-[0_14px_36px_-12px_rgba(20,22,58,0.22),0_2px_6px_rgba(20,22,58,0.08)] ring-1 ring-ink-900/10">
         <PairPreview left={disp.left.entry} right={disp.right.entry} />
         <div
           className="pointer-events-none absolute inset-y-0 left-1/2 w-10 -translate-x-1/2"
@@ -295,7 +321,7 @@ export function PreviewSpread({ disp }: { disp: DisplaySpread }) {
   }
   const aspect = sideAspect(disp.left, disp.right);
   return (
-    <div className="relative flex w-full overflow-hidden bg-white shadow-lifted">
+    <div className="relative flex w-full overflow-hidden rounded-[3px] bg-white shadow-[0_14px_36px_-12px_rgba(20,22,58,0.22),0_2px_6px_rgba(20,22,58,0.08)] ring-1 ring-ink-900/10">
       <PreviewHalf side={disp.left} aspect={aspect} />
       <PreviewHalf side={disp.right} aspect={aspect} />
       <div

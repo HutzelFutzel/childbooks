@@ -5,8 +5,11 @@
  */
 import { BOOK_COMMANDS } from "./commands/book";
 import { DESIGN_COMMANDS } from "./commands/design";
+import { ELEMENT_COMMANDS } from "./commands/elements";
 import { FLOW_COMMANDS } from "./commands/flow";
+import { PAGE_COMMANDS } from "./commands/pages";
 import { PEOPLE_COMMANDS } from "./commands/people";
+import { PRINT_COMMANDS } from "./commands/print";
 import { STORY_COMMANDS } from "./commands/story";
 import { GUIDE_COMMAND_IDS, type GuideCommandId } from "./ids";
 import { REQUIREMENTS } from "./requirements";
@@ -17,6 +20,9 @@ const ALL: CommandDef[] = [
   ...STORY_COMMANDS,
   ...PEOPLE_COMMANDS,
   ...DESIGN_COMMANDS,
+  ...ELEMENT_COMMANDS,
+  ...PAGE_COMMANDS,
+  ...PRINT_COMMANDS,
   ...FLOW_COMMANDS,
 ];
 

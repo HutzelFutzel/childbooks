@@ -68,6 +68,7 @@ import { checkGuideLooks } from "./guide-looks-invariants";
 import { checkGuideCast } from "./guide-cast-invariants";
 import { checkGuideRedraw } from "./guide-redraw-invariants";
 import { checkGuideCards } from "./guide-card-invariants";
+import { checkGuideHistory } from "./guide-history-invariants";
 import { checkEnUsCopy } from "./en-us-copy-lint";
 
 /**
@@ -727,6 +728,11 @@ const cardChecks = checkGuideCards();
 failures.push(...cardChecks.failures);
 notes.push(...cardChecks.notes);
 cases += cardChecks.cases;
+
+const historyChecks = checkGuideHistory();
+failures.push(...historyChecks.failures);
+notes.push(...historyChecks.notes);
+cases += historyChecks.cases;
 
 const enUs = checkEnUsCopy();
 failures.push(...enUs.failures);

@@ -55,6 +55,16 @@ import {
  *   - `percentage` — a sticky share of customers, plus admin choice.
  *   - `on`         — everyone, unless they ask for the wizard explicitly.
  */
+/** One saved-over version of the guide settings, for the admin's history list. */
+export interface GuideVersionSummary {
+  id: string;
+  /** When these settings were replaced. */
+  replacedAt: number;
+  replacedBy: string | null;
+  /** The settings areas the replacing save changed, in the admin's terms (agent.turn, rollout…). */
+  changed: string[];
+}
+
 export const GUIDE_ROLLOUT_MODES = ["off", "adminOnly", "percentage", "on"] as const;
 
 export type GuideRolloutMode = (typeof GUIDE_ROLLOUT_MODES)[number];
