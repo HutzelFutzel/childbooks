@@ -1,13 +1,22 @@
 "use client";
 
 /**
- * Single source of truth for every tab's label, icon, and one-line purpose
- * across the whole admin dashboard. `NAV_INDEX` is the flattened command
- * palette. `NAV_TREE` is the nested sidebar. Permission keys stay 1:1 with
- * tab ids — Catalog's three products share `configuration.catalog`.
+ * Single source of truth for every tab's label, icon, domain workspace, and
+ * one-line purpose across the whole admin dashboard.
+ *
+ * - `NAV_TREE` organizes the dashboard into 6 domain-centric workspaces
+ *   (Commerce & Orders, Customers & Books, Economy & Finance, Growth &
+ *   Marketing, Studio & AI, Operations & Legal) plus the pinned Control Center,
+ *   keeping Settings and Analytics side-by-side within each domain.
+ * - `PAIRED_VIEWS` connects each feature's configuration screen with its
+ *   live analytics counterpart so `AdminPageHeader` can render a 1-click
+ *   [Configure ↔ Analytics] segmented switcher.
+ * - `NAV_INDEX` is the flattened list for the ⌘K Command Palette.
+ * - Permission keys and URLs remain 1:1 with tab ids.
  */
 import type { ReactNode } from "react";
 import {
+  BarChart3,
   BookOpen,
   ClipboardList,
   Coins,
@@ -37,12 +46,16 @@ import {
   Percent,
   QrCode,
   Search,
+  Settings2,
   Share2,
+  ShieldCheck,
+  ShoppingBag,
   Smartphone,
   Sparkles,
   Stamp,
   Tablet,
   Ticket,
+  TrendingUp,
   Truck,
   Type,
   UserX,
@@ -50,11 +63,8 @@ import {
   Wand2,
 } from "lucide-react";
 import {
-  ANALYSIS_GROUPS,
   adminHref,
   canonicalAdminPath,
-  CONFIG_GROUPS,
-  MARKETING_GROUPS,
   type AnalysisTabId,
   type CatalogSegment,
   type CommunicationTabId,
@@ -68,9 +78,9 @@ export type TabMeta = { label: string; icon: ReactNode; description: string };
 
 export const CONFIG_TAB_META: Record<ConfigTabId, TabMeta> = {
   overview: {
-    label: "Overview",
+    label: "Control Center",
     icon: <LayoutDashboard className="size-4" />,
-    description: "How customers pay you, and what each choice gives them.",
+    description: "Live pulse, items needing attention, workspace directory, and business model map.",
   },
   catalog: {
     label: "Catalog",
@@ -78,34 +88,34 @@ export const CONFIG_TAB_META: Record<ConfigTabId, TabMeta> = {
     description: "One-time purchases: printed books, the digital edition, and Spark packs.",
   },
   markets: {
-    label: "Markets",
+    label: "Markets & shipping",
     icon: <Globe className="size-4" />,
-    description: "Which countries we sell to, and what the printer reaches.",
+    description: "Which countries we sell to, shipping policies, and what the printer reaches.",
   },
   memberships: {
     label: "Memberships",
     icon: <CreditCard className="size-4" />,
-    description: "Recurring plans, perks, and Stripe billing.",
+    description: "Recurring subscription plans, perks, and Stripe billing.",
   },
   sparks: {
-    label: "Sparks",
+    label: "Sparks economy",
     icon: <Sparkles className="size-4" />,
-    description: "How AI generation is metered and priced.",
+    description: "How AI generation is metered, granted, and priced.",
   },
   financial: {
     label: "Currencies & tax",
     icon: <Coins className="size-4" />,
-    description: "Currencies, fees, tax, and sale guardrails behind every price.",
+    description: "Currencies, FX fees, tax, and sale guardrails behind every price.",
   },
   discounts: {
     label: "Sale planner",
     icon: <Percent className="size-4" />,
-    description: "What a discount does to every product's margin.",
+    description: "What a discount does to every product's margin and break-even.",
   },
   models: {
     label: "Models & pricing",
     icon: <Cpu className="size-4" />,
-    description: "Which models run each generation step, and what they cost.",
+    description: "Which AI models run each generation step, and what they cost.",
   },
   modelCosts: {
     label: "Model costs",
@@ -130,12 +140,12 @@ export const CONFIG_TAB_META: Record<ConfigTabId, TabMeta> = {
   audience: {
     label: "Age bands",
     icon: <BookOpen className="size-4" />,
-    description: "Writing, pacing, and safety for each age.",
+    description: "Writing, pacing, reading levels, and safety for each age.",
   },
   storyCraft: {
     label: "Story craft",
     icon: <Wand2 className="size-4" />,
-    description: "Story structure the pipeline follows by default.",
+    description: "Story structure and creative choices the pipeline follows by default.",
   },
   bookLanguages: {
     label: "Book languages",
@@ -150,12 +160,12 @@ export const CONFIG_TAB_META: Record<ConfigTabId, TabMeta> = {
   guide: {
     label: "Guided studio",
     icon: <Compass className="size-4" />,
-    description: "Question order, wording, and rollout of the chat studio.",
+    description: "Rollout, persona, facts, wording, and step flow of the chat studio.",
   },
   system: {
     label: "System health",
     icon: <HeartPulse className="size-4" />,
-    description: "Runtime health and the sandbox/live billing switch.",
+    description: "Runtime health checks, webhooks, and the sandbox/live billing switch.",
   },
 };
 
@@ -163,7 +173,7 @@ export const CATALOG_SEGMENT_META: Record<CatalogSegment, TabMeta> = {
   print: {
     label: "Print books",
     icon: <BookOpen className="size-4" />,
-    description: "Physical books offered at checkout.",
+    description: "Physical hardcover and softcover books offered at checkout.",
   },
   ebook: {
     label: "Digital edition",
@@ -179,92 +189,92 @@ export const CATALOG_SEGMENT_META: Record<CatalogSegment, TabMeta> = {
 
 export const ANALYSIS_TAB_META: Record<AnalysisTabId, TabMeta> = {
   users: {
-    label: "Users",
+    label: "Users & activity",
     icon: <Users className="size-4" />,
-    description: "Who signed up, logged in, and stayed active.",
+    description: "Who signed up, logged in, and stayed active across markets.",
   },
   projects: {
-    label: "Books",
+    label: "Books created",
     icon: <BookOpen className="size-4" />,
-    description: "Books people are making.",
+    description: "Books people are making, inspecting, and finishing.",
   },
   devices: {
     label: "Devices",
     icon: <Smartphone className="size-4" />,
-    description: "Phones, tablets, and desktops.",
+    description: "Conversion and activity across phones, tablets, and desktops.",
   },
   flows: {
     label: "Studio flows",
     icon: <GitCompare className="size-4" />,
-    description: "Steps vs Chat side by side, and what the Chat misread.",
+    description: "Steps vs Chat side by side, and turn-by-turn guide accuracy.",
   },
   costs: {
-    label: "Costs",
+    label: "AI & print costs",
     icon: <DollarSign className="size-4" />,
-    description: "What generation and fulfillment cost.",
+    description: "What AI generation and print fulfillment cost.",
   },
   finance: {
-    label: "Finance",
+    label: "Finance & P&L",
     icon: <Coins className="size-4" />,
-    description: "Revenue, fees, and contribution.",
+    description: "Revenue, fees, operating costs, and net contribution.",
   },
   payments: {
     label: "Payments",
     icon: <CreditCard className="size-4" />,
-    description: "Charges, refunds, and Stripe health.",
+    description: "Charges, refunds, disputes, and Stripe health.",
   },
   orders: {
-    label: "Orders",
+    label: "Print orders",
     icon: <Truck className="size-4" />,
-    description: "Every print order, where it stands, and what needs you.",
+    description: "Every print order, where it stands, and what needs your attention.",
   },
   products: {
-    label: "Products",
+    label: "Product sales",
     icon: <Package className="size-4" />,
-    description: "How each product line is selling.",
+    description: "How each print format, digital edition, and pack is selling.",
   },
   referrals: {
-    label: "Referrals",
+    label: "Referral funnel",
     icon: <Share2 className="size-4" />,
-    description: "Invite-a-friend funnel and payouts.",
+    description: "Invite-a-friend funnel, conversion, and payouts.",
   },
   affiliates: {
-    label: "Affiliates",
+    label: "Affiliate stats",
     icon: <Handshake className="size-4" />,
-    description: "Partner performance.",
+    description: "Partner clicks, conversions, and commissions.",
   },
   campaigns: {
-    label: "Campaigns",
+    label: "Campaign results",
     icon: <Megaphone className="size-4" />,
-    description: "Promotion results.",
+    description: "Promotion redemptions, revenue lift, and cost.",
   },
   coupons: {
-    label: "Coupons",
+    label: "Coupon redemptions",
     icon: <Ticket className="size-4" />,
-    description: "Code redemptions.",
+    description: "Code usage and discount volume.",
   },
   qrCodes: {
-    label: "QR codes",
+    label: "QR code scans",
     icon: <QrCode className="size-4" />,
-    description: "Scan and conversion stats.",
+    description: "Scan counts and conversion stats per code.",
   },
   surveys: {
     label: "Customer profile",
     icon: <ClipboardList className="size-4" />,
-    description: "Who your customers actually are.",
+    description: "Post-checkout survey responses and buyer segments.",
   },
 };
 
 export const MARKETING_TAB_META: Record<MarketingTabId, TabMeta> = {
   referrals: {
     label: "Referrals",
-    icon: <Users className="size-4" />,
-    description: "Invite-a-friend rules, rewards, and budget.",
+    icon: <Share2 className="size-4" />,
+    description: "Invite-a-friend rules, rewards, and daily budget.",
   },
   affiliates: {
     label: "Affiliates",
     icon: <Handshake className="size-4" />,
-    description: "Partner program switch and what earns.",
+    description: "Partner program switch and commission rules.",
   },
   campaigns: {
     label: "Campaigns",
@@ -274,7 +284,7 @@ export const MARKETING_TAB_META: Record<MarketingTabId, TabMeta> = {
   coupons: {
     label: "Coupons",
     icon: <Ticket className="size-4" />,
-    description: "Codes a customer types, and codes that apply themselves.",
+    description: "Codes a customer types, and codes that apply automatically.",
   },
   surveys: {
     label: "Surveys",
@@ -289,12 +299,12 @@ export const MARKETING_TAB_META: Record<MarketingTabId, TabMeta> = {
   seo: {
     label: "SEO",
     icon: <Search className="size-4" />,
-    description: "Titles, descriptions, and index rules.",
+    description: "Titles, descriptions, and indexing rules.",
   },
   blog: {
     label: "Blog",
     icon: <Newspaper className="size-4" />,
-    description: "Public posts and their stats.",
+    description: "Public articles and readership stats.",
   },
   branding: {
     label: "Branding",
@@ -304,11 +314,16 @@ export const MARKETING_TAB_META: Record<MarketingTabId, TabMeta> = {
   qrCodes: {
     label: "QR codes",
     icon: <QrCode className="size-4" />,
-    description: "Printable codes and their destinations.",
+    description: "Printable QR codes and their destinations.",
   },
 };
 
-export const COMMUNICATION_TABS: { id: CommunicationTabId; label: string; icon: ReactNode; description: string }[] = [
+export const COMMUNICATION_TABS: {
+  id: CommunicationTabId;
+  label: string;
+  icon: ReactNode;
+  description: string;
+}[] = [
   {
     id: "contact",
     label: "Contact inbox",
@@ -319,166 +334,58 @@ export const COMMUNICATION_TABS: { id: CommunicationTabId; label: string; icon: 
     id: "transactional-emails",
     label: "Transactional emails",
     icon: <Mail className="size-4" />,
-    description: "Receipts, resets, and other mail the app sends.",
+    description: "Receipts, password resets, and order updates the app sends.",
   },
   {
     id: "admin-slack",
     label: "Admin Slack",
     icon: <Hash className="size-4" />,
-    description: "Alerts posted to the admin Slack.",
+    description: "Operational alerts posted to the admin Slack channel.",
   },
 ];
 
-export const LEGAL_TABS: { id: LegalTabId; label: string; icon: ReactNode; description: string }[] = [
+export const LEGAL_TABS: {
+  id: LegalTabId;
+  label: string;
+  icon: ReactNode;
+  description: string;
+}[] = [
   {
     id: "documents",
-    label: "Documents",
+    label: "Legal documents",
     icon: <FileText className="size-4" />,
-    description: "Terms, privacy, and other legal copy.",
+    description: "Terms of service, privacy policy, and imprint.",
   },
   {
     id: "cookies",
-    label: "Cookies",
+    label: "Cookie consent",
     icon: <Cookie className="size-4" />,
-    description: "Consent categories and the banner.",
+    description: "Consent categories and the cookie banner.",
   },
   {
     id: "gdpr",
-    label: "Data requests",
+    label: "Data requests (GDPR)",
     icon: <UserX className="size-4" />,
     description: "Customer data export and deletion requests.",
   },
 ];
 
-/** One entry in the command palette's flat, searchable list. */
-export interface NavEntry {
-  id: string;
-  label: string;
-  icon: ReactNode;
-  sectionLabel: string;
-  groupLabel?: string;
-  /** Extra command-palette matches without adding visible navigation items. */
-  keywords?: string;
-  href: string;
-  /** The grant this entry needs to be reachable — omitted for owner-only entries. */
-  key?: PermissionKey;
-  /** True for entries only owners should ever see (the Permissions page itself). */
-  ownerOnly?: boolean;
-}
-
-function catalogHref(segment: CatalogSegment): string {
+export function catalogHref(segment: CatalogSegment): string {
   return segment === "print"
     ? adminHref("configuration", "catalog")
     : `${adminHref("configuration", "catalog")}?segment=${segment}`;
 }
 
-function buildNavIndex(): NavEntry[] {
-  const entries: NavEntry[] = [];
-
-  for (const group of CONFIG_GROUPS) {
-    for (const tab of group.tabs) {
-      const meta = CONFIG_TAB_META[tab];
-      entries.push({
-        id: `configuration:${tab}`,
-        label: meta.label,
-        icon: meta.icon,
-        sectionLabel: group.label === "Business" ? "Sell" : group.label,
-        groupLabel: group.label,
-        keywords: tab === "models" ? "model costs pricing rates" : tab === "catalog" ? "print ebook packs" : undefined,
-        key: `configuration.${tab}`,
-        href: adminHref("configuration", tab),
-      });
-      if (tab === "catalog") {
-        (Object.keys(CATALOG_SEGMENT_META) as CatalogSegment[]).forEach((segment) => {
-          const seg = CATALOG_SEGMENT_META[segment];
-          entries.push({
-            id: `configuration:catalog:${segment}`,
-            label: seg.label,
-            icon: seg.icon,
-            sectionLabel: "Sell",
-            groupLabel: "Catalog",
-            key: "configuration.catalog",
-            href: catalogHref(segment),
-          });
-        });
-      }
-    }
-  }
-
-  for (const group of ANALYSIS_GROUPS) {
-    for (const tab of group.tabs) {
-      const meta = ANALYSIS_TAB_META[tab];
-      entries.push({
-        id: `analysis:${tab}`,
-        label: meta.label,
-        icon: meta.icon,
-        sectionLabel: "Analysis",
-        groupLabel: group.label,
-        key: `analysis.${tab}`,
-        href: adminHref("analysis", tab),
-      });
-    }
-  }
-
-  for (const group of MARKETING_GROUPS) {
-    for (const tab of group.tabs) {
-      const meta = MARKETING_TAB_META[tab];
-      entries.push({
-        id: `marketing:${tab}`,
-        label: meta.label,
-        icon: meta.icon,
-        sectionLabel: "Grow",
-        groupLabel: group.label,
-        key: `marketing.${tab}`,
-        href: adminHref("marketing", tab),
-      });
-    }
-  }
-
-  for (const tab of COMMUNICATION_TABS) {
-    entries.push({
-      id: `communication:${tab.id}`,
-      label: tab.label,
-      icon: tab.icon,
-      sectionLabel: "Inbox",
-      key: `communication.${tab.id}`,
-      href: adminHref("communication", tab.id),
-    });
-  }
-
-  for (const tab of LEGAL_TABS) {
-    entries.push({
-      id: `legal:${tab.id}`,
-      label: tab.label,
-      icon: tab.icon,
-      sectionLabel: "Legal",
-      key: `legal.${tab.id}`,
-      href: adminHref("legal", tab.id),
-    });
-  }
-
-  entries.push({
-    id: "permissions:home",
-    label: "Permissions",
-    icon: <KeyRound className="size-4" />,
-    sectionLabel: "Permissions",
-    ownerOnly: true,
-    href: adminHref("permissions"),
-  });
-
-  return entries;
-}
-
-/** Every navigable tab in the admin dashboard, flattened for search. Built
- * once at module load — the underlying arrays above are static. */
-export const NAV_INDEX: NavEntry[] = buildNavIndex();
+export type NavMode = "overview" | "config" | "analytics" | "ops";
 
 export type NavLeaf = {
   kind: "leaf";
   id: string;
   label: string;
+  icon: ReactNode;
   href: string;
   description: string;
+  mode?: NavMode;
   key?: PermissionKey;
   ownerOnly?: boolean;
 };
@@ -487,6 +394,8 @@ export type NavGroup = {
   kind: "group";
   id: string;
   label: string;
+  icon?: ReactNode;
+  description?: string;
   children: NavNode[];
 };
 
@@ -498,8 +407,10 @@ function configLeaf(tab: ConfigTabId, extra?: Partial<NavLeaf>): NavLeaf {
     kind: "leaf",
     id: `configuration:${tab}`,
     label: meta.label,
+    icon: meta.icon,
     href: adminHref("configuration", tab),
     description: meta.description,
+    mode: tab === "overview" ? "overview" : tab === "system" ? "ops" : "config",
     key: `configuration.${tab}`,
     ...extra,
   };
@@ -511,140 +422,424 @@ function catalogLeaf(segment: CatalogSegment): NavLeaf {
     kind: "leaf",
     id: `configuration:catalog:${segment}`,
     label: meta.label,
+    icon: meta.icon,
     href: catalogHref(segment),
     description: meta.description,
+    mode: "config",
     key: "configuration.catalog",
   };
 }
 
-function analysisLeaf(tab: AnalysisTabId): NavLeaf {
+function analysisLeaf(tab: AnalysisTabId, extra?: Partial<NavLeaf>): NavLeaf {
   const meta = ANALYSIS_TAB_META[tab];
   return {
     kind: "leaf",
     id: `analysis:${tab}`,
     label: meta.label,
+    icon: meta.icon,
     href: adminHref("analysis", tab),
     description: meta.description,
+    mode: tab === "orders" || tab === "payments" ? "ops" : "analytics",
     key: `analysis.${tab}`,
+    ...extra,
   };
 }
 
-function marketingLeaf(tab: MarketingTabId): NavLeaf {
+function marketingLeaf(tab: MarketingTabId, extra?: Partial<NavLeaf>): NavLeaf {
   const meta = MARKETING_TAB_META[tab];
   return {
     kind: "leaf",
     id: `marketing:${tab}`,
     label: meta.label,
+    icon: meta.icon,
     href: adminHref("marketing", tab),
     description: meta.description,
+    mode: "config",
     key: `marketing.${tab}`,
+    ...extra,
   };
 }
 
 /**
- * Nested sidebar. Groups are presentation only — URLs and permission keys
- * are unchanged. Catalog's three products share `configuration.catalog`.
+ * Domain-centric workspace tree.
+ *
+ * Instead of splitting "Settings" and "Analytics" into separate halves of the
+ * sidebar, each business domain groups its live operations/analytics alongside
+ * its configuration screens. URLs and permission keys are completely unchanged.
  */
 export const NAV_TREE: NavNode[] = [
   configLeaf("overview"),
   {
     kind: "group",
-    id: "sell",
-    label: "Sell",
-    children: [
-      catalogLeaf("print"),
-      catalogLeaf("ebook"),
-      catalogLeaf("packs"),
-      configLeaf("memberships"),
-      configLeaf("markets"),
-    ],
-  },
-  {
-    kind: "group",
-    id: "money",
-    label: "Money",
-    children: [configLeaf("sparks"), configLeaf("financial"), configLeaf("discounts")],
-  },
-  {
-    kind: "group",
-    id: "grow",
-    label: "Grow",
+    id: "domain-commerce",
+    label: "Commerce & Orders",
+    icon: <ShoppingBag className="size-4" />,
+    description: "Fulfillment, payments, products, memberships, and markets.",
     children: [
       {
         kind: "group",
-        id: "grow-programs",
-        label: "Programs",
-        children: (MARKETING_GROUPS.find((g) => g.id === "growth")?.tabs ?? []).map(marketingLeaf),
+        id: "commerce-ops",
+        label: "Orders & Sales",
+        children: [
+          analysisLeaf("orders"),
+          analysisLeaf("payments"),
+          analysisLeaf("products"),
+        ],
       },
       {
         kind: "group",
-        id: "grow-site",
-        label: "Site",
-        children: (MARKETING_GROUPS.find((g) => g.id === "site")?.tabs ?? []).map(marketingLeaf),
+        id: "commerce-catalog",
+        label: "Catalog & Pricing",
+        children: [
+          catalogLeaf("print"),
+          catalogLeaf("ebook"),
+          catalogLeaf("packs"),
+          configLeaf("memberships"),
+          configLeaf("markets"),
+          configLeaf("discounts"),
+        ],
       },
     ],
   },
   {
     kind: "group",
-    id: "studio",
-    label: "Studio",
-    children: ["guide", "audience", "artStyles", "layouts", "storyCraft", "bookLanguages", "typography"].map(
-      (tab) => configLeaf(tab as ConfigTabId),
-    ),
+    id: "domain-customers",
+    label: "Customers & Books",
+    icon: <Users className="size-4" />,
+    description: "Who uses the product, what books they create, and their devices.",
+    children: [
+      analysisLeaf("users"),
+      analysisLeaf("projects"),
+      analysisLeaf("surveys"),
+      analysisLeaf("devices"),
+    ],
   },
   {
     kind: "group",
-    id: "ai",
-    label: "AI",
-    children: [configLeaf("models"), configLeaf("prompts")],
+    id: "domain-finance",
+    label: "Economy & Finance",
+    icon: <Coins className="size-4" />,
+    description: "P&L, AI and fulfillment costs, the Sparks economy, and currencies.",
+    children: [
+      {
+        kind: "group",
+        id: "finance-analytics",
+        label: "Performance & Costs",
+        children: [
+          analysisLeaf("finance"),
+          analysisLeaf("costs"),
+        ],
+      },
+      {
+        kind: "group",
+        id: "finance-config",
+        label: "Economy Settings",
+        children: [
+          configLeaf("sparks"),
+          configLeaf("financial"),
+        ],
+      },
+    ],
   },
   {
     kind: "group",
-    id: "inbox",
-    label: "Inbox",
-    children: COMMUNICATION_TABS.map((tab) => ({
-      kind: "leaf" as const,
-      id: `communication:${tab.id}`,
-      label: tab.label,
-      href: adminHref("communication", tab.id),
-      description: tab.description,
-      key: `communication.${tab.id}` as PermissionKey,
-    })),
+    id: "domain-growth",
+    label: "Growth & Marketing",
+    icon: <TrendingUp className="size-4" />,
+    description: "Acquisition programs, promotions, content, SEO, and QR codes.",
+    children: [
+      {
+        kind: "group",
+        id: "growth-programs",
+        label: "Programs (Configure)",
+        children: [
+          marketingLeaf("referrals"),
+          marketingLeaf("affiliates"),
+          marketingLeaf("campaigns"),
+          marketingLeaf("coupons"),
+          marketingLeaf("surveys"),
+        ],
+      },
+      {
+        kind: "group",
+        id: "growth-analytics",
+        label: "Program Performance",
+        children: [
+          analysisLeaf("referrals"),
+          analysisLeaf("affiliates"),
+          analysisLeaf("campaigns"),
+          analysisLeaf("coupons"),
+          analysisLeaf("qrCodes"),
+        ],
+      },
+      {
+        kind: "group",
+        id: "growth-site",
+        label: "Site & Content",
+        children: [
+          marketingLeaf("announcements"),
+          marketingLeaf("blog"),
+          marketingLeaf("seo"),
+          marketingLeaf("branding"),
+          marketingLeaf("qrCodes"),
+        ],
+      },
+    ],
   },
   {
     kind: "group",
-    id: "legal",
-    label: "Legal",
-    children: LEGAL_TABS.map((tab) => ({
-      kind: "leaf" as const,
-      id: `legal:${tab.id}`,
-      label: tab.label,
-      href: adminHref("legal", tab.id),
-      description: tab.description,
-      key: `legal.${tab.id}` as PermissionKey,
-    })),
+    id: "domain-studio",
+    label: "Studio & AI",
+    icon: <Wand2 className="size-4" />,
+    description: "Guided studio flow, creative defaults, AI models, and prompts.",
+    children: [
+      {
+        kind: "group",
+        id: "studio-experience",
+        label: "Book Studio",
+        children: [
+          configLeaf("guide"),
+          analysisLeaf("flows"),
+          configLeaf("audience"),
+          configLeaf("artStyles"),
+          configLeaf("layouts"),
+          configLeaf("storyCraft"),
+          configLeaf("bookLanguages"),
+          configLeaf("typography"),
+        ],
+      },
+      {
+        kind: "group",
+        id: "studio-ai",
+        label: "AI Pipeline",
+        children: [
+          configLeaf("models"),
+          configLeaf("prompts"),
+        ],
+      },
+    ],
   },
   {
     kind: "group",
-    id: "analysis",
-    label: "Analysis",
-    children: ANALYSIS_GROUPS.map((group) => ({
-      kind: "group" as const,
-      id: `analysis-${group.id}`,
-      label: group.label,
-      children: group.tabs.map(analysisLeaf),
-    })),
-  },
-  configLeaf("system"),
-  {
-    kind: "leaf",
-    id: "permissions:home",
-    label: "Permissions",
-    href: adminHref("permissions"),
-    description: "Who can open this dashboard, and to what.",
-    ownerOnly: true,
+    id: "domain-ops",
+    label: "Operations & Legal",
+    icon: <ShieldCheck className="size-4" />,
+    description: "Customer inbox, emails, Slack alerts, legal compliance, and access.",
+    children: [
+      {
+        kind: "group",
+        id: "ops-inbox",
+        label: "Inbox & Notifications",
+        children: COMMUNICATION_TABS.map((tab) => ({
+          kind: "leaf" as const,
+          id: `communication:${tab.id}`,
+          label: tab.label,
+          icon: tab.icon,
+          href: adminHref("communication", tab.id),
+          description: tab.description,
+          mode: (tab.id === "contact" ? "ops" : "config") as NavMode,
+          key: `communication.${tab.id}` as PermissionKey,
+        })),
+      },
+      {
+        kind: "group",
+        id: "ops-legal",
+        label: "Legal & Privacy",
+        children: LEGAL_TABS.map((tab) => ({
+          kind: "leaf" as const,
+          id: `legal:${tab.id}`,
+          label: tab.label,
+          icon: tab.icon,
+          href: adminHref("legal", tab.id),
+          description: tab.description,
+          mode: (tab.id === "gdpr" ? "ops" : "config") as NavMode,
+          key: `legal.${tab.id}` as PermissionKey,
+        })),
+      },
+      {
+        kind: "group",
+        id: "ops-platform",
+        label: "Platform & Access",
+        children: [
+          configLeaf("system"),
+          {
+            kind: "leaf",
+            id: "permissions:home",
+            label: "Permissions",
+            icon: <KeyRound className="size-4" />,
+            href: adminHref("permissions"),
+            description: "Who can open this dashboard, and what they can read or change.",
+            mode: "ops",
+            ownerOnly: true,
+          },
+        ],
+      },
+    ],
   },
 ];
+
+/**
+ * Paired Configure ↔ Analytics screens within the same domain.
+ * When the admin is on either side of a pair, `AdminPageHeader` shows a
+ * 1-click segmented switch between configuring the feature and viewing its
+ * live analytics.
+ */
+export interface PairedView {
+  configHref: string;
+  configLabel: string;
+  configKey: PermissionKey;
+  analyticsHref: string;
+  analyticsLabel: string;
+  analyticsKey: PermissionKey;
+}
+
+const PAIRED_VIEW_LIST: PairedView[] = [
+  {
+    configHref: adminHref("marketing", "referrals"),
+    configLabel: "Configure rules",
+    configKey: "marketing.referrals",
+    analyticsHref: adminHref("analysis", "referrals"),
+    analyticsLabel: "Funnel & payouts",
+    analyticsKey: "analysis.referrals",
+  },
+  {
+    configHref: adminHref("marketing", "affiliates"),
+    configLabel: "Configure program",
+    configKey: "marketing.affiliates",
+    analyticsHref: adminHref("analysis", "affiliates"),
+    analyticsLabel: "Partner stats",
+    analyticsKey: "analysis.affiliates",
+  },
+  {
+    configHref: adminHref("marketing", "campaigns"),
+    configLabel: "Configure campaigns",
+    configKey: "marketing.campaigns",
+    analyticsHref: adminHref("analysis", "campaigns"),
+    analyticsLabel: "Campaign results",
+    analyticsKey: "analysis.campaigns",
+  },
+  {
+    configHref: adminHref("marketing", "coupons"),
+    configLabel: "Manage codes",
+    configKey: "marketing.coupons",
+    analyticsHref: adminHref("analysis", "coupons"),
+    analyticsLabel: "Redemptions",
+    analyticsKey: "analysis.coupons",
+  },
+  {
+    configHref: adminHref("marketing", "surveys"),
+    configLabel: "Configure questions",
+    configKey: "marketing.surveys",
+    analyticsHref: adminHref("analysis", "surveys"),
+    analyticsLabel: "Customer profile",
+    analyticsKey: "analysis.surveys",
+  },
+  {
+    configHref: adminHref("marketing", "qrCodes"),
+    configLabel: "Manage QR codes",
+    configKey: "marketing.qrCodes",
+    analyticsHref: adminHref("analysis", "qrCodes"),
+    analyticsLabel: "Scan stats",
+    analyticsKey: "analysis.qrCodes",
+  },
+  {
+    configHref: adminHref("configuration", "guide"),
+    configLabel: "Configure studio",
+    configKey: "configuration.guide",
+    analyticsHref: adminHref("analysis", "flows"),
+    analyticsLabel: "Flow analytics",
+    analyticsKey: "analysis.flows",
+  },
+  {
+    configHref: adminHref("configuration", "catalog"),
+    configLabel: "Edit catalog",
+    configKey: "configuration.catalog",
+    analyticsHref: adminHref("analysis", "products"),
+    analyticsLabel: "Product sales",
+    analyticsKey: "analysis.products",
+  },
+  {
+    configHref: adminHref("configuration", "models"),
+    configLabel: "Models & rates",
+    configKey: "configuration.models",
+    analyticsHref: adminHref("analysis", "costs"),
+    analyticsLabel: "AI & print costs",
+    analyticsKey: "analysis.costs",
+  },
+  {
+    configHref: adminHref("configuration", "financial"),
+    configLabel: "Currencies & tax",
+    configKey: "configuration.financial",
+    analyticsHref: adminHref("analysis", "finance"),
+    analyticsLabel: "Finance & P&L",
+    analyticsKey: "analysis.finance",
+  },
+];
+
+export function findPairedView(canonicalPath: string): PairedView | undefined {
+  return PAIRED_VIEW_LIST.find(
+    (p) => p.configHref === canonicalPath || p.analyticsHref === canonicalPath,
+  );
+}
+
+/** One entry in the command palette's flat, searchable list. */
+export interface NavEntry {
+  id: string;
+  label: string;
+  description: string;
+  icon: ReactNode;
+  sectionLabel: string;
+  groupLabel?: string;
+  mode?: NavMode;
+  /** Extra command-palette matches without adding visible navigation items. */
+  keywords?: string;
+  href: string;
+  /** The grant this entry needs to be reachable — omitted for owner-only entries. */
+  key?: PermissionKey;
+  /** True for entries only owners should ever see (the Permissions page itself). */
+  ownerOnly?: boolean;
+}
+
+function buildNavIndex(): NavEntry[] {
+  const entries: NavEntry[] = [];
+
+  const walk = (nodes: NavNode[], domainLabel?: string, subGroupLabel?: string) => {
+    for (const node of nodes) {
+      if (node.kind === "leaf") {
+        entries.push({
+          id: node.id,
+          label: node.label,
+          description: node.description,
+          icon: node.icon,
+          sectionLabel: domainLabel ?? "Home",
+          groupLabel: subGroupLabel,
+          mode: node.mode,
+          keywords:
+            node.id === "configuration:models"
+              ? "model costs pricing rates llm openai gemini"
+              : node.id.startsWith("configuration:catalog:")
+                ? "catalog print ebook packs hardcover softcover pdf"
+                : node.id === "configuration:overview"
+                  ? "home dashboard overview summary control center pulse"
+                  : undefined,
+          href: node.href,
+          key: node.key,
+          ownerOnly: node.ownerOnly,
+        });
+      } else if (!domainLabel) {
+        walk(node.children, node.label, undefined);
+      } else {
+        walk(node.children, domainLabel, node.label);
+      }
+    }
+  };
+
+  walk(NAV_TREE);
+  return entries;
+}
+
+/** Every navigable tab in the admin dashboard, flattened for search. */
+export const NAV_INDEX: NavEntry[] = buildNavIndex();
 
 export function navLeaves(nodes: NavNode[]): NavLeaf[] {
   return nodes.flatMap((node) => (node.kind === "leaf" ? [node] : navLeaves(node.children)));
@@ -676,7 +871,8 @@ export function hrefIsActive(
   const canonical = canonicalAdminPath(pathname);
   if (path !== canonical) return false;
   if (canonical === adminHref("configuration", "catalog")) {
-    const wanted = (new URLSearchParams(query ?? "").get("segment") as CatalogSegment | null) ?? "print";
+    const wanted =
+      (new URLSearchParams(query ?? "").get("segment") as CatalogSegment | null) ?? "print";
     return wanted === catalogSegment;
   }
   return true;
@@ -691,19 +887,61 @@ export function treeContainsActive(
   return node.children.some((child) => treeContainsActive(child, pathname, catalogSegment));
 }
 
+export interface ResolvedAdminPage {
+  title: string;
+  description: string;
+  domainLabel?: string;
+  groupLabel?: string;
+  mode?: NavMode;
+  pair?: PairedView;
+  canonicalPath: string;
+}
+
 export function resolveAdminPage(
   pathname: string,
   catalogSegment: CatalogSegment,
-): { title: string; description: string } {
+): ResolvedAdminPage {
   const canonical = canonicalAdminPath(pathname);
+  const pair = findPairedView(canonical);
+
   if (canonical === adminHref("configuration", "catalog")) {
     const meta = CATALOG_SEGMENT_META[catalogSegment];
-    return { title: meta.label, description: meta.description };
+    return {
+      title: meta.label,
+      description: meta.description,
+      domainLabel: "Commerce & Orders",
+      groupLabel: "Catalog & Pricing",
+      mode: "config",
+      pair,
+      canonicalPath: canonical,
+    };
   }
-  const leaf = navLeaves(NAV_TREE).find((item) => {
+
+  const entry = NAV_INDEX.find((item) => {
     const [path] = item.href.split("?");
     return path === canonical && !item.href.includes("segment=");
   });
-  if (leaf) return { title: leaf.label, description: leaf.description };
-  return { title: "Admin", description: "" };
+
+  if (entry) {
+    return {
+      title: entry.label,
+      description: entry.description,
+      domainLabel: entry.sectionLabel === "Home" ? undefined : entry.sectionLabel,
+      groupLabel: entry.groupLabel,
+      mode: entry.mode,
+      pair,
+      canonicalPath: canonical,
+    };
+  }
+
+  return { title: "Admin", description: "", canonicalPath: canonical };
 }
+
+export const MODE_BADGE_META: Record<
+  Exclude<NavMode, "overview">,
+  { label: string; icon: ReactNode }
+> = {
+  config: { label: "Config", icon: <Settings2 className="size-3" /> },
+  analytics: { label: "Stats", icon: <BarChart3 className="size-3" /> },
+  ops: { label: "Live", icon: <BarChart3 className="size-3" /> },
+};

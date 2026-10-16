@@ -178,26 +178,14 @@ function SidebarChrome({
   onNavigate?: () => void;
 }) {
   return (
-    <>
-      <button
-        type="button"
-        onClick={onSearch}
-        className="mb-4 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-ink-400 transition hover:bg-ink-50 hover:text-ink-600"
-      >
-        <Search className="size-3.5" />
-        Search
-        <kbd className="ml-auto rounded border border-ink-200 bg-white px-1 py-0.5 text-[10px] font-medium text-ink-400">
-          ⌘K
-        </kbd>
-      </button>
-      <AdminSidebarNav
-        tree={NAV_TREE}
-        pathname={pathname}
-        catalogSegment={catalogSegment}
-        canReach={canReach}
-        onNavigate={onNavigate}
-      />
-    </>
+    <AdminSidebarNav
+      tree={NAV_TREE}
+      pathname={pathname}
+      catalogSegment={catalogSegment}
+      canReach={canReach}
+      onOpenPalette={onSearch}
+      onNavigate={onNavigate}
+    />
   );
 }
 
@@ -286,6 +274,20 @@ export default function AdminApp() {
         contextLabel="Admin"
         right={
           <>
+            {isAdmin && accessLoaded && (
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                title="Jump to any admin tool (⌘K)"
+                className="flex items-center gap-1.5 rounded-full bg-ink-100/80 px-2.5 py-1 text-xs font-medium text-ink-600 transition hover:bg-ink-200/70 hover:text-ink-900"
+              >
+                <Search className="size-3.5" />
+                <span className="hidden md:inline">Jump to…</span>
+                <kbd className="hidden rounded bg-white px-1 py-0.2 text-[10px] font-semibold text-ink-500 shadow-2xs sm:inline">
+                  ⌘K
+                </kbd>
+              </button>
+            )}
             {isAdmin && (
               <BillingEnvBadge onOpenSystemHealth={() => setConfigTab("system")} />
             )}
@@ -298,7 +300,7 @@ export default function AdminApp() {
             <Button
               variant="ghost"
               size="sm"
-              className="sm:hidden"
+              className="lg:hidden"
               leftIcon={<Menu className="size-4" />}
               onClick={() => setNavOpen(true)}
               aria-label="Open admin navigation"
@@ -333,7 +335,7 @@ export default function AdminApp() {
           <AccessLoadState error={accessError} onRetry={() => void reloadAccess()} />
         ) : (
           <>
-            <aside className="hidden w-56 shrink-0 overflow-y-auto border-r border-ink-100 bg-white px-3 py-4 lg:block">
+            <aside className="hidden w-64 shrink-0 overflow-y-auto border-r border-ink-100 bg-white px-3 py-4 lg:block">
               <SidebarChrome
                 pathname={pathname}
                 catalogSegment={catalogSegment}
@@ -347,7 +349,7 @@ export default function AdminApp() {
               onClose={() => setNavOpen(false)}
               side="left"
               title="Admin"
-              widthClass="max-w-[18rem]"
+              widthClass="max-w-[19rem]"
             >
               <div className="px-3 py-3">
                 <SidebarChrome
@@ -365,7 +367,16 @@ export default function AdminApp() {
 
             <div className="min-w-0 flex-1 overflow-y-auto">
               <div className="mx-auto w-full max-w-7xl px-5 py-6 sm:px-8">
-                <AdminPageHeader title={page.title} description={page.description} />
+                <AdminPageHeader
+                  title={page.title}
+                  description={page.description}
+                  domainLabel={page.domainLabel}
+                  groupLabel={page.groupLabel}
+                  canonicalPath={page.canonicalPath}
+                  catalogSegment={catalogSegment}
+                  pair={page.pair}
+                  canRead={canRead}
+                />
 
                 {viewAsUid && (
                   <div className="mb-5 flex items-center justify-between gap-3 rounded-lg bg-amber-50 px-4 py-2.5 text-sm text-amber-800 ring-1 ring-amber-100">

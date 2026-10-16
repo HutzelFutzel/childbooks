@@ -21,7 +21,7 @@ export function fileToBase64(file: File): Promise<string> {
   });
 }
 
-/** A labeled group of related fields. Spacing and a heading, not a nested card. */
+/** A labeled group of related fields. Top-level sections render as clean cards; nested sections render as subtle sub-panels. */
 export function Section({
   title,
   hint,
@@ -36,8 +36,8 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="space-y-3">
-      <div className="flex items-start justify-between gap-2">
+    <section className="space-y-3.5 rounded-2xl border border-ink-100 bg-white p-5 shadow-2xs in-[section]:rounded-xl in-[section]:border-ink-100/80 in-[section]:bg-ink-50/40 in-[section]:p-4 in-[section]:shadow-none">
+      <div className="flex items-start justify-between gap-2 border-b border-ink-100/70 pb-2.5 in-[section]:border-0 in-[section]:pb-0">
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5">
             <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
@@ -45,7 +45,7 @@ export function Section({
               <InfoHint title={title}>{help}</InfoHint>
             ) : null}
           </div>
-          {hint && <p className="text-sm text-ink-500">{hint}</p>}
+          {hint && <p className="text-xs leading-relaxed text-ink-500">{hint}</p>}
         </div>
         {action}
       </div>
@@ -64,17 +64,22 @@ export function EditorTabs({
   onChange: (id: string) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-x-4 border-b border-ink-100">
+    <div
+      className="inline-flex flex-wrap gap-1 rounded-xl bg-ink-100/80 p-1 ring-1 ring-inset ring-ink-200/60"
+      role="tablist"
+    >
       {items.map((item) => (
         <button
           key={item.id}
           type="button"
+          role="tab"
+          aria-selected={value === item.id}
           onClick={() => onChange(item.id)}
           className={cn(
-            "-mb-px border-b-2 pb-2 text-sm transition-colors",
+            "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
             value === item.id
-              ? "border-ink-900 font-medium text-ink-900"
-              : "border-transparent text-ink-500 hover:text-ink-800",
+              ? "bg-white text-ink-900 shadow-2xs"
+              : "text-ink-600 hover:text-ink-900",
           )}
         >
           {item.label}

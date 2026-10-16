@@ -173,24 +173,58 @@ const EXTRACTION_FIELDS: {
   },
 ];
 
-const PANELS = [
-  { id: "rollout", label: "Rollout" },
-  { id: "story", label: "Story options" },
-  { id: "skills", label: "Skills" },
-  { id: "people", label: "People" },
-  { id: "persona", label: "Persona & style" },
-  { id: "help", label: "Help articles" },
-  { id: "language", label: "Language & composer" },
-  { id: "ideas", label: "Suggestions" },
-  { id: "facts", label: "Facts" },
-  { id: "wording", label: "Wording" },
-  { id: "confidence", label: "Confidence" },
-  { id: "steps", label: "Step flow" },
-  { id: "try", label: "Try it" },
-  { id: "history", label: "History" },
-] as const;
+type PanelId =
+  | "rollout"
+  | "facts"
+  | "story"
+  | "steps"
+  | "persona"
+  | "wording"
+  | "skills"
+  | "people"
+  | "ideas"
+  | "language"
+  | "help"
+  | "confidence"
+  | "try"
+  | "history";
 
-type PanelId = (typeof PANELS)[number]["id"];
+const PANEL_GROUPS: { label: string; items: { id: PanelId; label: string }[] }[] = [
+  {
+    label: "Release & Flow",
+    items: [
+      { id: "rollout", label: "Rollout" },
+      { id: "facts", label: "Facts" },
+      { id: "story", label: "Story options" },
+      { id: "steps", label: "Step flow" },
+    ],
+  },
+  {
+    label: "Agent & Voice",
+    items: [
+      { id: "persona", label: "Persona & style" },
+      { id: "wording", label: "Wording" },
+      { id: "skills", label: "Skills" },
+      { id: "people", label: "People" },
+    ],
+  },
+  {
+    label: "UX & Interpreter",
+    items: [
+      { id: "ideas", label: "Suggestions" },
+      { id: "language", label: "Language & composer" },
+      { id: "help", label: "Help articles" },
+      { id: "confidence", label: "Confidence" },
+    ],
+  },
+  {
+    label: "Test & Audit",
+    items: [
+      { id: "try", label: "Try it" },
+      { id: "history", label: "History" },
+    ],
+  },
+];
 
 export function GuideTab() {
   const stored = useAppConfigStore((s) => s.guide);
@@ -230,50 +264,65 @@ export function GuideTab() {
   return (
     <div className="space-y-5">
       <TabIntro />
-      <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center justify-between gap-3 bg-canvas/90 px-1 py-2 backdrop-blur">
-        <nav className="flex gap-1 overflow-x-auto rounded-full bg-ink-100/70 p-1 [scrollbar-width:none]" role="tablist">
-          {PANELS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={panel === item.id}
-              onClick={() => setPanel(item.id)}
-              className={cn(
-                "relative shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors",
-                panel === item.id ? "text-ink-900" : "text-ink-500 hover:text-ink-800",
+      <div className="sticky top-0 z-10 rounded-2xl border border-ink-100 bg-white/95 p-3 shadow-2xs backdrop-blur">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <nav
+            className="flex flex-1 flex-wrap gap-x-5 gap-y-2.5"
+            role="tablist"
+            aria-label="Guided studio sections"
+          >
+            {PANEL_GROUPS.map((group) => (
+              <div key={group.label} className="space-y-1">
+                <span className="block px-1 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+                  {group.label}
+                </span>
+                <div className="flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1">
+                  {group.items.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={panel === item.id}
+                      onClick={() => setPanel(item.id)}
+                      className={cn(
+                        "relative shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
+                        panel === item.id ? "text-ink-900" : "text-ink-500 hover:text-ink-800",
+                      )}
+                    >
+                      {panel === item.id && (
+                        <motion.span
+                          layoutId="guide-admin-panel"
+                          className="absolute inset-0 rounded-lg bg-white shadow-2xs"
+                          transition={{ duration: 0.18 }}
+                        />
+                      )}
+                      <span className="relative">{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </nav>
+          {!readOnly && (
+            <div className="flex shrink-0 items-center gap-2 self-end">
+              {dirty && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setDraft(stored);
+                    setDirty(false);
+                  }}
+                >
+                  Discard
+                </Button>
               )}
-            >
-              {panel === item.id && (
-                <motion.span
-                  layoutId="guide-admin-panel"
-                  className="absolute inset-0 rounded-full bg-white shadow-soft"
-                  transition={{ duration: 0.2 }}
-                />
-              )}
-              <span className="relative">{item.label}</span>
-            </button>
-          ))}
-        </nav>
-        {!readOnly && (
-          <div className="flex items-center gap-2">
-            {dirty && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setDraft(stored);
-                  setDirty(false);
-                }}
-              >
-                Discard
+              <Button size="sm" loading={saving} disabled={!dirty} onClick={() => void onSave()}>
+                Save changes
               </Button>
-            )}
-            <Button size="sm" loading={saving} disabled={!dirty} onClick={() => void onSave()}>
-              Save changes
-            </Button>
-          </div>
-        )}
+            </div>
+          )}
+        </div>
       </div>
 
       <AnimatePresence mode="wait" initial={false}>

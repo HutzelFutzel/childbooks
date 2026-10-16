@@ -301,10 +301,10 @@ export function adminSectionHref(section: AdminSection): string {
  */
 export function canonicalAdminPath(pathname: string): string {
   const segments = pathname.split("/").filter(Boolean);
-  if (segments[0] !== "admin") return adminHref("analysis");
+  if (segments[0] !== "admin") return adminHref("configuration", "overview");
 
   const section = segments[1] as AdminSection | undefined;
-  if (!section || !SECTIONS.has(section)) return adminHref("analysis");
+  if (!section || !SECTIONS.has(section)) return adminHref("configuration", "overview");
   if (section === "permissions") return adminHref("permissions");
 
   const tab = segments[2];
