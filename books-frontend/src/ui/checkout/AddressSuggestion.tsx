@@ -14,6 +14,7 @@
  * place. Either answer unblocks checkout; refusing to answer does not.
  */
 import { MapPin, TriangleAlert } from "lucide-react";
+import { subdivisionsFor } from "../../core/config/subdivisions";
 import type { AddressValidation, SuggestedAddress } from "../../core/fulfillment/types";
 import { Button } from "../components/Button";
 
@@ -36,19 +37,44 @@ function formatLines(a: EnteredAddress): string[] {
   return [street, locality, a.country.trim()].filter(Boolean);
 }
 
+/**
+ * The region field holds a CODE wherever the carrier wants one ("CA", not
+ * "California"). A carrier's suggestion may spell it out in full, and dropping
+ * that into a picker that only knows codes leaves the field showing "not
+ * recognized" — which then blocks the very checkout the suggestion was meant to
+ * unblock. So: keep it if it is already a valid code, translate a full name to
+ * its code, and otherwise leave the customer's own entry rather than put
+ * something the form can't display.
+ */
+function regionFrom(suggestedRegion: string | undefined, entered: string, country: string): string {
+  if (suggestedRegion === undefined) return entered;
+  const subs = subdivisionsFor(country.trim().toUpperCase());
+  // No picker for this country: free text, so whatever the carrier wrote is fine.
+  if (subs.length === 0) return suggestedRegion;
+  const wanted = suggestedRegion.trim().toLowerCase();
+  const hit = subs.find((s) => s.code.toLowerCase() === wanted || s.name.toLowerCase() === wanted);
+  return hit ? hit.code : entered;
+}
+
 /** The entered address with the suggestion's changes applied on top. */
 export function applySuggestion(
   entered: EnteredAddress,
   suggested: SuggestedAddress,
 ): EnteredAddress {
+  const country = suggested.countryCode ?? entered.country;
   return {
     line1: suggested.line1 ?? entered.line1,
     line2: suggested.line2 ?? entered.line2,
     city: suggested.townOrCity ?? entered.city,
-    region: suggested.stateOrCounty ?? entered.region,
+    region: regionFrom(suggested.stateOrCounty, entered.region, country),
     postal: suggested.postalOrZipCode ?? entered.postal,
-    country: suggested.countryCode ?? entered.country,
+    country,
   };
+}
+
+/** The address fields as one comparable string — what a carrier verdict was a verdict ON. */
+export function addressSignature(a: EnteredAddress): string {
+  return JSON.stringify([a.line1, a.line2, a.city, a.region, a.postal, a.country]);
 }
 
 /**

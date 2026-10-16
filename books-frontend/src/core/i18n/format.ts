@@ -38,6 +38,7 @@ function numberFormatter(locale: string, options: Intl.NumberFormatOptions): Int
     options.currency ?? "",
     options.minimumFractionDigits ?? "",
     options.maximumFractionDigits ?? "",
+    options.signDisplay ?? "",
   ].join("|");
   const hit = numberFormatters.get(key);
   if (hit) return hit;
@@ -127,6 +128,31 @@ export function formatDecimal(locale: string, value: number, digits: number): st
     }).format(n);
   } catch {
     return n.toFixed(digits);
+  }
+}
+
+/**
+ * A price *difference* with its sign — `+$1.50`, `−€2,00`.
+ *
+ * Replaces the bare `+1.50` the option pickers used to print. That was
+ * `formatDecimal` with no symbol, on the reasoning that the total already shows
+ * one — but the total is in a different column from the choice being weighed, and
+ * a bare number is also wrong for currencies with no minor unit (`+1.50` next to
+ * a yen price). The currency's own formatter fixes both: the right symbol, the
+ * right number of decimals, and the sign in the locale's own style.
+ *
+ * Zero formats without a sign; callers hide a zero delta anyway.
+ */
+export function formatMoneyDelta(locale: string, amount: number, currency: string): string {
+  const n = Number.isFinite(amount) ? amount : 0;
+  try {
+    return numberFormatter(locale, {
+      style: "currency",
+      currency,
+      signDisplay: "exceptZero",
+    }).format(n);
+  } catch {
+    return `${n > 0 ? "+" : ""}${n.toFixed(2)} ${currency}`;
   }
 }
 

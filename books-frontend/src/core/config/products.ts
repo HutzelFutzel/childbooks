@@ -19,7 +19,7 @@
  */
 import { z } from "zod";
 import type { Binding, Finish, ShippingMethod } from "../fulfillment/types";
-import { LULU_BOOK_FORMATS } from "../fulfillment/lulu/products";
+import { bindingPageStep, LULU_BOOK_FORMATS } from "../fulfillment/lulu/products";
 import { sameFormat, skuForVariant, variantFromSku } from "../fulfillment/lulu/skuAxes";
 import { geoPolicySchema, type GeoMatch, type GeoPolicy } from "./geo";
 // Type-only, so it is erased at compile time and creates no import cycle with
@@ -1003,6 +1003,31 @@ function normalizeVerifiedIn(
   return out;
 }
 
+/**
+ * Page limits a binding can actually print. The step is raised to the binding's
+ * own (4 for stapled, 2 otherwise) and `min`/`max` are moved inward onto it, so a
+ * hand-made product left on the default step of 2 can't offer a stapled book
+ * whose length isn't a multiple of 4. Inward only: it may narrow what's offered,
+ * never promise a length that wasn't measured.
+ */
+export function normalizePageConditions(
+  input: Partial<ProductConditions["pages"]> | undefined,
+  binding: string,
+  fallback: ProductConditions["pages"],
+): ProductConditions["pages"] {
+  const floor = bindingPageStep(binding);
+  const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  const rawStep = Math.max(1, Math.round(num(input?.step, fallback.step)));
+  const step = rawStep % floor === 0 ? rawStep : Math.ceil(rawStep / floor) * floor;
+  const rawMin = Math.max(0, num(input?.min, fallback.min));
+  const rawMax = Math.max(0, num(input?.max, fallback.max));
+  const min = Math.max(step, Math.ceil(rawMin / step) * step);
+  const max = Math.floor(rawMax / step) * step;
+  // Nothing printable between them: keep the stored numbers (the step is still
+  // fixed) so the admin sees what they typed instead of a silent 0.
+  return max >= min ? { min, max, step } : { min: rawMin, max: rawMax, step };
+}
+
 export function normalizeProduct(input: unknown): ProductDefinition {
   const def = createDefaultProduct();
   const p = (input ?? {}) as Partial<ProductDefinition>;
@@ -1037,6 +1062,11 @@ export function normalizeProduct(input: unknown): ProductDefinition {
     conditions: {
       ...def.conditions,
       ...p.conditions,
+      pages: normalizePageConditions(
+        p.conditions?.pages,
+        p.spec?.binding ?? def.spec.binding,
+        def.conditions.pages,
+      ),
       custom: p.conditions?.custom ?? [],
       access: normalizeAccess(p.conditions?.access),
     },

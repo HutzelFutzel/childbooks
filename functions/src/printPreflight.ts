@@ -20,6 +20,7 @@ import {
 } from "../../books-frontend/src/core/print/fileCheck";
 import { findBookProduct } from "../../books-frontend/src/core/fulfillment/lulu/products";
 import { fulfillmentProvider } from "./lulu";
+import { createAdminAssetHost } from "./assets";
 
 const MM_PER_IN = 25.4;
 /** A 400-page book at print resolution is large but not this large. */
@@ -80,4 +81,39 @@ export async function preflightPrintFiles(args: PreflightArgs): Promise<string[]
   }
 
   return checkPrintFiles({ interior, cover }, expected);
+}
+
+/**
+ * Bring an interior PDF up to `pages` by appending blank pages at the end, at
+ * the size of the last page. Returns the hosted URL of the padded file, or the
+ * original URL when nothing needed adding — or when padding wasn't possible, in
+ * which case {@link preflightPrintFiles} reports the mismatch like any other.
+ *
+ * This is the server's half of "any valid page count can be ordered": the
+ * client already pads to the binding's step, and this closes the gap for a
+ * cached or older file that is a sheet short. A file that is already LONGER
+ * than `pages` is left alone (cutting pages off a book is never right).
+ */
+export async function padInteriorToPages(url: string, pages: number): Promise<string> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+    if (!res.ok) return url;
+    const declared = Number(res.headers.get("content-length") ?? 0);
+    if (declared > MAX_PDF_BYTES) return url;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength > MAX_PDF_BYTES) return url;
+    const doc = await PDFDocument.load(bytes, { updateMetadata: false, throwOnInvalidObject: false });
+    const have = doc.getPageCount();
+    if (have === 0 || have >= pages) return url;
+    const { width, height } = doc.getPage(have - 1).getSize();
+    for (let i = have; i < pages; i++) doc.addPage([width, height]);
+    const padded = await doc.save();
+    const blob = new Blob([padded as BlobPart], { type: "application/pdf" });
+    const { url: hosted } = await createAdminAssetHost().upload(blob, "interior.pdf");
+    logger.info(`[preflight] padded interior from ${have} to ${pages} pages`);
+    return hosted;
+  } catch (err) {
+    logger.warn("[preflight] couldn't pad the interior; leaving the file as it is", err);
+    return url;
+  }
 }

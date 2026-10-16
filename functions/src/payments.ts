@@ -145,6 +145,14 @@ export interface FulfillmentPlan {
   /** Public URLs of the already-uploaded print-ready files. */
   sourceFileUrls: { interior?: string; cover?: string };
   /**
+   * What the customer decided when the carrier suggested a different version of
+   * the address: took the carrier's, or deliberately kept their own. Null when
+   * no correction was on offer. Kept so a correction showing up after placement
+   * can be told apart from one the customer already weighed — and so support can
+   * see what they chose.
+   */
+  addressChoice?: "suggested" | "entered" | null;
+  /**
    * The CONFIGURED cost estimate captured at checkout time (from the product's
    * cost table / live shipping quote via `computeMargin`). Stamped here so the
    * finance stream can compare "what the admin thinks it costs" against what

@@ -23,7 +23,8 @@ import { serverConfig } from "./config";
 import { isAnonymousToken, isVerifiedToken, requireAuth, type AuthedRequest } from "./auth";
 import { createAdminAssetHost, printFileUnreachableReason } from "./assets";
 import { cachedDocumentPath, cachedDocumentUrl, documentKey, invalidateCachedDocument } from "./renders";
-import { preflightPrintFiles } from "./printPreflight";
+import { padInteriorToPages, preflightPrintFiles } from "./printPreflight";
+import { planPageCount } from "../../books-frontend/src/core/print/pageCountPlan";
 import { fulfillmentProvider } from "./lulu";
 import { persistCreatedOrder } from "./orders";
 import { placementKeyFor } from "../../books-frontend/src/core/orders/lifecycle";
@@ -250,6 +251,8 @@ interface CheckoutBody {
   recipient: OrderDraft["recipient"];
   /** Customer reviewed the carrier's suggested correction, if one was returned. */
   addressConfirmed?: boolean;
+  /** Which way they decided it. Recorded on the order; never a substitute for `addressConfirmed`. */
+  addressChoice?: "suggested" | "entered";
   assets?: WireAsset[];
   /**
    * Content fingerprint of the render (see `core/print/fingerprint`). When the
@@ -813,6 +816,8 @@ interface PrintCheckoutArgs {
   recipient: OrderDraft["recipient"];
   /** Customer reviewed the live carrier correction, if one was returned. */
   addressConfirmed?: boolean;
+  /** Which way the customer decided it (see `FulfillmentPlan.addressChoice`). */
+  addressChoice?: "suggested" | "entered";
   sourceFileUrls: { interior?: string; cover?: string };
   merchantReference: string | null;
   /** A coupon code the customer typed in the order dialog. */
@@ -1302,6 +1307,11 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     merchantReference: args.merchantReference,
     recipient: planRecipient(recipient),
     sourceFileUrls: args.sourceFileUrls,
+    // What the customer told us when the carrier offered a correction. It is
+    // NOT derived from the live re-validation above: once they take the
+    // suggestion the address is already corrected, so the carrier has nothing
+    // left to suggest and the only record of the decision is what they sent.
+    addressChoice: args.addressChoice ?? null,
     estimatedCost,
   };
 
@@ -1474,15 +1484,27 @@ export function registerStripeUserRoutes(app: Express): void {
         settings.baseCurrency,
       ) as CurrencyCode;
       const copies = Math.max(1, Math.floor(body.copies || 1));
-      const pages = Math.max(1, Math.floor(body.pageCount || product.conditions.pages.min));
 
       // Server-authoritative order limits — the client UI mirrors these, but
       // only this check is binding.
+      //
+      // A page count is never refused for being the wrong shape: a binding made
+      // in sheets of four takes a book of 18 pages as 20, and the two blank
+      // pages are added to the file below. Only a book LONGER than the binding
+      // can hold is turned away — a count we can't print at all.
       const cond = product.conditions;
-      if (pages < cond.pages.min || pages > cond.pages.max) {
-        clientError(res, `This product supports ${cond.pages.min}–${cond.pages.max} pages.`);
+      const pagePlan = planPageCount(
+        Math.max(1, Math.floor(body.pageCount || cond.pages.min)),
+        cond.pages,
+      );
+      if (pagePlan.status === "too-long") {
+        clientError(
+          res,
+          `This product takes up to ${cond.pages.max} pages — pick a binding that holds a longer book.`,
+        );
         return;
       }
+      const pages = pagePlan.printed;
       if (copies < cond.copies.min || copies > cond.copies.max) {
         clientError(res, `You can order between ${cond.copies.min} and ${cond.copies.max} copies.`);
         return;
@@ -1543,6 +1565,9 @@ export function registerStripeUserRoutes(app: Express): void {
       // "prepare it again" instead of a rejected job and a refund. A bad cached
       // render is dropped so the retry assembles a fresh one rather than
       // hitting the same file forever.
+      // A file one or two sheets short is finished here rather than refused —
+      // the blank pages the customer was told about are added at the end.
+      sourceFileUrls.interior = await padInteriorToPages(sourceFileUrls.interior, pages);
       const fileProblems = await preflightPrintFiles({
         interiorUrl: sourceFileUrls.interior,
         coverUrl: sourceFileUrls.cover,
@@ -1588,6 +1613,10 @@ export function registerStripeUserRoutes(app: Express): void {
         destinationCountry,
         recipient,
         addressConfirmed: body.addressConfirmed === true,
+        addressChoice:
+          body.addressChoice === "suggested" || body.addressChoice === "entered"
+            ? body.addressChoice
+            : undefined,
         sourceFileUrls,
         merchantReference: body.merchantReference ?? null,
         couponCode: body.couponCode ?? null,
@@ -1677,7 +1706,20 @@ export function registerStripeUserRoutes(app: Express): void {
       }
       const activePlan = await resolveActivePlan(uid);
       const copies = Math.max(1, Math.floor(body.copies || 1));
-      const pages = Math.max(1, Math.floor(body.pageCount || product.conditions.pages.min));
+      // The same normalisation checkout applies, so the quote is for the length
+      // that will actually be printed and charged.
+      const quotePlan = planPageCount(
+        Math.max(1, Math.floor(body.pageCount || product.conditions.pages.min)),
+        product.conditions.pages,
+      );
+      if (quotePlan.status === "too-long") {
+        clientError(
+          res,
+          `This product takes up to ${product.conditions.pages.max} pages — pick a binding that holds a longer book.`,
+        );
+        return;
+      }
+      const pages = quotePlan.printed;
       const priced = await priceRetailOrder({
         product,
         variant,
@@ -2653,6 +2695,7 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
           env: cfg.fulfillment.lulu.env,
           paymentId,
           estimatedCost: plan.estimatedCost ?? null,
+          addressChoice: plan.addressChoice ?? null,
           draft,
           order: recovered,
         });
@@ -2710,6 +2753,7 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
       env: cfg.fulfillment.lulu.env,
       paymentId,
       estimatedCost: plan.estimatedCost ?? null,
+      addressChoice: plan.addressChoice ?? null,
       draft,
       order,
     });
@@ -2720,17 +2764,24 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
       event: "order.placed",
       fulfillmentState: "placed",
     });
-    // The address cleared validation at checkout, so a correction appearing HERE
-    // means something slipped through — and the provider may hold the job for
-    // manual confirmation while the customer is already charged. The customer
-    // sees it on their order; this is so a human does too.
+    // A correction appearing HERE usually means something slipped through — the
+    // provider may hold the job for manual confirmation while the customer is
+    // already charged. The customer sees it on their order; this is so a human
+    // does too.
+    //
+    // The exception is a customer who was shown this very correction at checkout
+    // and chose to keep their own address: the provider repeating itself is
+    // expected, not a fault, so it is logged at "info" rather than paged as a
+    // warning on every such order.
     const warnings = order.addressValidation?.warnings ?? [];
     if (warnings.length > 0 || order.addressValidation?.suggested) {
+      const keptOwn = plan.addressChoice === "entered";
       await raiseAlert({
-        severity: "warning",
+        severity: keptOwn ? "info" : "warning",
         kind: "fulfillment.addressCorrected",
         message:
-          `Print order ${order.id} (payment ${paymentId}) was accepted with an address correction: ` +
+          `Print order ${order.id} (payment ${paymentId}) was accepted with an address correction` +
+          (keptOwn ? " (the customer kept their own address at checkout): " : ": ") +
           (warnings.map((w) => w.message).join("; ") || "a different address was suggested."),
         meta: { paymentId, orderId: order.id, uid: payment.ownerUid },
         ref: `${paymentId}_address`,

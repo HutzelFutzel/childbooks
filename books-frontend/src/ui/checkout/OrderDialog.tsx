@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Loader2, Package, ShieldCheck, TriangleAlert, Truck } from "lucide-react";
+import { ArrowLeft, ChevronDown, Loader2, MapPin, Minus, Plus, ShieldCheck, TriangleAlert } from "lucide-react";
 import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
 import {
@@ -26,7 +26,10 @@ import {
   type VariantSelection,
 } from "../../core/config/variants";
 import { buildOrderDraft } from "../../core/fulfillment/draft";
-import { bindingNoun, normalizePageCount } from "../../core/fulfillment";
+import { bindingNoun } from "../../core/fulfillment";
+import { bestAlternative, limitsOf, planPageCount } from "../../core/print/pageCountPlan";
+import { insertSpreadProject } from "../../core/book/pageEdits";
+import { PAGE_TEMPLATES, type PageTemplate } from "../../core/book/pageTemplates";
 import { renderFingerprint } from "../../core/print/fingerprint";
 import { interiorLeafPlan, physicalPageCount } from "../../core/print/pagePlan";
 import { preflightInterior } from "../../core/print/preflight";
@@ -41,7 +44,7 @@ import type {
 } from "../../core/fulfillment/types";
 import { BASE_VARIANT } from "../../core/fulfillment/lulu/products";
 import { skuForVariant, variantFromSku } from "../../core/fulfillment/lulu/skuAxes";
-import type { BookDesign, Project } from "../../core/types";
+import { COVER_FRONT_ID, type BookDesign, type Project } from "../../core/types";
 import { addressSummary, type SavedAddress } from "../../core/profile/types";
 import { createFulfillment } from "../../platform/fulfillment";
 import {
@@ -58,14 +61,17 @@ import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
 import { CouponField } from "./CouponField";
+import { OfferPreviewNote } from "./OfferPreviewNote";
 import { useShipCountry } from "../hooks/useShipCountry";
 import { Button } from "../components/Button";
+import { PageCountNotice } from "./PageCountNotice";
 import { Card, CardBody, CardHeader, CardTitle } from "../components/Card";
 import { Field, Input } from "../components/Input";
 import { Select } from "../components/Select";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
-import type { DesignPage } from "../design/designInit";
+import { insetPageText, type DesignPage } from "../design/designInit";
+import { BookMockup } from "../components/BookMockup";
 import { buildCoverPlan } from "../design/printTargets";
 import { busyReason } from "../../core/guide/bookBusy";
 import { useBookBusy } from "../../state/useBookBusy";
@@ -73,6 +79,7 @@ import { FormatPicker } from "./FormatPicker";
 import { VariantPicker } from "./VariantPicker";
 import {
   AddressSuggestion,
+  addressSignature,
   suggestionKey,
   type AddressChoice,
   type EnteredAddress,
@@ -109,16 +116,26 @@ const DEV_PREFILL = isDev()
     }
   : null;
 
+/** Pages that make sense at the END of the book, where a spare page costs nothing. */
+const BACK_PAGE_TEMPLATES = PAGE_TEMPLATES.filter((t) => t.position === "back");
+
 export function OrderCheckout({
   onBack,
   project,
   pages,
   design,
+  onChooseEbook,
 }: {
   onBack: () => void;
   project: Project;
   pages: DesignPage[];
   design: BookDesign;
+  /**
+   * Offered when the caller can also sell the digital edition from here. A
+   * customer who finds the printed price or the delivery step more than they
+   * wanted should be able to step sideways, not back out to find another door.
+   */
+  onChooseEbook?: () => void;
 }) {
   const provider = useMemo(() => createFulfillment(), []);
   const email = useAuthStore((s) => s.user?.email ?? "");
@@ -220,7 +237,12 @@ export function OrderCheckout({
     [project.screenplay],
   );
   const contentPages = useMemo(() => physicalPageCount(doc), [doc]);
-  const pageCount = normalizePageCount(product, contentPages);
+  // Printed length = the story rounded up to what this binding takes (sheet
+  // size and minimum). Blank pages make up the difference; it is only ever a
+  // book longer than the binding holds that can't be ordered as is.
+  const pageLimits = useMemo(() => limitsOf(product, catalogProduct), [product, catalogProduct]);
+  const pagePlan = useMemo(() => planPageCount(contentPages, pageLimits), [contentPages, pageLimits]);
+  const pageCount = pagePlan.printed;
   const incompleteUnits = useMemo(
     () => illustrationUnits(project).filter((unit) => !unitIsDone(project, unit)).length,
     [project],
@@ -249,8 +271,6 @@ export function OrderCheckout({
   // otherwise we fall back to the provider catalog's own page limits. The
   // backend re-checks these at checkout — this just fails fast with a clear
   // message instead of after the (slow) print-file render.
-  const minPages = catalogProduct?.conditions.pages.min ?? product.minPages;
-  const maxPages = catalogProduct?.conditions.pages.max ?? product.maxPages;
   const maxCopies = catalogProduct?.conditions.copies.max ?? Number.POSITIVE_INFINITY;
 
   // Countries this product can actually be shipped to, from the same function
@@ -297,9 +317,31 @@ export function OrderCheckout({
   // Held here rather than in the draft because it isn't part of the book — it's
   // re-validated inside the checkout transaction and can be refused there.
   const [couponCode, setCouponCode] = useState<string | null>(null);
+  // What that code takes off, so the totals show what will actually be charged.
+  const [couponDiscount, setCouponDiscount] = useState(0);
+  // Bumped when the customer leaves, or the dialog unmounts. Preparing the print
+  // files is a chain of awaits that ends in a redirect to payment; without this,
+  // pressing Back part-way through still carried on and sent them to Stripe from
+  // a screen they had already left.
+  const runRef = useRef(0);
+  useEffect(
+    () => () => {
+      runRef.current += 1;
+    },
+    [],
+  );
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [checkOpen, setCheckOpen] = useState(false);
+  const [showLine2, setShowLine2] = useState(Boolean(DEV_PREFILL?.line2));
+  const [showOptionalRegion, setShowOptionalRegion] = useState(false);
 
   // Saved-address book: "" means a new/unsaved address is being entered.
   const [selectedAddressId, setSelectedAddressId] = useState("");
+  // The saved entry a carrier-corrected address came from. Taking the carrier's
+  // version detaches from the selection (like typing would), but saving it should
+  // still REPLACE the entry it corrects — otherwise the address book fills with
+  // a near-duplicate and the wrong original stays the default.
+  const [correctedFromId, setCorrectedFromId] = useState("");
   const [saveForNextTime, setSaveForNextTime] = useState(true);
   // Prefill from the user's preferred address once per dialog open, so returning
   // customers don't retype. Skipped in dev (the DEV_PREFILL already fills it).
@@ -308,17 +350,42 @@ export function OrderCheckout({
   const [quote, setQuote] = useState<RetailPricePreview | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
+  // The address the current quote was made FOR. A carrier verdict is only a
+  // verdict on that exact address; once a field changes it describes something
+  // else, and offering its "correction" would overwrite what was just typed.
+  const [quotedFor, setQuotedFor] = useState("");
   const quoteSeq = useRef(0);
+
+  // The code box only exists while there's a quote, and takes what it knew with it
+  // when it goes. Without this the parent kept holding the code (and sending it
+  // to checkout) after the field showing it had unmounted.
+  const hasQuote = quote != null;
+  useEffect(() => {
+    if (hasQuote) return;
+    setCouponCode(null);
+    setCouponDiscount(0);
+  }, [hasQuote]);
 
   // Which address the customer settled on when the carrier suggested a different
   // one. `"unreviewed"` blocks payment: an unanswered address question is how an
   // order ends up held at the printer with the money already taken. The key is
   // the suggestion itself, so editing the address asks again rather than carrying
   // an answer over to a different question.
-  const [addressChoice, setAddressChoice] = useState<AddressChoice>("unreviewed");
-  const [reviewedSuggestion, setReviewedSuggestion] = useState("");
+  //
+  // The decision is tied to the suggestion AND to the address it was made about,
+  // not the suggestion alone: the carrier often repeats the same correction for
+  // a different address (it only changes the field that differs), so a "keep
+  // mine" answered for one street used to carry over to the next one typed.
+  const [decision, setDecision] = useState<{
+    choice: "suggested" | "entered";
+    /** The suggestion + address that was answered. */
+    key: string;
+    /** The address as it stood after answering (differs from the key's when taking the carrier's). */
+    afterSig: string;
+  } | null>(null);
 
   const enteredAddress: EnteredAddress = { line1, line2, city, region, postal, country };
+  const addressSig = addressSignature(enteredAddress);
 
   // What this customer is billed in: the destination's own currency where the
   // catalog supports it, the base currency otherwise. Derived from the country
@@ -410,10 +477,28 @@ export function OrderCheckout({
   }, [destination, region]);
   const regionUnrecognised =
     regionOptions.length > 0 && Boolean(region) && !subdivisionsFor(destination).some((s) => s.code === region);
-  const validation = quote?.addressValidation ?? null;
+  // Asked up front only where the carrier needs it (or we can offer a verified
+  // list). Elsewhere — Germany, France, the UK — it's an unfamiliar box that
+  // nobody needs to fill, so it sits behind a link. A value that's already there
+  // keeps the field visible: a hidden value would be sent without being seen.
+  const showRegion =
+    regionRequired || regionOptions.length > 0 || region.trim() !== "" || showOptionalRegion;
+  const quoteIsCurrent = quote != null && quotedFor === addressSig;
+  const validation = quoteIsCurrent ? (quote?.addressValidation ?? null) : null;
   const pendingSuggestion = suggestionKey(validation);
+  const pendingKey = pendingSuggestion ? `${pendingSuggestion}|${addressSig}` : "";
   const addressChoiceForSuggestion: AddressChoice =
-    pendingSuggestion && pendingSuggestion === reviewedSuggestion ? addressChoice : "unreviewed";
+    pendingKey && decision?.key === pendingKey ? decision.choice : "unreviewed";
+  // What to record on the order: the answer to a suggestion still on screen, or
+  // — once the carrier's version has been adopted and there is nothing left to
+  // suggest — the fact that this address IS the carrier's.
+  const recordedAddressChoice: "suggested" | "entered" | undefined = pendingKey
+    ? addressChoiceForSuggestion === "unreviewed"
+      ? undefined
+      : addressChoiceForSuggestion
+    : decision?.choice === "suggested" && decision.afterSig === addressSig
+      ? "suggested"
+      : undefined;
   // Two reasons to hold checkout, and only two. An unanswered suggestion, and an
   // address the provider says it cannot validate at all — it would refuse the
   // print job, so letting the payment through would strand it. Everything else
@@ -431,15 +516,14 @@ export function OrderCheckout({
     setPostal(next.postal);
     setCountry(next.country);
     // Adopting the carrier's version detaches from the saved entry it came from,
-    // exactly as typing would — otherwise saving would overwrite it silently.
+    // exactly as typing would — but remembers which one, so saving replaces it.
+    if (selectedAddressId) setCorrectedFromId(selectedAddressId);
     setSelectedAddressId("");
-    setReviewedSuggestion(pendingSuggestion);
-    setAddressChoice("suggested");
+    setDecision({ choice: "suggested", key: pendingKey, afterSig: addressSignature(next) });
   };
 
   const keepEnteredAddress = () => {
-    setReviewedSuggestion(pendingSuggestion);
-    setAddressChoice("entered");
+    setDecision({ choice: "entered", key: pendingKey, afterSig: addressSig });
   };
 
   // Enough of a destination to ask the provider for a price. The provider needs
@@ -504,10 +588,12 @@ export function OrderCheckout({
   const editAddr = (setter: (value: string) => void, value: string) => {
     setter(value);
     setSelectedAddressId("");
+    setCorrectedFromId("");
   };
 
   const applyAddress = (a: SavedAddress) => {
     setSelectedAddressId(a.id);
+    setCorrectedFromId("");
     setName(a.recipientName);
     setPhone(a.phone);
     if (a.email) setContactEmail(a.email);
@@ -547,6 +633,7 @@ export function OrderCheckout({
       return;
     }
     setQuoting(true);
+    const sigAtRequest = addressSignature({ line1, line2, city, region, postal, country });
     const t = setTimeout(async () => {
       try {
         // Retail pricing from the backend — the SAME path used at checkout
@@ -571,6 +658,7 @@ export function OrderCheckout({
         });
         if (seq !== quoteSeq.current) return;
         setQuote(priced);
+        setQuotedFor(sigAtRequest);
         setQuoteError(null);
       } catch (err) {
         if (seq === quoteSeq.current) {
@@ -631,34 +719,30 @@ export function OrderCheckout({
   // there (which meant re-picking the size too).
   const alternative = useMemo(
     () =>
-      formats.find((f) => {
-        if (f.sku === product.sku) return false;
-        const entry = offerableCatalog.get(f.sku);
-        const min = entry?.conditions.pages.min ?? f.minPages;
-        const max = entry?.conditions.pages.max ?? f.maxPages;
-        return contentPages >= min && contentPages <= max;
-      }),
+      bestAlternative(
+        contentPages,
+        product.sku,
+        formats.map((f) => ({
+          sku: f.sku,
+          label: bindingNoun(f.binding),
+          limits: limitsOf(f, offerableCatalog.get(f.sku)),
+        })),
+      ),
     [formats, product.sku, offerableCatalog, contentPages],
   );
 
   const requirementError = useMemo(() => {
-    const fix = alternative
-      ? ` ${capitalize(bindingNoun(alternative.binding))} takes a book this length — switch below.`
-      : "";
     if (incompleteUnits > 0) {
       return `${incompleteUnits} ${
         incompleteUnits === 1 ? "page needs" : "pages need"
       } artwork or an explicit text-only/blank treatment before ordering.`;
     }
-    if (contentPages < minPages) {
-      return `A ${bindingNoun(product.binding)} needs at least ${minPages} pages — your book has ${contentPages}.${
-        fix || ` Add ${minPages - contentPages} more before ordering.`
-      }`;
-    }
-    if (contentPages > maxPages) {
-      return `A ${bindingNoun(product.binding)} takes up to ${maxPages} pages — your book has ${contentPages}.${
-        fix || " Remove some pages before ordering."
-      }`;
+    // Too short is never an error — blank pages are added. Only a book longer
+    // than the binding holds can't be printed as chosen.
+    if (pagePlan.status === "too-long") {
+      return alternative
+        ? `Your book is too long for a ${bindingNoun(product.binding)} — switch to a ${alternative.label} below.`
+        : `Your book is too long for a ${bindingNoun(product.binding)}.`;
     }
     if (copies > maxCopies) {
       return `You can order up to ${maxCopies} copies at a time.`;
@@ -666,9 +750,7 @@ export function OrderCheckout({
     return null;
   }, [
     incompleteUnits,
-    contentPages,
-    minPages,
-    maxPages,
+    pagePlan.status,
     copies,
     maxCopies,
     product.binding,
@@ -694,6 +776,7 @@ export function OrderCheckout({
     countryOptions.some((option) => option.value === country) &&
     shippingChoices.some((option) => option.value === shipping) &&
     quote != null &&
+    quoteIsCurrent &&
     !quoting &&
     !quoteError &&
     addressComplete &&
@@ -730,6 +813,69 @@ export function OrderCheckout({
                           ? "Add the city and postal code to calculate the total."
                           : null;
 
+  // What the customer will actually be asked to pay, before tax. The code's
+  // discount is only trusted while the code is; the server re-prices at payment.
+  const discount = couponCode && quote ? Math.min(couponDiscount, quote.total) : 0;
+  const totalDue = quote ? Math.max(0, quote.total - discount) : 0;
+  const locale = typeof navigator === "undefined" ? "en" : navigator.language;
+  const cover = pages.find((p) => p.id === COVER_FRONT_ID) ?? pages[0];
+
+  // Preflight items the app can repair itself: layout-owned or reader-placed text
+  // sitting outside the safe area. A gutter-crossing line or a page with no art
+  // can't be fixed by nudging, so those stay as information.
+  const unsafeFixable = useMemo(
+    () =>
+      preflight
+        .filter((issue) => issue.code === "text-outside-safe-area")
+        .map((issue) => issue.pageId)
+        .filter((id) => {
+          const page = pages.find((p) => p.id === id);
+          const stored = design.pages[id];
+          return Boolean(page && stored && insetPageText(page, stored, true) !== stored);
+        }),
+    [preflight, pages, design],
+  );
+
+  function moveTextInward() {
+    // Read from the live project, not this render's snapshot: an edit saved a
+    // moment ago must not be overwritten by the older design held here.
+    void useProjectsStore.getState().patchCurrent((live) => {
+      if (live.id !== project.id || !live.design) return live;
+      const nextPages = { ...live.design.pages };
+      let changed = false;
+      for (const id of unsafeFixable) {
+        const page = pages.find((p) => p.id === id);
+        const stored = nextPages[id];
+        if (!page || !stored) continue;
+        const fixed = insetPageText(page, stored, true);
+        if (fixed !== stored) {
+          nextPages[id] = fixed;
+          changed = true;
+        }
+      }
+      return changed ? { ...live, design: { ...live.design, pages: nextPages } } : live;
+    });
+  }
+
+  // Put a spare page to use. Only end-of-book templates are offered here: a page
+  // at the front would swap which margin of every later page is the binding side.
+  // It goes in through the project store, like "Move text inward" above, rather
+  // than the editor's undo stack, which isn't open at checkout.
+  function useSparePage(template: PageTemplate) {
+    void useProjectsStore.getState().patchCurrent((live) => {
+      if (live.id !== project.id || !live.screenplay) return live;
+      const end = getCursor(live.screenplay).content.spreads.length;
+      return insertSpreadProject(live, end, { text: template.text }).project;
+    });
+  }
+
+  function leave() {
+    runRef.current += 1;
+    setPhase("form");
+    setCoverDims(null);
+    onBack();
+  }
+
   async function beginRender() {
     if (requirementError) {
       notify.error(requirementError);
@@ -751,10 +897,14 @@ export function OrderCheckout({
       notify.error(checkoutBlockReason ?? "Review the order details before continuing.");
       return;
     }
+    const run = ++runRef.current;
+    const live = () => runRef.current === run;
     try {
       setPhase("rendering");
+      setProgress(null);
       setStatus("Calculating cover size…");
       const dims = await provider.getCoverDimensionsMm(printSku, pageCount);
+      if (!live()) return;
       setCoverDims(dims);
 
       // A book that hasn't changed since it was last ordered is already
@@ -764,9 +914,15 @@ export function OrderCheckout({
       // before it looks — otherwise it prints the version before this one.
       setStatus("Checking your book…");
       await flushProjectSaves();
+      if (!live()) return;
       const availability = await fetchRenderAvailability(fingerprint);
+      if (!live()) return;
       const cached =
-        availability.interior && availability.covers.includes(coverDocumentKey(printSku, pageCount));
+        availability.interior &&
+        // The interior is padded to a binding's length, so one assembled for a
+        // different binding is the wrong file even when the cover matches.
+        availability.interiorPageCount === pageCount &&
+        availability.covers.includes(coverDocumentKey(printSku, pageCount));
       if (!cached) {
         // The panels are the book's own trim plus its outer bleed; the spine is
         // whatever the provider's cover width leaves between them. Same split
@@ -790,18 +946,26 @@ export function OrderCheckout({
               },
             },
           ],
-          onProgress: setStatus,
+          onProgress: (step, done, total) => {
+            if (!live()) return;
+            setStatus(step);
+            setProgress(total && total > 0 ? { done: Math.min(done ?? 0, total), total } : null);
+          },
+          isCancelled: () => !live(),
         });
       }
-      await placeOrder();
+      if (!live()) return;
+      await placeOrder(run);
     } catch (err) {
+      // They left; an error about a screen they've closed is just noise.
+      if (!live()) return;
       setPhase("form");
       setCoverDims(null);
       notify.error(err);
     }
   }
 
-  async function placeOrder() {
+  async function placeOrder(run: number) {
     try {
       setPhase("submitting");
       setStatus("Redirecting to secure checkout…");
@@ -821,7 +985,7 @@ export function OrderCheckout({
       // the default). Best-effort — done before the redirect so it isn't lost.
       if (saveForNextTime) {
         void upsertAddress({
-          id: selectedAddressId || undefined,
+          id: selectedAddressId || correctedFromId || undefined,
           label: city.trim() || name.trim() || "Address",
           recipientName: name.trim(),
           phone: phone.trim(),
@@ -846,10 +1010,13 @@ export function OrderCheckout({
         fingerprint,
         addressConfirmed:
           !validation?.suggested || addressChoiceForSuggestion !== "unreviewed",
+        addressChoice: recordedAddressChoice,
         couponCode: couponCode ?? undefined,
       });
+      if (runRef.current !== run) return;
       window.location.href = url;
     } catch (err) {
+      if (runRef.current !== run) return;
       setPhase("form");
       setCoverDims(null);
       notify.error(err);
@@ -867,6 +1034,8 @@ export function OrderCheckout({
           : addressNeedsReview
             ? "Confirm your address"
             : "Continue to secure payment";
+  const bindingLabel = bindingNoun(product.binding);
+  const quoteCurrency = quote?.currency || currency;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 pb-28 pt-6 sm:px-6 lg:py-8">
@@ -875,7 +1044,7 @@ export function OrderCheckout({
           variant="ghost"
           size="sm"
           leftIcon={<ArrowLeft className="size-4" />}
-          onClick={onBack}
+          onClick={leave}
           disabled={phase === "submitting"}
           className="mt-0.5 shrink-0"
         >
@@ -886,7 +1055,7 @@ export function OrderCheckout({
             Order your printed book
           </h1>
           <p className="mt-1 text-sm leading-relaxed text-ink-500">
-            Choose how it is bound, add a delivery address, then review the total before payment.
+            Choose your book, tell us where to send it, then pay securely.
           </p>
         </div>
       </header>
@@ -895,7 +1064,7 @@ export function OrderCheckout({
         <div
           role="status"
           aria-live="polite"
-          className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800"
+          className="mt-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800"
         >
           <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin motion-reduce:animate-none" />
           <span>{busyReason(drawing)} Ordering is on hold so the book prints as you see it.</span>
@@ -907,7 +1076,9 @@ export function OrderCheckout({
           <div className="min-w-0 flex-1 pl-1">
             <p className="text-[11px] font-medium text-ink-500">Estimated total</p>
             <p className="truncate text-sm font-bold text-ink-900">
-              {quote && !drawing.busy ? money(String(quote.total), quote.currency) : checkoutBlockReason}
+              {quote && quoteIsCurrent && !drawing.busy
+                ? money(String(totalDue), quoteCurrency)
+                : checkoutBlockReason}
             </p>
           </div>
           <Button
@@ -922,354 +1093,464 @@ export function OrderCheckout({
 
       <div className="mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <Card>
-          <CardBody className="space-y-5 p-5 sm:p-6">
-          <div>
-            <h2 className="font-display text-lg font-semibold text-ink-900">Book options</h2>
-            <p className="mt-1 text-xs leading-relaxed text-ink-500">
-              Choose the binding and cover finish for this copy.
-            </p>
-          </div>
-          {/* Product */}
-          <div className="flex items-start gap-3 rounded-xl border border-ink-100 bg-ink-50 px-3.5 py-3">
-            <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
-              <Package className="size-4" />
-            </span>
-            <div className="min-w-0 text-sm">
-              <p className="font-medium text-ink-800">{project.title || "Your storybook"}</p>
-              <p className="text-xs text-ink-500">
-                {product.trim.widthIn}×{product.trim.heightIn}″ · {pageCount} pages ·{" "}
-                {bindingNoun(product.binding)}
-              </p>
-            </div>
-          </div>
+          <CardBody className="p-5 sm:p-6">
+            {/* Everything the customer can change, locked as one while the print
+                files are being prepared. Editing mid-render used to leave the
+                order being placed out of step with the form on screen: the
+                payment step runs from the values the render started with. */}
+            <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0">
+              <legend className="sr-only">Order details</legend>
 
-          {/* Format requirement gate — the book doesn't fit this product yet. */}
-          {requirementError && (
-            <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm text-rose-700">
-              <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-              <span>{requirementError}</span>
-            </div>
-          )}
-
-          {/* Print preflight — things that print "correctly" and still come out
-              wrong: text the trim will clip, a line that disappears into the
-              fold, a page with no artwork. Shown here because this is the last
-              moment before it costs money to be wrong. */}
-          {preflight.length > 0 && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
-              <p className="flex items-center gap-2 font-medium">
-                <TriangleAlert className="size-4 shrink-0" />
-                Worth a look before you print
-              </p>
-              <ul className="mt-1.5 space-y-1 pl-6 text-xs leading-relaxed">
-                {preflight.slice(0, 4).map((issue) => (
-                  <li key={`${issue.code}:${issue.pageId}`} className="list-disc">
-                    {issue.message}
-                  </li>
-                ))}
-              </ul>
-              {preflight.length > 4 && (
-                <p className="mt-1.5 pl-6 text-xs">…and {preflight.length - 4} more.</p>
-              )}
-              <p className="mt-2 pl-6 text-xs">
-                You can order anyway — these are judgment calls, not errors.
-              </p>
-            </div>
-          )}
-
-          {/* Subscription gate — this product is restricted to certain plans. */}
-          {!accessGate.ok && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
-              <ShieldCheck className="mt-0.5 size-4 shrink-0" />
-              <span>
-                {accessGate.mode === "subscribersOnly"
-                  ? "This printed product is available with any paid subscription. Upgrade your plan to order it."
-                  : "This printed product is available on select subscription plans. Upgrade your plan to order it."}
-              </span>
-            </div>
-          )}
-
-          {/* WHAT to make, before WHERE to send it: the binding, then how the
-              inside is printed and the cover finished. None of it touches the
-              designed pages — that's exactly why these are asked here and not
-              back in the design flow. */}
-          <FormatPicker
-            formats={formats}
-            catalog={offerableCatalog}
-            value={product.sku}
-            onChange={(sku) => void updateConfig({ productSku: sku })}
-            contentPages={contentPages}
-            currency={currency}
-          />
-
-          <VariantPicker
-            policy={variantPolicy}
-            value={variant}
-            onChange={(next) =>
-              setVariant(simplifiedPrintVariant(variantPolicy, next.finish) ?? defaultVariant)
-            }
-            currency={currency}
-            pages={pageCount}
-            visibleAxes={["finish"]}
-          />
-
-          <div className="border-t border-ink-100 pt-5">
-            <h2 className="font-display text-lg font-semibold text-ink-900">Delivery address</h2>
-            <p className="mt-1 text-xs leading-relaxed text-ink-500">
-              Used by the printer and carrier to deliver your book.
-            </p>
-          </div>
-
-          {/* Saved address picker — lets returning customers reuse an address. */}
-          {addressesLoading && savedAddresses.length === 0 ? (
-            <div className="flex items-center gap-2 text-xs text-ink-400">
-              <Loader2 className="size-3.5 animate-spin" /> Loading saved addresses…
-            </div>
-          ) : savedAddresses.length > 0 ? (
-            <Field label="Use a saved address">
-              <Select
-                options={[
-                  { value: "", label: "New address…" },
-                  ...savedAddresses.map((a) => ({ value: a.id, label: addressSummary(a) })),
-                ]}
-                value={selectedAddressId}
-                onChange={(e) => {
-                  const a = savedAddresses.find((x) => x.id === e.target.value);
-                  if (a) applyAddress(a);
-                  else setSelectedAddressId("");
-                }}
-              />
-            </Field>
-          ) : null}
-
-          {/* Recipient — wrapped in a form with autocomplete tokens so the
-              browser can offer to autofill the whole shipping block at once. */}
-          <form className="grid grid-cols-1 gap-3 sm:grid-cols-2" onSubmit={(e) => e.preventDefault()}>
-            <Field label="Recipient name" required className="sm:col-span-2">
-              <Input
-                value={name}
-                onChange={(e) => editAddr(setName, e.target.value)}
-                placeholder="Jane Doe"
-                autoComplete="shipping name"
-              />
-            </Field>
-            <Field label="Email">
-              <Input
-                type="email"
-                value={contactEmail}
-                onChange={(e) => editAddr(setContactEmail, e.target.value)}
-                placeholder="for shipping updates"
-                autoComplete="email"
-              />
-            </Field>
-            <Field label="Phone" required>
-              <Input
-                type="tel"
-                value={phone}
-                onChange={(e) => editAddr(setPhone, e.target.value)}
-                placeholder="for the carrier"
-                autoComplete="shipping tel"
-              />
-            </Field>
-            <Field label="Address" required className="sm:col-span-2">
-              <Input
-                value={line1}
-                onChange={(e) => editAddr(setLine1, e.target.value)}
-                placeholder="Street address"
-                autoComplete="shipping address-line1"
-              />
-            </Field>
-            <Field label="Address line 2" className="sm:col-span-2">
-              <Input
-                value={line2}
-                onChange={(e) => editAddr(setLine2, e.target.value)}
-                placeholder="Apt, suite (optional)"
-                autoComplete="shipping address-line2"
-              />
-            </Field>
-            <Field label="City" required>
-              <Input
-                value={city}
-                onChange={(e) => editAddr(setCity, e.target.value)}
-                autoComplete="shipping address-level2"
-              />
-            </Field>
-            <Field
-              label="State / Province"
-              required={regionRequired}
-              error={regionUnrecognised ? "Please pick this from the list." : undefined}
-              hint={
-                regionOptions.length > 0
-                  ? undefined
-                  : regionRequired
-                    ? `The carrier won't deliver here without the official code (e.g. ${PROBE_STATE[destination] ?? "AB"}), not the full name.`
-                    : undefined
-              }
-            >
-              {/* A picker wherever the codes have been verified, because the
-                  carrier wants "CA", not "California", and rejects the address
-                  outright otherwise — after payment, in the countries that also
-                  need a tax id. Elsewhere it stays a text field with an example
-                  rather than a guessed-at list the customer couldn't override. */}
-              {regionOptions.length > 0 ? (
-                <Select
-                  options={regionOptions}
-                  value={region}
-                  onChange={(e) => editAddr(setRegion, e.target.value)}
-                  autoComplete="shipping address-level1"
+              {/* ---- 1 · Your book ------------------------------------------- */}
+              <section className="space-y-5" aria-labelledby="order-book-heading">
+                <SectionHeading
+                  id="order-book-heading"
+                  n={1}
+                  title="Your book"
+                  hint="How it's bound, how the cover feels, and how many you need."
                 />
-              ) : (
-                <Input
-                  value={region}
-                  onChange={(e) => editAddr(setRegion, e.target.value)}
-                  autoComplete="shipping address-level1"
-                />
-              )}
-            </Field>
-            <Field label="Postal / ZIP" required>
-              <Input
-                value={postal}
-                onChange={(e) => editAddr(setPostal, e.target.value)}
-                autoComplete="shipping postal-code"
-              />
-            </Field>
-            <Field
-              label="Country"
-              required
-              className={unserviced ? "sm:col-span-2" : undefined}
-              error={
-                unserviced
-                  ? `We're sorry — we don't currently ship to ${countryLabel(country)}. Choose another destination to continue.`
-                  : undefined
-              }
-            >
-              <Select
-                options={countrySelectOptions}
-                value={country}
-                onChange={(e) => {
-                  editAddr(setCountry, e.target.value);
-                  // Correcting the destination here is the strongest signal we
-                  // get about where this person ships, so it replaces the guess
-                  // for the rest of the session and the next visit — including
-                  // the format picker back in the design flow, which would
-                  // otherwise go on offering a binding checkout just refused.
-                  rememberCountry(e.target.value);
-                }}
-                autoComplete="shipping country"
-              />
-            </Field>
-            {/* Only rendered where customs actually demands it — three countries
-                today. Showing it everywhere would ask every customer for a
-                government id to buy a picture book. */}
-            {taxIdRequired && (
-              <Field
-                label={`Recipient ${taxIdLabel}`}
-                required
-                className="sm:col-span-2"
-                hint="Customs in this country requires the recipient's tax number before a parcel can clear."
-              >
-                <Input value={taxId} onChange={(e) => editAddr(setTaxId, e.target.value)} />
-              </Field>
-            )}
-          </form>
 
-          {/* The carrier's verdict on the address, from the live quote. Asked
-              here — while it's still free — because a mismatch discovered after
-              payment parks the print job awaiting manual confirmation. */}
-          {validation && (
-            <AddressSuggestion
-              validation={validation}
-              entered={enteredAddress}
-              choice={addressChoiceForSuggestion}
-              onUseSuggested={applyAddressChoice}
-              onKeepEntered={keepEnteredAddress}
-            />
-          )}
+                {/* Subscription gate — this product is restricted to certain plans. */}
+                {!accessGate.ok && (
+                  <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
+                    <ShieldCheck className="mt-0.5 size-4 shrink-0" />
+                    <span>
+                      {accessGate.mode === "subscribersOnly"
+                        ? "This printed product is available with any paid subscription. Upgrade your plan to order it."
+                        : "This printed product is available on select subscription plans. Upgrade your plan to order it."}
+                    </span>
+                  </div>
+                )}
 
-          {/* Save this address for faster reordering next time. */}
-          <label className="flex items-center gap-2 text-sm text-ink-600">
-            <input
-              type="checkbox"
-              checked={saveForNextTime}
-              onChange={(e) => setSaveForNextTime(e.target.checked)}
-              className="size-4 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
-            />
-            Save this address for next time
-          </label>
-
-          <div className="border-t border-ink-100 pt-5">
-            <h2 className="font-display text-lg font-semibold text-ink-900">Delivery</h2>
-            <p className="mt-1 text-xs leading-relaxed text-ink-500">
-              Choose how many copies you need and how quickly they should arrive.
-            </p>
-          </div>
-
-          <Field label="Copies" required className="max-w-40">
-            <Input
-              type="number"
-              min={1}
-              max={Number.isFinite(maxCopies) ? maxCopies : undefined}
-              value={copies}
-              onChange={(e) => {
-                const next = Math.max(1, Number(e.target.value) || 1);
-                setCopies(Number.isFinite(maxCopies) ? Math.min(next, maxCopies) : next);
-              }}
-            />
-          </Field>
-
-          {/* Delivery speed. Cards rather than a dropdown because the choice is
-              between a time and a price, and neither fits in an option label —
-              a customer picking blind between five names is how "why is this
-              taking three weeks" happens. */}
-          <Field label="Delivery" required>
-            {shippingChoices.length === 0 ? (
-              <p className="text-xs text-ink-400">
-                {!marketsLoaded
-                  ? "Loading available destinations…"
-                  : countryOptions.length === 0
-                    ? "Print ordering is not available in any destination right now."
-                    : unserviced || !country
-                  ? "Choose a destination to see delivery options."
-                  : "No delivery options are currently available for this destination."}
-              </p>
-            ) : (
-              <div className="space-y-1.5">
-                {shippingChoices.map((option) => (
-                  <label
-                    key={option.value}
-                    className={cn(
-                      "flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition",
-                      shipping === option.value
-                        ? "border-brand-400 bg-brand-50/60"
-                        : "border-ink-100 hover:border-ink-200",
-                    )}
+                {/* Format requirement gate — the book doesn't fit this product yet.
+                    (Too-long is explained by the binding notice below, with its fix.) */}
+                {requirementError && pagePlan.status !== "too-long" && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm text-rose-700"
                   >
-                    <input
-                      type="radio"
-                      name="shipping-method"
-                      checked={shipping === option.value}
-                      onChange={() => setShipping(option.value)}
-                      className="size-4 shrink-0 border-ink-300 text-brand-600 focus:ring-brand-400"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-ink-800">{option.label}</span>
-                      <span className="block text-xs text-ink-400">
-                        {option.transit ?? "Delivery time confirmed at checkout"}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-sm font-medium text-ink-700">
-                      {option.price == null
-                        ? "—"
-                        : option.price === 0
-                          ? "Free"
-                          : money(String(option.price), currency)}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            )}
-          </Field>
+                    <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                    <span>{requirementError}</span>
+                  </div>
+                )}
 
+                {/* WHAT to make, before WHERE to send it. None of it touches the
+                    designed pages — that's why these are asked here and not back
+                    in the design flow. */}
+                <FormatPicker
+                  formats={formats}
+                  catalog={offerableCatalog}
+                  value={product.sku}
+                  onChange={(sku) => void updateConfig({ productSku: sku })}
+                  contentPages={contentPages}
+                  currency={currency}
+                  locale={locale}
+                />
+
+                {/* Whenever blank pages get added: a quiet note for a page or two,
+                    a warning when it's mostly padding or too long. */}
+                <PageCountNotice
+                  plan={pagePlan}
+                  binding={bindingLabel}
+                  alternative={alternative}
+                  onSwitch={(sku) => void updateConfig({ productSku: sku })}
+                  spareTemplates={BACK_PAGE_TEMPLATES}
+                  onUseSpare={useSparePage}
+                  onEditInStudio={leave}
+                />
+
+                <VariantPicker
+                  policy={variantPolicy}
+                  value={variant}
+                  onChange={(next) =>
+                    setVariant(simplifiedPrintVariant(variantPolicy, next.finish) ?? defaultVariant)
+                  }
+                  currency={currency}
+                  locale={locale}
+                  pages={pageCount}
+                  visibleAxes={["finish"]}
+                />
+
+                <div>
+                  <p className="text-[12px] font-semibold text-ink-800" id="copies-label">
+                    Copies
+                  </p>
+                  <div
+                    role="group"
+                    aria-labelledby="copies-label"
+                    className="mt-2 inline-flex items-center rounded-xl2 bg-white ring-1 ring-inset ring-ink-200"
+                  >
+                    <button
+                      type="button"
+                      aria-label="One fewer copy"
+                      disabled={copies <= 1}
+                      onClick={() => setCopies((c) => Math.max(1, c - 1))}
+                      className="flex size-10 items-center justify-center rounded-l-xl2 text-ink-600 transition hover:bg-ink-50 disabled:opacity-30"
+                    >
+                      <Minus className="size-4" />
+                    </button>
+                    <output
+                      aria-live="polite"
+                      className="w-10 text-center text-sm font-semibold tabular-nums text-ink-900"
+                    >
+                      {copies}
+                    </output>
+                    <button
+                      type="button"
+                      aria-label="One more copy"
+                      disabled={copies >= maxCopies}
+                      onClick={() => setCopies((c) => Math.min(c + 1, maxCopies))}
+                      className="flex size-10 items-center justify-center rounded-r-xl2 text-ink-600 transition hover:bg-ink-50 disabled:opacity-30"
+                    >
+                      <Plus className="size-4" />
+                    </button>
+                  </div>
+                  {Number.isFinite(maxCopies) && (
+                    <p className="mt-1.5 text-[11px] text-ink-500">Up to {maxCopies} at a time.</p>
+                  )}
+                </div>
+
+                {/* Print preflight — things that print "correctly" and still come
+                    out wrong: text the trim will clip, a line that disappears
+                    into the fold, a page with no artwork. Collapsed, because it is
+                    advice rather than a step; shown here because this is the last
+                    moment before it costs money to be wrong. */}
+                {preflight.length > 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 text-sm text-amber-800">
+                    <button
+                      type="button"
+                      onClick={() => setCheckOpen((o) => !o)}
+                      aria-expanded={checkOpen}
+                      className="flex w-full items-center gap-2 px-3.5 py-3 text-left font-medium"
+                    >
+                      <TriangleAlert className="size-4 shrink-0" />
+                      <span className="flex-1">
+                        {preflight.length === 1
+                          ? "1 thing worth a look before you print"
+                          : `${preflight.length} things worth a look before you print`}
+                      </span>
+                      <ChevronDown
+                        className={cn("size-4 shrink-0 transition", checkOpen && "rotate-180")}
+                      />
+                    </button>
+                    {checkOpen && (
+                      <div className="space-y-2.5 border-t border-amber-200 px-3.5 pb-3 pt-2.5">
+                        <ul className="space-y-1 pl-5 text-xs leading-relaxed">
+                          {preflight.slice(0, 6).map((issue) => (
+                            <li key={`${issue.code}:${issue.pageId}`} className="list-disc">
+                              {issue.message}
+                            </li>
+                          ))}
+                        </ul>
+                        {preflight.length > 6 && (
+                          <p className="pl-5 text-xs">…and {preflight.length - 6} more.</p>
+                        )}
+                        {unsafeFixable.length > 0 && (
+                          <Button size="sm" variant="secondary" onClick={moveTextInward}>
+                            Move text inward
+                          </Button>
+                        )}
+                        <p className="text-xs">
+                          You can order anyway — these are judgment calls, not errors.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {/* ---- 2 · Delivery -------------------------------------------- */}
+              <section
+                className="mt-8 space-y-5 border-t border-ink-100 pt-8"
+                aria-labelledby="order-delivery-heading"
+              >
+                <SectionHeading
+                  id="order-delivery-heading"
+                  n={2}
+                  title="Delivery"
+                  hint="Where to send it, and how fast."
+                />
+
+                {/* Saved address picker — lets returning customers reuse an address. */}
+                {addressesLoading && savedAddresses.length === 0 ? (
+                  <div className="flex items-center gap-2 text-xs text-ink-400">
+                    <Loader2 className="size-3.5 animate-spin" /> Loading saved addresses…
+                  </div>
+                ) : savedAddresses.length > 0 ? (
+                  <Field label="Use a saved address">
+                    <Select
+                      options={[
+                        { value: "", label: "New address…" },
+                        ...savedAddresses.map((a) => ({ value: a.id, label: addressSummary(a) })),
+                      ]}
+                      value={selectedAddressId}
+                      onChange={(e) => {
+                        const a = savedAddresses.find((x) => x.id === e.target.value);
+                        if (a) applyAddress(a);
+                        else {
+                          setSelectedAddressId("");
+                          setCorrectedFromId("");
+                        }
+                      }}
+                    />
+                  </Field>
+                ) : null}
+
+                {/* Recipient — wrapped in a form with autocomplete tokens so the
+                    browser can offer to autofill the whole shipping block at once.
+                    Country comes first: it decides which fields, which delivery
+                    speeds and which currency everything below applies to. */}
+                <form
+                  className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+                  onSubmit={(e) => e.preventDefault()}
+                >
+                  <Field
+                    label="Country"
+                    required
+                    className="sm:col-span-2"
+                    error={
+                      unserviced
+                        ? `We're sorry — we don't currently ship to ${countryLabel(country)}. Choose another destination to continue.`
+                        : undefined
+                    }
+                  >
+                    <Select
+                      options={countrySelectOptions}
+                      value={country}
+                      onChange={(e) => {
+                        editAddr(setCountry, e.target.value);
+                        // A state or province belongs to the country it was typed
+                        // for. Carried over, "CA" (California) would ride along to a
+                        // German order as a state code, now that the field is
+                        // hidden there and nobody would see it.
+                        if (e.target.value !== country) {
+                          setRegion("");
+                          setShowOptionalRegion(false);
+                        }
+                        // Correcting the destination here is the strongest signal we
+                        // get about where this person ships, so it replaces the guess
+                        // for the rest of the session and the next visit — including
+                        // the format picker back in the design flow, which would
+                        // otherwise go on offering a binding checkout just refused.
+                        rememberCountry(e.target.value);
+                      }}
+                      autoComplete="shipping country"
+                    />
+                  </Field>
+                  <Field label="Recipient name" required className="sm:col-span-2">
+                    <Input
+                      value={name}
+                      onChange={(e) => editAddr(setName, e.target.value)}
+                      placeholder="Jane Doe"
+                      autoComplete="shipping name"
+                    />
+                  </Field>
+                  <Field label="Address" required className="sm:col-span-2">
+                    <Input
+                      value={line1}
+                      onChange={(e) => editAddr(setLine1, e.target.value)}
+                      placeholder="Street address"
+                      autoComplete="shipping address-line1"
+                    />
+                  </Field>
+                  {showLine2 || line2.trim() ? (
+                    <Field label="Apartment, suite, etc." className="sm:col-span-2">
+                      <Input
+                        value={line2}
+                        onChange={(e) => editAddr(setLine2, e.target.value)}
+                        autoComplete="shipping address-line2"
+                      />
+                    </Field>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setShowLine2(true)}
+                      className="-mt-1 justify-self-start text-xs font-medium text-ink-500 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-700 sm:col-span-2"
+                    >
+                      Add apartment, suite, etc.
+                    </button>
+                  )}
+                  <Field label="City" required>
+                    <Input
+                      value={city}
+                      onChange={(e) => editAddr(setCity, e.target.value)}
+                      autoComplete="shipping address-level2"
+                    />
+                  </Field>
+                  {showRegion && (
+                    <Field
+                      label="State / Province"
+                      required={regionRequired}
+                      error={regionUnrecognised ? "Please pick this from the list." : undefined}
+                      hint={
+                        regionOptions.length > 0
+                          ? undefined
+                          : regionRequired
+                            ? `The carrier won't deliver here without the official code (e.g. ${PROBE_STATE[destination] ?? "AB"}), not the full name.`
+                            : undefined
+                      }
+                    >
+                      {/* A picker wherever the codes have been verified, because the
+                          carrier wants "CA", not "California", and rejects the address
+                          outright otherwise — after payment, in the countries that also
+                          need a tax id. Elsewhere it stays a text field with an example
+                          rather than a guessed-at list the customer couldn't override. */}
+                      {regionOptions.length > 0 ? (
+                        <Select
+                          options={regionOptions}
+                          value={region}
+                          onChange={(e) => editAddr(setRegion, e.target.value)}
+                          autoComplete="shipping address-level1"
+                        />
+                      ) : (
+                        <Input
+                          value={region}
+                          onChange={(e) => editAddr(setRegion, e.target.value)}
+                          autoComplete="shipping address-level1"
+                        />
+                      )}
+                    </Field>
+                  )}
+                  <Field label="Postal / ZIP" required>
+                    <Input
+                      value={postal}
+                      onChange={(e) => editAddr(setPostal, e.target.value)}
+                      autoComplete="shipping postal-code"
+                    />
+                  </Field>
+                  {!showRegion && (
+                    <button
+                      type="button"
+                      onClick={() => setShowOptionalRegion(true)}
+                      className="-mt-1 justify-self-start text-xs font-medium text-ink-500 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-700 sm:col-span-2"
+                    >
+                      Add state / region (optional)
+                    </button>
+                  )}
+                  <Field label="Phone" required hint="For the carrier, if there's a delivery problem.">
+                    <Input
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => editAddr(setPhone, e.target.value)}
+                      autoComplete="shipping tel"
+                    />
+                  </Field>
+                  <Field label="Email" className="sm:col-span-2" hint="For shipping updates.">
+                    <Input
+                      type="email"
+                      value={contactEmail}
+                      onChange={(e) => editAddr(setContactEmail, e.target.value)}
+                      autoComplete="email"
+                    />
+                  </Field>
+                  {/* Only rendered where customs actually demands it — three countries
+                      today. Showing it everywhere would ask every customer for a
+                      government id to buy a picture book. */}
+                  {taxIdRequired && (
+                    <Field
+                      label={`Recipient ${taxIdLabel}`}
+                      required
+                      className="sm:col-span-2"
+                      hint="Customs in this country requires the recipient's tax number before a parcel can clear."
+                    >
+                      <Input value={taxId} onChange={(e) => editAddr(setTaxId, e.target.value)} />
+                    </Field>
+                  )}
+                </form>
+
+                {/* The carrier's verdict on the address, from the live quote. Asked
+                    here — while it's still free — because a mismatch discovered
+                    after payment parks the print job awaiting manual confirmation. */}
+                {validation && (
+                  <AddressSuggestion
+                    validation={validation}
+                    entered={enteredAddress}
+                    choice={addressChoiceForSuggestion}
+                    onUseSuggested={applyAddressChoice}
+                    onKeepEntered={keepEnteredAddress}
+                  />
+                )}
+
+                {/* Right after taking the carrier's version the old verdict no longer
+                    applies (it was about the previous address) and the new one is
+                    still on its way. Say so, rather than letting the card vanish. */}
+                {!validation && decision?.choice === "suggested" && decision.afterSig === addressSig && (
+                  <p
+                    role="status"
+                    className="flex items-center gap-1.5 rounded-xl border border-ink-200 bg-white px-3.5 py-2.5 text-xs text-ink-600"
+                  >
+                    <MapPin className="size-3.5 shrink-0 text-brand-600" />
+                    {quoteIsCurrent
+                      ? "Using the carrier's corrected address."
+                      : "Using the carrier's corrected address — checking it…"}
+                  </p>
+                )}
+
+                {/* Save this address for faster reordering next time. */}
+                <label className="flex items-center gap-2 text-sm text-ink-600">
+                  <input
+                    type="checkbox"
+                    checked={saveForNextTime}
+                    onChange={(e) => setSaveForNextTime(e.target.checked)}
+                    className="size-4 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
+                  />
+                  Save this address for next time
+                </label>
+
+                {/* Delivery speed. Cards rather than a dropdown because the choice
+                    is between a time and a price, and neither fits in an option
+                    label — a customer picking blind between five names is how "why
+                    is this taking three weeks" happens. */}
+                <Field label="Delivery speed" required>
+                  {shippingChoices.length === 0 ? (
+                    <p className="text-xs text-ink-400">
+                      {!marketsLoaded
+                        ? "Loading available destinations…"
+                        : countryOptions.length === 0
+                          ? "Print ordering is not available in any destination right now."
+                          : unserviced || !country
+                            ? "Choose a destination to see delivery options."
+                            : "No delivery options are currently available for this destination."}
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {shippingChoices.map((option) => (
+                        <label
+                          key={option.value}
+                          className={cn(
+                            "flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition",
+                            shipping === option.value
+                              ? "border-brand-400 bg-brand-50/60"
+                              : "border-ink-100 hover:border-ink-200",
+                          )}
+                        >
+                          <input
+                            type="radio"
+                            name="shipping-method"
+                            checked={shipping === option.value}
+                            onChange={() => setShipping(option.value)}
+                            className="size-4 shrink-0 border-ink-300 text-brand-600 focus:ring-brand-400"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-ink-800">{option.label}</span>
+                            <span className="block text-xs text-ink-400">
+                              {option.transit ?? "Delivery time confirmed at checkout"}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-sm font-medium text-ink-700">
+                            {option.price == null
+                              ? "—"
+                              : option.price === 0
+                                ? "Free"
+                                : money(String(option.price), currency)}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </Field>
+              </section>
+            </fieldset>
           </CardBody>
         </Card>
 
@@ -1279,36 +1560,37 @@ export function OrderCheckout({
               <CardTitle>Order summary</CardTitle>
             </CardHeader>
             <CardBody className="space-y-5">
-              <div className="flex items-start gap-3">
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-                  <Package className="size-4.5" />
-                </span>
+              <div className="flex items-start gap-4">
+                <div className="flex shrink-0 items-center justify-center rounded-xl bg-ink-50 p-3">
+                  <BookMockup
+                    blobId={cover?.blobId}
+                    title={project.title}
+                    pageDesign={design.pages[COVER_FRONT_ID]}
+                    aspect={cover?.aspect ?? product.trim.widthIn / product.trim.heightIn}
+                    width={64}
+                    variant="flat"
+                  />
+                </div>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-ink-900">
                     {project.title || "Your storybook"}
                   </p>
-                  <p className="mt-0.5 text-xs leading-relaxed text-ink-500">
-                    {product.trim.widthIn}×{product.trim.heightIn}″ · {pageCount} pages
+                  <p className="mt-0.5 text-xs capitalize leading-relaxed text-ink-500">
+                    {bindingLabel} · {variantOptionLabel("finish", variant.finish)} cover
                   </p>
-                  <p className="text-xs capitalize text-ink-500">
-                    {bindingNoun(product.binding)} · {variantOptionLabel("finish", variant.finish)} cover
-                  </p>
-                  <p className="text-xs text-ink-500">
-                    {copies} {copies === 1 ? "copy" : "copies"}
+                  <p className="text-xs leading-relaxed text-ink-500">
+                    {product.trim.widthIn}×{product.trim.heightIn}″ · {pageCount} printed pages
                   </p>
                 </div>
               </div>
 
               <div className="border-t border-ink-100 pt-4 text-sm">
-                <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-ink-500">
-                  <Truck className="size-3.5" /> Estimated total
-                </div>
                 {quoting ? (
                   <div className="flex items-center gap-2 text-ink-500">
                     <Loader2 className="size-4 animate-spin" /> Updating price…
                   </div>
                 ) : quote ? (
-                  <QuoteLines quote={quote} />
+                  <QuoteLines quote={quote} discount={discount} total={totalDue} />
                 ) : quoteError ? (
                   <p className="leading-relaxed text-rose-600">{quoteError}</p>
                 ) : (
@@ -1318,26 +1600,68 @@ export function OrderCheckout({
                 )}
                 {/* Only once there's a total: a code is validated against the
                     order value, so offering the box before the price is known
-                    would be checking it against nothing. */}
+                    would be checking it against nothing. Locked while preparing,
+                    for the same reason as the form. */}
                 {quote && (
-                  <CouponField
+                  <fieldset disabled={busy} className="m-0 mt-3 min-w-0 border-0 p-0">
+                    <CouponField
+                      itemType="print"
+                      subtotal={quote.items}
+                      currency={quoteCurrency}
+                      productId={offerableCatalog.get(product.sku)?.id}
+                      country={country}
+                      onChange={setCouponCode}
+                      onDiscount={setCouponDiscount}
+                    />
+                  </fieldset>
+                )}
+                {/* What else this order earns — shown before the button, because
+                    a reward discovered in a receipt changed nobody's mind. */}
+                {quote && quoteIsCurrent && (
+                  <OfferPreviewNote
                     className="mt-3"
                     itemType="print"
-                    subtotal={quote.items}
-                    currency={quote.currency || currency}
+                    amount={quoteCurrency === pricingSettings.baseCurrency ? totalDue : undefined}
                     productId={offerableCatalog.get(product.sku)?.id}
-                    country={country}
-                    onChange={setCouponCode}
+                    projectId={project.id}
                   />
                 )}
               </div>
 
               {busy && (
-                <div className="flex items-center gap-2 rounded-xl bg-brand-50 px-3 py-2.5 text-sm text-brand-700">
-                  <Loader2 className="size-4 animate-spin" />
-                  <span className="truncate" title={status}>
-                    {status}
-                  </span>
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="rounded-xl bg-brand-50 px-3 py-2.5 text-sm text-brand-700"
+                >
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="size-4 shrink-0 animate-spin motion-reduce:animate-none" />
+                    <span className="min-w-0 truncate" title={status}>
+                      {status}
+                    </span>
+                  </div>
+                  {phase === "rendering" && (
+                    <>
+                      {progress && (
+                        <div
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={progress.total}
+                          aria-valuenow={progress.done}
+                          className="mt-2 h-1.5 overflow-hidden rounded-full bg-brand-100"
+                        >
+                          <div
+                            className="h-full rounded-full bg-brand-500 transition-[width] duration-500"
+                            style={{ width: `${Math.round((progress.done / progress.total) * 100)}%` }}
+                          />
+                        </div>
+                      )}
+                      <p className="mt-2 text-xs leading-relaxed text-brand-700/80">
+                        Preparing your print files takes about a minute. Please keep this tab open —
+                        you&apos;ll go straight to payment when it&apos;s done.
+                      </p>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -1357,6 +1681,16 @@ export function OrderCheckout({
                 </p>
               )}
 
+              {onChooseEbook && !busy && (
+                <button
+                  type="button"
+                  onClick={onChooseEbook}
+                  className="-mt-2 block w-full text-center text-xs font-medium text-ink-500 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-700"
+                >
+                  Prefer a digital copy? Get the ebook instead
+                </button>
+              )}
+
               <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-400">
                 <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
                 Stripe securely handles payment and shows tax before you pay. Your book goes to
@@ -1370,8 +1704,33 @@ export function OrderCheckout({
   );
 }
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+function SectionHeading({
+  id,
+  n,
+  title,
+  hint,
+}: {
+  id: string;
+  n: number;
+  title: string;
+  hint: string;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <span
+        aria-hidden
+        className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-ink-900 text-xs font-semibold text-white"
+      >
+        {n}
+      </span>
+      <div>
+        <h2 id={id} className="font-display text-lg font-semibold leading-7 text-ink-900">
+          {title}
+        </h2>
+        <p className="text-xs leading-relaxed text-ink-500">{hint}</p>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -1400,7 +1759,17 @@ function money(amount: string, currency: string): string {
   }
 }
 
-function QuoteLines({ quote }: { quote: RetailPricePreview }) {
+function QuoteLines({
+  quote,
+  discount,
+  total,
+}: {
+  quote: RetailPricePreview;
+  /** What an accepted coupon takes off, 0 when none. */
+  discount: number;
+  /** The total after that discount. */
+  total: number;
+}) {
   const currency = quote.currency || "USD";
   const hasDiscount = quote.discountPct > 0 && quote.listUnitPrice > quote.unitPrice;
   return (
@@ -1415,9 +1784,15 @@ function QuoteLines({ quote }: { quote: RetailPricePreview }) {
           per copy).
         </p>
       )}
+      {discount > 0 && (
+        <div className="flex items-center justify-between text-emerald-700">
+          <span>Discount code</span>
+          <span>−{money(String(discount), currency)}</span>
+        </div>
+      )}
       <Row label="Shipping" value={money(String(quote.shipping), currency)} />
       <div className="my-1 h-px bg-ink-100" />
-      <Row label="Estimated total" value={money(String(quote.total), currency)} bold />
+      <Row label="Estimated total" value={money(String(total), currency)} bold />
     </div>
   );
 }

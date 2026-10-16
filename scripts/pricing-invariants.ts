@@ -20,6 +20,7 @@ import {
   formatSlug,
   isAvailableIn,
   normalizeProduct,
+  normalizePageConditions,
   seedProductsFromCatalog,
   type GeoPolicy,
   type PricingSettings,
@@ -84,7 +85,9 @@ import {
   TAX_ID_REQUIRED,
 } from "../books-frontend/src/core/config/countries";
 import { subdivisionsFor, SUBDIVISIONS } from "../books-frontend/src/core/config/subdivisions";
-import { variantFromSku } from "../books-frontend/src/core/fulfillment/lulu/skuAxes";
+import { skuForVariant, variantFromSku } from "../books-frontend/src/core/fulfillment/lulu/skuAxes";
+import { bindingPageStep, LULU_BOOK_FORMATS } from "../books-frontend/src/core/fulfillment/lulu/products";
+import { planPageCount } from "../books-frontend/src/core/print/pageCountPlan";
 import { mapAddressValidation } from "../books-frontend/src/core/fulfillment/lulu/wire";
 
 /**
@@ -1317,6 +1320,137 @@ for (const target of [25, 45]) {
     suggested_address: { street1: "1850 SAND HILL RD", city: "Palo Alto", postcode: "94304" },
   } as never);
   check("an unchanged suggestion is not offered as a choice", agreeing === undefined);
+
+  // The carrier folds the unit into the street line and returns street2 null.
+  // Adopting that must not leave the unit in line 2 as well — it came back as
+  // "…#18, 18" and then "…18 18, 18", one more copy per click.
+  const folded = mapAddressValidation({
+    street1: "1850 Sand Hill Road",
+    street2: "18",
+    city: "Palo Alto",
+    state_code: "CA",
+    postcode: "94304",
+    warnings: { code: "REPLACED", message: "street1: 1850 Sand Hill Road -> 1850 Sand Hill Rd #18" },
+    suggested_address: {
+      street1: "1850 Sand Hill Rd #18",
+      street2: null,
+      city: "Palo Alto",
+      state_code: "CA",
+      postcode: "94304",
+    },
+  } as never);
+  check(
+    "a unit the carrier folded into the street line is removed from line 2",
+    folded?.suggested?.line1 === "1850 Sand Hill Rd #18" && folded.suggested.line2 === "",
+    JSON.stringify(folded?.suggested),
+  );
+  // …and the repeat the carrier makes when the unit is still in both places.
+  const foldedAgain = mapAddressValidation({
+    street1: "1850 Sand Hill Rd #18",
+    street2: "18",
+    city: "Palo Alto",
+    postcode: "94304",
+    suggested_address: { street1: "1850 Sand Hill Rd 18 18", street2: null, city: "Palo Alto", postcode: "94304" },
+  } as never);
+  check("a second copy of the unit is also folded away", foldedAgain?.suggested?.line2 === "");
+  // An unrelated street correction must not delete a line 2 that is still its own.
+  const keepsLine2 = mapAddressValidation({
+    street1: "Holstenstr. 40",
+    street2: "c/o Jane",
+    suggested_address: { street1: "Holstenstraße 40", street2: null },
+  } as never);
+  check(
+    "an unrelated correction leaves line 2 alone",
+    keepsLine2?.suggested?.line1 === "Holstenstraße 40" && keepsLine2.suggested.line2 === undefined,
+    JSON.stringify(keepsLine2?.suggested),
+  );
+  // The unit was already in the street line, so tidying it doesn't absorb line 2.
+  const alreadyThere = mapAddressValidation({
+    street1: "18 Main St",
+    street2: "18",
+    suggested_address: { street1: "18 Main Street", street2: null },
+  } as never);
+  check(
+    "a number already in the street line is not mistaken for the folded unit",
+    alreadyThere?.suggested?.line2 === undefined,
+    JSON.stringify(alreadyThere?.suggested),
+  );
+
+  // Parts in a non-Latin script used to be reduced to "" before comparing, so a
+  // real correction compared equal to what was typed and was never offered.
+  const nonLatin = mapAddressValidation({
+    street1: "1-1 Chiyoda",
+    city: "東京",
+    postcode: "100-0001",
+    warnings: { code: "REPLACED", message: "city: 東京 -> 東京都" },
+    suggested_address: { street1: "1-1 Chiyoda", city: "東京都", postcode: "100-0001" },
+  } as never);
+  check(
+    "a correction in a non-Latin script is still offered",
+    nonLatin?.suggested?.townOrCity === "東京都",
+    JSON.stringify(nonLatin?.suggested),
+  );
+
+  // The same accent typed as one character vs base + combining mark is the same
+  // address, not a correction.
+  const composed = mapAddressValidation({
+    street1: "Zu\u0308rcherstrasse 1",
+    suggested_address: { street1: "Zürcherstrasse 1" },
+  } as never);
+  check("a precomposed and a combining accent are the same address", composed === undefined);
+}
+
+// ---- Every product, now and in future: lengths and variants stay printable ----
+//
+// These loop over whatever the catalog holds, so a product or variant added later
+// is held to the same rules without a new check being written for it.
+
+{
+  for (const format of LULU_BOOK_FORMATS) {
+    const product = format.product;
+    const label = `${product.sku}`;
+    const limits = { min: product.minPages, max: product.maxPages, step: product.pageStep };
+    const floor = bindingPageStep(product.binding);
+    check(`${label}: step is a multiple of the binding's (${floor})`, limits.step % floor === 0);
+    check(`${label}: min and max sit on the step`, limits.min % limits.step === 0 && limits.max % limits.step === 0);
+    let bad: number | null = null;
+    for (let story = 1; story <= limits.max + 3 && bad === null; story++) {
+      const plan = planPageCount(story, limits);
+      const ok =
+        plan.status === "too-long"
+          ? story > limits.max || plan.printed > limits.max
+          : plan.printed >= limits.min && plan.printed <= limits.max && plan.printed % limits.step === 0 && plan.printed >= story;
+      if (!ok) bad = story;
+    }
+    check(`${label}: every story length is either printable on the step or refused as too long`, bad === null, bad === null ? undefined : `story length ${bad}`);
+  }
+
+  for (const seed of seedProductsFromCatalog()) {
+    const { min, max, step } = seed.conditions.pages;
+    const floor = bindingPageStep(seed.spec.binding);
+    check(`${seed.id}: seeded page limits sit on the step`, step % floor === 0 && min % step === 0 && max % step === 0, `${min}-${max} step ${step}`);
+    for (const variant of enumerateVariants(seed.variants)) {
+      const sku = skuForVariant(seed.provider.sku, variant);
+      const round = sku ? variantFromSku(sku) : null;
+      check(
+        `${seed.id}: ${variantKey(variant)} composes to a 27-character SKU that reads back`,
+        Boolean(sku) && sku!.length === 27 && round !== null && costVariantKey(round) === costVariantKey(variant),
+        sku ?? "no SKU",
+      );
+    }
+  }
+
+  const stapledSeed = seedProductsFromCatalog().find((p) => p.spec.binding === "saddle-stitch");
+  if (stapledSeed) {
+    const low = normalizeProduct({ ...stapledSeed, conditions: { ...stapledSeed.conditions, pages: { min: 5, max: 50, step: 2 } } });
+    const { min, max, step } = low.conditions.pages;
+    check("a stapled product given a step of 2 is raised to 4 and its limits move onto it", step === 4 && min === 8 && max === 48, `${min}-${max} step ${step}`);
+    check("a product already on its step is left untouched", JSON.stringify(normalizeProduct(stapledSeed).conditions.pages) === JSON.stringify(stapledSeed.conditions.pages));
+  }
+  const odd = normalizePageConditions({ min: 24, max: 800, step: 3 }, "casewrap", { min: 24, max: 800, step: 2 });
+  check("a step that isn't a multiple of the binding's is rounded up to one", odd.step === 4 && odd.min % 4 === 0 && odd.max % 4 === 0);
+  const empty = normalizePageConditions({ min: 10, max: 11, step: 4 }, "saddle-stitch", { min: 4, max: 48, step: 4 });
+  check("limits with nothing printable between them are kept as typed, for the admin to see", empty.min === 10 && empty.max === 11 && empty.step === 4);
 }
 
 // ---- Report ----------------------------------------------------------------

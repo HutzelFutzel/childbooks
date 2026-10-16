@@ -1,5 +1,6 @@
 "use client";
 
+import { ContactDialog } from "../contact/ContactDialog";
 import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -279,6 +280,8 @@ export default function AccountApp() {
       ) : null}
 
       <AuthDialog />
+      {/* The order list's "contact us" links open this. */}
+      <ContactDialog />
       <PurchaseConfirmation />
     </div>
   );

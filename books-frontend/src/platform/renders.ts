@@ -69,7 +69,15 @@ export async function renderBook(input: {
   fingerprint: string;
   projectId: string;
   documents: AssembleRequest[];
-  onProgress?: (step: string) => void;
+  /** `done` of `total` is how far along the job is, when the server knows. */
+  onProgress?: (step: string, done?: number, total?: number) => void;
+  /**
+   * Checked between polls. When it returns true the wait is abandoned (the
+   * server job carries on and finishes harmlessly) so a customer who has left the
+   * screen isn't polled for, and isn't sent anywhere, by a render they walked
+   * away from.
+   */
+  isCancelled?: () => boolean;
 }): Promise<void> {
   const start = await backendFetch(
     `/account/renders/${encodeURIComponent(input.fingerprint)}/render`,
@@ -85,6 +93,7 @@ export async function renderBook(input: {
   const deadline = Date.now() + RENDER_WAIT_MS;
   for (;;) {
     await new Promise((r) => setTimeout(r, POLL_MS));
+    if (input.isCancelled?.()) return;
     if (Date.now() > deadline) throw new Error("Rendering your book is taking too long.");
 
     const res = await backendFetch(`/account/render-jobs/${encodeURIComponent(jobId)}`);
@@ -93,9 +102,11 @@ export async function renderBook(input: {
     const job = (await res.json()) as {
       status: "pending" | "running" | "done" | "error";
       step: string;
+      done?: number;
+      total?: number;
       error: string | null;
     };
-    if (job.step) input.onProgress?.(job.step);
+    if (job.step) input.onProgress?.(job.step, job.done, job.total);
     if (job.status === "done") return;
     if (job.status === "error") throw new Error(job.error ?? "We couldn't render your book.");
   }

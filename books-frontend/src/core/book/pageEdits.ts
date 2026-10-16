@@ -13,6 +13,8 @@ function spreadUid(): string {
 export interface NewSpreadOpts {
   kind?: SpreadKind;
   blankCanvas?: boolean;
+  /** A ready-written text-only page (a dedication, a "belongs to" page…). */
+  text?: string;
 }
 
 function newSpread(opts: NewSpreadOpts = {}): ScreenplaySpread {
@@ -24,6 +26,9 @@ function newSpread(opts: NewSpreadOpts = {}): ScreenplaySpread {
     layoutNote: "",
     anchorIds: [],
     ...(opts.blankCanvas ? { blankCanvas: true, completion: "blank" as const } : {}),
+    ...(opts.text !== undefined && !opts.blankCanvas
+      ? { text: opts.text, completion: "text" as const }
+      : {}),
   };
 }
 

@@ -353,6 +353,12 @@ export interface OrderRecord {
    * flagged anything. Drives the "we're confirming your address" callout.
    */
   addressValidation: AddressValidation | null;
+  /**
+   * How the customer answered the carrier's address suggestion at checkout:
+   * took it, or kept their own. Null when none was offered (and on orders placed
+   * before this was recorded).
+   */
+  addressChoice: "suggested" | "entered" | null;
   /** Public URLs of the print-ready files submitted for this order. */
   fileUrls: { interior?: string; cover?: string };
   statusHistory: OrderStatusEntry[];

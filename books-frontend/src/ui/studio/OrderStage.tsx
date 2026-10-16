@@ -38,6 +38,7 @@ import { useStudio } from "./StudioContext";
 import { buildDisplaySpreads, type Entry } from "./SpreadEditor";
 import { getCursor } from "../../core/versioning";
 import { physicalPageCount } from "../../core/print/pagePlan";
+import { limitsOf, planPageCount } from "../../core/print/pageCountPlan";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { BookPreview } from "./BookPreview";
 import { batchItemsOf, SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
@@ -183,9 +184,7 @@ export function OrderStage() {
     () =>
       formats.filter((f) => {
         const entry = offerable.get(f.sku);
-        const min = entry?.conditions.pages.min ?? f.minPages;
-        const max = entry?.conditions.pages.max ?? f.maxPages;
-        return contentPages >= min && contentPages <= max;
+        return planPageCount(contentPages, limitsOf(f, entry)).status !== "too-long";
       }),
     [formats, offerable, contentPages],
   );
@@ -198,23 +197,21 @@ export function OrderStage() {
   // an unprintable book through to a checkout that would refuse it.
   const widest = useMemo(() => {
     const candidates = formats.length > 0 ? formats : [bookProduct];
-    return candidates.reduce<{ min: number; max: number }>(
+    return candidates.reduce<number>(
       (acc, f) => {
         const entry = offerable.get(f.sku) ?? (f === bookProduct ? catalogProduct : undefined);
-        const min = entry?.conditions.pages.min ?? f.minPages;
-        const max = entry?.conditions.pages.max ?? f.maxPages;
-        return { min: Math.min(acc.min, min), max: Math.max(acc.max, max) };
+        return Math.max(acc, limitsOf(f, entry).max);
       },
-      { min: Number.POSITIVE_INFINITY, max: 0 },
+      0,
     );
   }, [formats, offerable, bookProduct, catalogProduct]);
 
-  const printBlocked = contentPages < widest.min || contentPages > widest.max;
+  // A short book is never a dead end: blank pages bring it up to the binding's
+  // length. Only a book longer than every binding at this size can't be printed.
+  const printBlocked = contentPages > widest;
   const printBlockedReason = !printBlocked
     ? null
-    : contentPages < widest.min
-      ? `The shortest book we can bind at this size is ${widest.min} pages — yours has ${contentPages}. Add ${widest.min - contentPages} more before ordering a print copy.`
-      : `The longest book we can bind at this size is ${widest.max} pages — yours has ${contentPages}. Remove some pages, or split it into two books.`;
+    : `The longest book we can bind at this size is ${widest} pages — yours has ${contentPages}. Remove some pages, or split it into two books.`;
 
   // Entry price across the bindings that can actually take this book, since
   // that's the cheapest copy the customer could really leave with.
@@ -365,6 +362,10 @@ export function OrderStage() {
               <span>{pageCount} {pageCount === 1 ? "page" : "pages"}</span>
               <span>{sizeLabel}</span>
             </div>
+            <p className="mt-2 max-w-xl text-xs leading-relaxed text-ink-500">
+              A binding may add a few blank pages at the end to make whole sheets &mdash;
+              you&rsquo;ll see the exact count before you pay.
+            </p>
             <p className="mt-5 max-w-xl text-sm leading-relaxed text-ink-600">
               Flip through every page and check the cover, text and illustrations. You can review
               at any time; purchasing unlocks automatically when every page has a final treatment.

@@ -28,6 +28,7 @@ import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { Popover } from "../components/Popover";
 import { ArtworkOrbit } from "../design/ArtworkOrbit";
+import { BlankPagesTile } from "./BlankPagesTile";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { cn } from "../lib/cn";
 import {
@@ -183,6 +184,8 @@ export function PageFilmstrip({
             visibleIndex > 0 ? sectionForDisplay(displays[visibleIndex - 1]) : null;
           return (
             <Fragment key={disp.id}>
+              {/* Where the printer's blank pages land: after the story, before the back cover. */}
+              {disp.cover === "back" && <BlankPagesTile horizontal={isMobile} />}
               {!isMobile && section !== previousSection && (
                 <FilmstripSectionLabel>{section}</FilmstripSectionLabel>
               )}
@@ -215,6 +218,9 @@ export function PageFilmstrip({
             </Fragment>
           );
         })}
+        {!displays.some((disp) => disp.cover === "back") && displays.length > 0 && (
+          <BlankPagesTile horizontal={isMobile} />
+        )}
       </div>
     </>
   );

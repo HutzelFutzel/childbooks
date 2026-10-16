@@ -25,6 +25,7 @@ import {
   type SpreadSide,
 } from "./SpreadEditor";
 import { isPlainPagePair } from "./spreadModel";
+import { useBlankPagePlan } from "./useBlankPagePlan";
 
 const FOLD_GRADIENT =
   "linear-gradient(to right, rgba(15,23,42,0) 0%, rgba(15,23,42,0.12) 42%, rgba(15,23,42,0.2) 50%, rgba(15,23,42,0.12) 58%, rgba(15,23,42,0) 100%)";
@@ -92,6 +93,15 @@ export function BookPreview({
   }, [count, onClose]);
 
   const disp = displays[Math.min(index, count - 1)];
+  // The printer's blank pages sit after the story and before the back cover, so
+  // the flip-through says so at the point where the book would show them.
+  const blankInfo = useBlankPagePlan();
+  const lastStoryIndex = displays.reduce((last, d, i) => (d.cover ? last : i), -1);
+  const atBlanks =
+    blankInfo !== null &&
+    blankInfo.plan.blank > 0 &&
+    blankInfo.plan.status !== "too-long" &&
+    (index === lastStoryIndex || disp?.cover === "back");
   const stageRef = useRef<HTMLDivElement>(null);
   const aspect = disp ? dispAspect(disp) : 1;
   const [fitBox, setFitBox] = useState<{ w: number; h: number } | null>(null);
@@ -135,6 +145,15 @@ export function BookPreview({
           {disp?.cover && (
             <span className="rounded-md border border-brand-400/30 bg-brand-500/20 px-2 py-0.5 text-[11px] font-medium text-brand-200">
               {disp.cover === "front" ? "Front cover" : "Back cover"}
+            </span>
+          )}
+          {atBlanks && blankInfo && (
+            <span className="rounded-md border border-white/20 bg-white/10 px-2 py-0.5 text-[11px] font-medium text-white/80">
+              {blankInfo.plan.blank === 1
+                ? "1 blank page is added at the end"
+                : `${blankInfo.plan.blank} blank pages are added at the end`}{" "}
+              · {blankInfo.plan.story} + {blankInfo.plan.blank} = {blankInfo.plan.printed} printed
+              pages
             </span>
           )}
         </div>

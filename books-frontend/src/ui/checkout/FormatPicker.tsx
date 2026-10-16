@@ -2,7 +2,9 @@
 
 import { pickTier } from "../../core/config/productMath";
 import type { PublicProduct } from "../../core/config/products";
-import { bindingBlurb, bindingNoun, normalizePageCount, type BookProduct } from "../../core/fulfillment";
+import { bindingBlurb, bindingNoun, type BookProduct } from "../../core/fulfillment";
+import { formatMoneyDelta } from "../../core/i18n/format";
+import { limitsOf, planPageCount, type PageCountPlan } from "../../core/print/pageCountPlan";
 import { cn } from "../lib/cn";
 
 /**
@@ -25,6 +27,7 @@ export function FormatPicker({
   onChange,
   contentPages,
   currency = "USD",
+  locale = "en",
   className,
 }: {
   /** The sellable formats printed at this book's size. */
@@ -37,6 +40,8 @@ export function FormatPicker({
   /** Interior pages the book actually has, before rounding to a binding's step. */
   contentPages: number;
   currency?: string;
+  /** The reader's locale, for how the price differences are written. */
+  locale?: string;
   className?: string;
 }) {
   const rows = formats
@@ -83,17 +88,19 @@ export function FormatPicker({
                 <span className="text-[12px] font-medium capitalize text-ink-800">{row.label}</span>
                 {row.fits && delta != null && Math.abs(delta) >= 0.005 && (
                   <span className="shrink-0 text-[11px] tabular-nums text-ink-500">
-                    {delta > 0 ? "+" : "−"}
-                    {Math.abs(delta).toFixed(2)}
+                    {formatMoneyDelta(locale, delta, currency)}
                   </span>
                 )}
               </span>
               <span className="text-[11px] leading-snug text-ink-500">
                 {row.fits ? row.blurb : row.reason}
               </span>
-              {row.fits && row.pageCount !== contentPages && (
-                <span className="text-[10px] text-ink-400">
-                  Printed as {row.pageCount} pages (this binding works in {row.pageStep}s)
+              {/* The arithmetic lives in the order summary. It's repeated on a card
+                  only where the padding is large enough to be a reason to pick
+                  another binding — on every card it read as noise. */}
+              {row.fits && row.plan.status === "padded-heavy" && (
+                <span className="text-[10px] text-ink-500">
+                  {row.plan.story} + {row.plan.blank} blank = {row.pageCount} printed pages
                 </span>
               )}
             </button>
@@ -115,7 +122,7 @@ interface FormatRow {
   reason: string;
   /** The length this binding would actually be printed at. */
   pageCount: number;
-  pageStep: number;
+  plan: PageCountPlan;
   /** Tier price at that length, or null when the format isn't priced. */
   price: number | null;
 }
@@ -128,18 +135,20 @@ function describe(
 ): FormatRow {
   // The admin catalog wins over the provider catalog's own limits: an admin can
   // narrow what we're willing to sell, and the backend enforces their number.
-  const min = entry?.conditions.pages.min ?? format.minPages;
-  const max = entry?.conditions.pages.max ?? format.maxPages;
-  const pageCount = normalizePageCount(format, contentPages);
+  //
+  // Only a book LONGER than the binding holds is unavailable. A short one is
+  // padded with blank pages (and says so), so no binding is ever greyed out for
+  // being the wrong length in the other direction.
+  const limits = limitsOf(format, entry);
+  const plan = planPageCount(contentPages, limits);
+  const pageCount = plan.printed;
   const tier = entry?.priceTiers ? pickTier(entry.priceTiers, pageCount) : undefined;
   const price = tier?.prices[currency] ?? null;
 
   const short =
-    contentPages < min
-      ? `Needs at least ${min} pages — your book has ${contentPages}.`
-      : contentPages > max
-        ? `Takes up to ${max} pages — your book has ${contentPages}.`
-        : "";
+    plan.status === "too-long"
+      ? `Takes up to ${limits.max} pages — your book has ${contentPages}.`
+      : "";
 
   return {
     sku: format.sku,
@@ -152,7 +161,7 @@ function describe(
     fits: short === "",
     reason: short,
     pageCount,
-    pageStep: format.pageStep,
+    plan,
     price,
   };
 }

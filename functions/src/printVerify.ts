@@ -16,6 +16,8 @@ import {
   type ProductsConfig,
   type SkuVerification,
 } from "../../books-frontend/src/core/config/products";
+import { costVariantKey, enumerateVariants } from "../../books-frontend/src/core/config/variants";
+import { skuForVariant } from "../../books-frontend/src/core/fulfillment/lulu/skuAxes";
 import type { FulfillmentEnv } from "../../books-frontend/src/core/settings";
 import { mapLimit } from "./concurrency";
 import { probeSku, type ProbeOutcome } from "./printProbe";
@@ -45,23 +47,45 @@ export async function verifyProduct(
   // Probe the endpoints only; anything in between is printable if both are.
   const pageCounts = max > min ? [min, max] : [min];
 
-  for (const pages of pageCounts) {
-    const probe = await probeSku({ env, sku: product.provider.sku, pages });
-    if (probe.outcome === "inconclusive") {
-      return { ...base, outcome: "inconclusive", message: probe.message };
-    }
-    if (probe.outcome === "rejected") {
-      return {
-        ...base,
-        outcome: "rejected",
-        message: `Rejected at ${pages} pages: ${probe.message ?? "no reason given"}`,
-        record: {
-          ok: false,
-          at: Date.now(),
-          pages: { min, max },
-          error: `At ${pages} pages: ${probe.message ?? "rejected"}`,
-        },
-      };
+  // The base SKU, then every OTHER print tier × paper the product offers. A
+  // customer can pick any of them, and the page range is a property of the paper
+  // (thickness) as much as the binding: a variant that prints fewer pages than
+  // the product's range would pass checkout and fail at the bindery. Finish is
+  // skipped — a cover coating doesn't change what can be bound.
+  const targets: { sku: string; label: string }[] = [{ sku: product.provider.sku, label: "" }];
+  const seen = new Set<string>([product.provider.sku]);
+  const perCost = new Map<string, ReturnType<typeof enumerateVariants>[number]>();
+  for (const variant of enumerateVariants(product.variants)) {
+    const key = costVariantKey(variant);
+    if (!perCost.has(key)) perCost.set(key, variant);
+  }
+  for (const [key, variant] of perCost) {
+    const sku = skuForVariant(product.provider.sku, variant);
+    if (!sku || seen.has(sku)) continue;
+    seen.add(sku);
+    targets.push({ sku, label: key });
+  }
+
+  for (const target of targets) {
+    for (const pages of pageCounts) {
+      const probe = await probeSku({ env, sku: target.sku, pages });
+      if (probe.outcome === "inconclusive") {
+        return { ...base, outcome: "inconclusive", message: probe.message };
+      }
+      if (probe.outcome === "rejected") {
+        const where = target.label ? ` (variant ${target.label})` : "";
+        return {
+          ...base,
+          outcome: "rejected",
+          message: `Rejected at ${pages} pages${where}: ${probe.message ?? "no reason given"}`,
+          record: {
+            ok: false,
+            at: Date.now(),
+            pages: { min, max },
+            error: `At ${pages} pages${where}: ${probe.message ?? "rejected"}`,
+          },
+        };
+      }
     }
   }
 

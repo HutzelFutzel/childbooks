@@ -190,6 +190,16 @@ export function bindingNoun(binding: Binding): string {
   return BINDINGS_BY_ID[binding]?.noun ?? binding.replace("-", " ");
 }
 
+/**
+ * The multiple a book's printed page count must be, for this binding: a leaf is
+ * two pages, and stapled books are folded in sheets of four. A floor for any
+ * product's own page step — one set lower, by hand or by default, would quote a
+ * length the bindery can't make.
+ */
+export function bindingPageStep(binding: string): number {
+  return BINDINGS_BY_ID[binding]?.pageStep ?? 2;
+}
+
 /** What a binding is like to hold, for the picker's one-line hint. */
 export function bindingBlurb(binding: Binding): string {
   return BINDINGS_BY_ID[binding]?.blurb ?? "";

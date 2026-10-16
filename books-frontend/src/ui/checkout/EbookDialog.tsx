@@ -10,7 +10,7 @@
  * that copy was made, a free "update to your latest design" action that
  * re-renders and swaps in a fresh PDF at no charge.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, BookOpen, Check, Download, Loader2, ShieldCheck } from "lucide-react";
 import { pageTrimForConfig } from "../../core/book";
 import { renderFingerprint } from "../../core/print/fingerprint";
@@ -24,6 +24,7 @@ import {
 } from "../../platform/payments";
 import { fetchDownloadLink } from "../../platform/downloads";
 import { CouponField } from "./CouponField";
+import { OfferPreviewNote } from "./OfferPreviewNote";
 import { useCheckoutUiStore } from "../../state/checkoutUiStore";
 import { flushProjectSaves } from "../../state/projectsStore";
 import { Button } from "../components/Button";
@@ -71,6 +72,27 @@ export function EbookCheckout({
   // Re-validated inside the checkout transaction; this is only what the
   // customer entered and the server accepted a moment ago.
   const [couponCode, setCouponCode] = useState<string | null>(null);
+  // What that code takes off, so the total (and the button) show what will
+  // actually be charged rather than the list price with a promise beside it.
+  const [couponDiscount, setCouponDiscount] = useState(0);
+  const discount = couponCode ? couponDiscount : 0;
+  const due = quote ? Math.max(0, quote.price - discount) : 0;
+  // Bumped when the customer leaves (Back, or the dialog unmounting). `buy()`
+  // is a chain of awaits ending in a redirect to payment; without this, going
+  // back mid-render still carried on and sent them to Stripe from a screen
+  // they'd already left.
+  const runRef = useRef(0);
+  useEffect(
+    () => () => {
+      runRef.current += 1;
+    },
+    [],
+  );
+  function leave() {
+    runRef.current += 1;
+    setPhase("ready");
+    onBack();
+  }
   const fingerprint = useMemo(() => renderFingerprint(project, design), [project, design]);
   // Whether the owned copy might be behind the current design. Unknown for
   // entitlements delivered before we tracked this (`ownedFingerprint` null) —
@@ -133,6 +155,7 @@ export function EbookCheckout({
    * the second copy is byte-identical to the first.
    */
   async function buy() {
+    const run = ++runRef.current;
     setError(null);
     setPhase("rendering");
     setStatus("Preparing your book…");
@@ -146,17 +169,21 @@ export function EbookCheckout({
           fingerprint,
           projectId: project.id,
           documents: [{ kind: "ebook" }],
-          onProgress: setStatus,
+          onProgress: (step) => {
+            if (runRef.current === run) setStatus(step);
+          },
         });
       }
-      await checkout();
+      if (runRef.current !== run) return;
+      await checkout(run);
     } catch (err) {
+      if (runRef.current !== run) return;
       setPhase("ready");
       setError(err instanceof Error ? err.message : "We couldn't prepare your book.");
     }
   }
 
-  async function checkout() {
+  async function checkout(run: number) {
     try {
       const included = quote?.included ?? false;
       const owned = quote?.owned ?? false;
@@ -170,6 +197,7 @@ export function EbookCheckout({
         fingerprint,
         couponCode: couponCode ?? undefined,
       });
+      if (runRef.current !== run) return;
       if ("granted" in result) {
         // Included with the plan, or a free refresh of an ebook already
         // owned — either way there's no Stripe redirect to bring the
@@ -183,6 +211,7 @@ export function EbookCheckout({
       }
       window.location.href = result.url;
     } catch (err) {
+      if (runRef.current !== run) return;
       setPhase("ready");
       setError(err instanceof Error ? err.message : "We couldn't start checkout.");
     }
@@ -197,7 +226,7 @@ export function EbookCheckout({
           variant="ghost"
           size="sm"
           leftIcon={<ArrowLeft className="size-4" />}
-          onClick={onBack}
+          onClick={leave}
           disabled={phase === "redirecting"}
           className="mt-0.5 shrink-0"
         >
@@ -293,7 +322,7 @@ export function EbookCheckout({
                       {quote.owned ? "Your copy" : "Total"}
                     </span>
                     <span className="text-right">
-                      {!quote.owned && quote.price < quote.listPrice && (
+                      {!quote.owned && due < quote.listPrice && (
                         <span className="mr-2 text-xs text-ink-400 line-through">
                           {money(quote.listPrice, quote.currency)}
                         </span>
@@ -303,7 +332,7 @@ export function EbookCheckout({
                           ? "Purchased"
                           : quote.included
                             ? "Included"
-                            : money(quote.price, quote.currency)}
+                            : money(due, quote.currency)}
                       </span>
                     </span>
                   </div>
@@ -338,6 +367,16 @@ export function EbookCheckout({
                   currency={quote.currency}
                   productId="ebook"
                   onChange={setCouponCode}
+                  onDiscount={setCouponDiscount}
+                />
+              )}
+
+              {quote && quote.enabled && !quote.owned && !quote.included && (
+                <OfferPreviewNote
+                  itemType="ebook"
+                  amount={due}
+                  productId="ebook"
+                  projectId={project.id}
                 />
               )}
 
@@ -364,7 +403,7 @@ export function EbookCheckout({
                     ? "Preparing your ebook…"
                     : quote.included
                       ? "Add to Downloads"
-                      : `Continue to payment · ${money(quote.price, quote.currency)}`}
+                      : `Continue to payment · ${money(due, quote.currency)}`}
                 </Button>
               ) : (
                 <Button className="w-full" size="lg" disabled>

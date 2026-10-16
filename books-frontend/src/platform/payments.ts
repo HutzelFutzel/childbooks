@@ -100,6 +100,8 @@ export interface CheckoutInput {
   fingerprint?: string;
   /** Customer reviewed the carrier's suggested correction, when one exists. */
   addressConfirmed?: boolean;
+  /** Which way they answered it. Recorded on the order so support can see what they chose. */
+  addressChoice?: "suggested" | "entered";
   /**
    * A coupon code the customer entered. Sent as typed and re-validated server
    * side inside the pricing transaction — the client's earlier check was a
@@ -120,7 +122,7 @@ export interface CheckoutInput {
 export async function startOrderCheckout(
   input: CheckoutInput & { variant?: VariantSelection },
 ): Promise<{ url: string; paymentId: string }> {
-  const { draft, pageCount, variant, fingerprint, addressConfirmed, couponCode } = input;
+  const { draft, pageCount, variant, fingerprint, addressConfirmed, addressChoice, couponCode } = input;
   const assets = await Promise.all(draft.assets.map(assetToWire));
   const body = {
     // Format identity (base SKU). The server composes the print SKU from
@@ -137,6 +139,7 @@ export async function startOrderCheckout(
     assets,
     fingerprint,
     addressConfirmed,
+    addressChoice,
     couponCode,
   };
   const res = await backendFetch("/checkout", {

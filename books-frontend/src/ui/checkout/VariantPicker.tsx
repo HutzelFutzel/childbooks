@@ -13,6 +13,7 @@ import {
   type VariantAxisId,
   type VariantSelection,
 } from "../../core/config/variants";
+import { formatMoneyDelta } from "../../core/i18n/format";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { cn } from "../lib/cn";
 
@@ -26,6 +27,7 @@ export function VariantPicker({
   value,
   onChange,
   currency = "USD",
+  locale = "en",
   pages = 0,
   media: mediaOverride,
   visibleAxes = VARIANT_AXES,
@@ -35,6 +37,8 @@ export function VariantPicker({
   value: VariantSelection;
   onChange: (next: VariantSelection) => void;
   currency?: string;
+  /** The reader's locale, for how the price differences are written. */
+  locale?: string;
   /**
    * The book's length. Paper and print upgrades are priced per page, so the
    * surcharge shown next to each option is only right for the book actually
@@ -122,8 +126,7 @@ export function VariantPicker({
                         <span className="text-[12px] font-medium text-ink-800">{opt?.label ?? v}</span>
                         {Math.abs(switchDelta) >= 0.005 && ok && (
                           <span className="shrink-0 text-[11px] tabular-nums text-ink-500">
-                            {switchDelta > 0 ? "+" : ""}
-                            {switchDelta.toFixed(2)}
+                            {formatMoneyDelta(locale, switchDelta, currency)}
                           </span>
                         )}
                       </span>

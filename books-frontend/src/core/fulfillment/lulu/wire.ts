@@ -263,14 +263,54 @@ function normalizeWarnings(
 /** The code Lulu uses when validation rewrote a field and can suggest the fix. */
 const CORRECTABLE_CODE = "REPLACED";
 
-/** Loose equality for address parts: case, spacing and punctuation don't count. */
+/**
+ * Loose equality for address parts: case, spacing and punctuation don't count.
+ *
+ * Letters and digits of ANY script are kept. Stripping to `a-z0-9` reduced every
+ * non-Latin part ("東京", "Москва") to the empty string, so two genuinely
+ * different values compared equal and a real correction was never offered. NFKC
+ * first, so an accent typed as one character and as base + combining mark (which
+ * look identical) are the same thing.
+ */
 function samePart(a: string | undefined, b: string | undefined): boolean {
   const norm = (v: string | undefined) =>
     (v ?? "")
+      .normalize("NFKC")
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "")
-      .trim();
+      .replace(/[^\p{L}\p{N}\p{M}]+/gu, "");
   return norm(a) === norm(b);
+}
+
+const wordsOf = (v: string | undefined): string[] =>
+  (v ?? "").normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}\p{M}]+/gu) ?? [];
+
+/**
+ * Whether `newLine1` now contains everything in `line2` that `oldLine1` didn't
+ * already — i.e. the carrier moved the second line up into the street line.
+ *
+ * Counted word by word rather than "is it somewhere in there": line 2 `18` is
+ * not absorbed by `18 Main St` -> `18 Main Street` (the 18 was already there),
+ * but is by `18 Main St` -> `18 Main St #18`.
+ */
+function absorbsLine2(
+  newLine1: string,
+  oldLine1: string | undefined,
+  line2: string | undefined,
+): boolean {
+  const wanted = wordsOf(line2);
+  if (wanted.length === 0) return false;
+  const spare = new Map<string, number>();
+  for (const w of wordsOf(newLine1)) spare.set(w, (spare.get(w) ?? 0) + 1);
+  for (const w of wordsOf(oldLine1)) {
+    const n = spare.get(w);
+    if (n) spare.set(w, n - 1);
+  }
+  for (const w of wanted) {
+    const n = spare.get(w) ?? 0;
+    if (n <= 0) return false;
+    spare.set(w, n - 1);
+  }
+  return true;
 }
 
 /**
@@ -301,6 +341,23 @@ function mapSuggested(
   };
   consider("line1", "street1", echo.street1);
   consider("line2", "street2", echo.street2);
+  // The carrier often folds the unit into the street line ("1850 Sand Hill Road"
+  // + "18" -> "1850 Sand Hill Rd #18") and sends `street2: null`. A null is
+  // normally "no opinion" (see above), but HERE it means the second line moved:
+  // leaving it in place meant adopting the suggestion produced the unit twice,
+  // the carrier folded the second copy in again on the next check, and every
+  // click on "Use suggested address" added another one.
+  //
+  // Only when the new street line demonstrably gained the second line's words —
+  // an unrelated correction to the street must never delete a "c/o Jane".
+  if (
+    out.line1 !== undefined &&
+    out.line2 === undefined &&
+    !text(suggested.street2) &&
+    absorbsLine2(out.line1, echo.street1, echo.street2)
+  ) {
+    out.line2 = "";
+  }
   consider("townOrCity", "city", echo.city);
   consider("stateOrCounty", "state_code", echo.state_code);
   consider("postalOrZipCode", "postcode", echo.postcode);

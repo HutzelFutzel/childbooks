@@ -40,6 +40,7 @@ export function CouponField({
   productId,
   country,
   onChange,
+  onDiscount,
   className = "",
 }: {
   itemType: "print" | "ebook" | "pack" | "plan";
@@ -50,6 +51,13 @@ export function CouponField({
   country?: string;
   /** The accepted code, or null. The parent sends it with the checkout request. */
   onChange: (code: string | null) => void;
+  /**
+   * What the accepted code takes off, in `currency` — 0 whenever there is no
+   * accepted code. Lets the parent show the discount in its totals instead of
+   * leaving it as a promise in a green badge: a customer who is about to pay
+   * should be looking at the number they will actually be charged.
+   */
+  onDiscount?: (amount: number) => void;
   className?: string;
 }) {
   const accessLevel = useAuthStore((s) => s.accessLevel);
@@ -67,6 +75,8 @@ export function CouponField({
 
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onDiscountRef = useRef(onDiscount);
+  onDiscountRef.current = onDiscount;
 
   // Re-check an accepted code whenever the order changes underneath it.
   useEffect(() => {
@@ -79,6 +89,7 @@ export function CouponField({
           if (cancelled) return;
           setVerdict(next);
           onChangeRef.current(next.ok ? next.code : null);
+          onDiscountRef.current?.(next.ok ? next.discountAmount : 0);
         },
       );
     }, 400);
@@ -107,6 +118,7 @@ export function CouponField({
       });
       setVerdict(next);
       onChange(next.ok ? next.code : null);
+      onDiscount?.(next.ok ? next.discountAmount : 0);
       if (next.ok) setInput("");
     } finally {
       setChecking(false);
@@ -117,6 +129,7 @@ export function CouponField({
     setVerdict(null);
     setInput("");
     onChange(null);
+    onDiscount?.(0);
   };
 
   if (verdict?.ok) {

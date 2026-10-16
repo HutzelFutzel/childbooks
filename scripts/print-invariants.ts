@@ -28,6 +28,12 @@ import {
 } from "../books-frontend/src/core/print/geometry";
 import { interiorLeafPlan, physicalPageCount } from "../books-frontend/src/core/print/pagePlan";
 import { preflightInterior } from "../books-frontend/src/core/print/preflight";
+import {
+  bestAlternative,
+  pageCountCopy,
+  planPageCount,
+} from "../books-frontend/src/core/print/pageCountPlan";
+import { PAGE_TEMPLATES, frontMatterIsSafe } from "../books-frontend/src/core/book/pageTemplates";
 import { renderFingerprint } from "../books-frontend/src/core/print/fingerprint";
 import { LULU_BOOK_PRODUCTS, normalizePageCount } from "../books-frontend/src/core/fulfillment/lulu/products";
 import type { BookProduct } from "../books-frontend/src/core/fulfillment/types";
@@ -1986,6 +1992,46 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
   check("a multi-page cover is caught", checkPrintFiles({ interior: interior(32), cover: { pages: [sheet(19.2, 10.25), sheet(19.2, 10.25)] } }, exp).some((p) => /expected 1/.test(p)));
   check("sub-tolerance rounding in the PDF is accepted", checkPrintFiles({ interior: interior(32, 8.7505, 8.7495), cover: { pages: [sheet(19.201, 10.249)] } }, exp).length === 0);
   check("with no provider size, the files are still checked on their own", checkPrintFiles({ interior: interior(28), cover }, { pages: 32 }).length === 1);
+}
+
+// ---- Page count: any length is orderable, shown as arithmetic ----------------
+
+{
+  const stapled = { min: 4, max: 48, step: 4 };
+  const leaf = { min: 32, max: 800, step: 2 };
+  const coil = { min: 2, max: 470, step: 2 };
+  const hard = { min: 24, max: 800, step: 2 };
+
+  const p18 = planPageCount(18, stapled);
+  check("18 story pages in a stapled book print as 20", p18.printed === 20 && p18.blank === 2 && p18.status === "padded");
+  check("a length already on the sheet size is exact", planPageCount(20, stapled).status === "exact");
+  check("every length from 1 to the maximum is printable in a stapled book", Array.from({ length: 48 }, (_, i) => planPageCount(i + 1, stapled)).every((p) => p.status !== "too-long" && p.printed % 4 === 0 && p.printed >= p.story));
+  check("one page over the maximum is the only refusal", planPageCount(49, stapled).status === "too-long" && planPageCount(48, stapled).status === "exact");
+  check("a short book is padded up to the binding's minimum, not refused", planPageCount(18, hard).printed === 24 && planPageCount(18, hard).reason === "minimum");
+  check("a very short book in a thick binding reads as heavy padding", planPageCount(6, leaf).status === "padded-heavy");
+  check("a couple of blanks on a long book are not flagged", planPageCount(46, leaf).status === "padded" || planPageCount(46, leaf).status === "exact" || planPageCount(47, hard).status === "padded");
+  check("printed is idempotent: the server re-normalising the client's number is a no-op", [18, 19, 31, 33].every((n) => { const a = planPageCount(n, leaf).printed; return planPageCount(a, leaf).printed === a; }));
+  check("a step that doesn't divide the maximum never prints past it", planPageCount(49, { min: 4, max: 50, step: 4 }).status === "too-long" && planPageCount(47, { min: 4, max: 50, step: 4 }).printed === 48);
+
+  const copy = pageCountCopy(p18, "stapled book");
+  check("the headline is the arithmetic", copy.headline === "18 story pages + 2 blank = 20 printed pages");
+  check("the detail names the sheet size and the price basis", /sheets of 4/.test(copy.detail) && /price is for 20 pages/.test(copy.detail));
+  check("a single blank is singular", /1 blank page is added/.test(pageCountCopy(planPageCount(19, stapled), "stapled book").detail));
+
+  const options = [
+    { sku: "stapled", label: "stapled book", limits: stapled },
+    { sku: "paper", label: "paperback", limits: leaf },
+    { sku: "hard", label: "hardcover", limits: hard },
+    { sku: "coil", label: "coil-bound book", limits: coil },
+  ];
+  const over = bestAlternative(52, "stapled", options);
+  check("a book too long for the current binding is pointed at one that fits", over?.sku === "paper" && over.plan.blank === 0);
+  check("a binding that fits well is not second-guessed", bestAlternative(18, "stapled", options) === null);
+  check("heavy padding offers the binding with fewer blanks", bestAlternative(6, "paper", options)?.sku === "coil");
+  check("no alternative when nothing takes the book", bestAlternative(900, "hard", options) === null);
+
+  check("templates never sit between story pages", PAGE_TEMPLATES.every((t) => t.position === "front" || t.position === "back"));
+  check("front matter is refused when a double-page spread would be pushed across the fold", !frontMatterIsSafe([{ kind: "single" }, { kind: "spread" }]) && frontMatterIsSafe([{ kind: "single" }]));
 }
 
 // ---- Report ----------------------------------------------------------------

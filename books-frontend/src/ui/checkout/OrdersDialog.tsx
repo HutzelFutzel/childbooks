@@ -1,4 +1,5 @@
 "use client";
+import { AddressCorrectionNote } from "./AddressCorrectionNote";
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -11,7 +12,6 @@ import {
   XCircle,
 } from "lucide-react";
 import { Receipt } from "lucide-react";
-import { MapPin } from "lucide-react";
 import type { OrderRecord, OrderStage } from "../../core/fulfillment/types";
 import type { PaymentStatus, UserPaymentRecord } from "../../platform/payments";
 import { startReorderCheckout } from "../../platform/payments";
@@ -286,7 +286,6 @@ function OrderCard({
   const [openDetails, setOpenDetails] = useState(false);
   const stage = STAGE[order.stage] ?? STAGE.draft;
   const needsAttention = orderNeedsAttention(order.stage);
-  const correction = order.addressValidation?.suggested ?? null;
   const total = order.charges.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
   const currency = order.charges[0]?.currency ?? "USD";
   const { address } = order.recipient;
@@ -334,29 +333,10 @@ function OrderCard({
         </div>
       )}
 
-      {/* The carrier changed the address after we submitted it. Checkout asks
-          about this up front, so seeing it here means it slipped through — and
-          the customer deserves to know which address the book is going to. */}
-      {correction && (
-        <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          <MapPin className="mt-0.5 size-3.5 shrink-0" />
-          <span>
-            The delivery carrier adjusted this address to{" "}
-            <span className="font-medium">
-              {[
-                correction.line1,
-                correction.line2,
-                correction.townOrCity,
-                correction.stateOrCounty,
-                correction.postalOrZipCode,
-              ]
-                .filter(Boolean)
-                .join(", ")}
-            </span>
-            . If that isn't right, contact us straight away — we can still stop the order.
-          </span>
-        </div>
-      )}
+      {/* The carrier's verdict on the address, and what the customer decided
+          about it at checkout. Seeing it here at all means it slipped through
+          or was knowingly kept. */}
+      <AddressCorrectionNote order={order} className="mt-3" />
 
       {/* Ship-to + cost */}
       <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-ink-600">

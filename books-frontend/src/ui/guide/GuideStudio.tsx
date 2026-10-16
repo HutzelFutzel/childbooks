@@ -44,6 +44,8 @@ import { takeMark, useStoryMark } from "../../state/storyMark";
 import { setProjectConflictResolver, useProjectsStore } from "../../state/projectsStore";
 import { mergeBooks } from "../../core/guide/merge";
 import { OrderCheckout } from "../checkout/OrderDialog";
+import { EbookCheckout } from "../checkout/EbookDialog";
+import { useAuthStore } from "../../state/authStore";
 import { Drawer } from "../components/Drawer";
 import { cn } from "../lib/cn";
 import { StudioProvider, useStudio } from "../studio/StudioContext";
@@ -156,6 +158,15 @@ function ChatShell({
   const t = useGuideT("chrome");
   const label = useGuideLabel();
   const { displays, pages, design, editingDispId, setEditingDisp } = useStudio();
+  // The digital edition is sold from the same overlay as the printed one: one
+  // step sideways from the order screen, rather than a door only the legacy
+  // studio had. Offered to full accounts only, as the purchase itself requires.
+  const ebookEnabled = useAppConfigStore((s) => s.pricingSettings.ebook.enabled);
+  const accessLevel = useAuthStore((s) => s.accessLevel);
+  const [buyingEbook, setBuyingEbook] = useState(false);
+  useEffect(() => {
+    if (!ordering) setBuyingEbook(false);
+  }, [ordering]);
   const session = useChatStudio((s) => s.session);
   const loaded = useChatStudio((s) => s.loaded);
   const sending = useChatStudio((s) => s.sending);
@@ -764,7 +775,24 @@ function ChatShell({
               transition={{ duration: 0.22 }}
               className="absolute inset-0 z-40 overflow-y-auto bg-canvas"
             >
-              <OrderCheckout onBack={() => onOrdering(false)} project={project} pages={pages} design={design} />
+              {buyingEbook ? (
+                <EbookCheckout
+                  onBack={() => onOrdering(false)}
+                  project={project}
+                  design={design}
+                  cover={pages.find((p) => p.id === COVER_FRONT_ID) ?? pages[0]}
+                />
+              ) : (
+                <OrderCheckout
+                  onBack={() => onOrdering(false)}
+                  project={project}
+                  pages={pages}
+                  design={design}
+                  onChooseEbook={
+                    ebookEnabled && accessLevel === "full" ? () => setBuyingEbook(true) : undefined
+                  }
+                />
+              )}
             </motion.div>
           )}
         </AnimatePresence>

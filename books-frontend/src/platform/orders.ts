@@ -153,6 +153,10 @@ function mapOrder(id: string, data: Record<string, unknown>): OrderRecord {
     charges: mapMoneyList(data.charges),
     shipments: mapShipments(data.shipments),
     addressValidation: mapAddressValidation(data.addressValidation),
+    addressChoice:
+      data.addressChoice === "suggested" || data.addressChoice === "entered"
+        ? data.addressChoice
+        : null,
     fileUrls: {
       interior: typeof files.interior === "string" ? files.interior : undefined,
       cover: typeof files.cover === "string" ? files.cover : undefined,

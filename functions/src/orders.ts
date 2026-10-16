@@ -172,6 +172,8 @@ export interface PersistCreatedOrderArgs {
     shippingSource: string;
     productionSource?: string;
   } | null;
+  /** How the customer answered the carrier's address suggestion, if there was one. */
+  addressChoice?: "suggested" | "entered" | null;
   draft: OrderDraft;
   order: FulfillmentOrder;
 }
@@ -207,6 +209,10 @@ export async function persistCreatedOrder(args: PersistCreatedOrderArgs): Promis
     // the job may sit awaiting manual confirmation, so it belongs on the
     // customer's own record — not just in the provider's dashboard.
     addressValidation: order.addressValidation ? stripUndefined(order.addressValidation) : null,
+    // What the customer chose when the carrier suggested a different address, so
+    // the order page can say "you kept yours" instead of presenting a choice
+    // they already made as something that went wrong.
+    addressChoice: args.addressChoice ?? null,
     fileUrls: stripUndefined(order.printFiles ?? {}),
     statusHistory: [historyEntry],
     createdAt: now,

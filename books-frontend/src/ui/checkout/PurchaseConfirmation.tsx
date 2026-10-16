@@ -17,6 +17,7 @@
  * customer their place in the book they just bought. The URL still carries the
  * payment id, so a refresh lands right back here.
  */
+import { AddressCorrectionNote } from "./AddressCorrectionNote";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
@@ -561,7 +562,6 @@ function FulfillmentPanel({
 
 function ShipToPanel({ order }: { order: OrderRecord }) {
   const { address } = order.recipient;
-  const correction = order.addressValidation?.suggested ?? null;
   return (
     <Panel title="Shipping to">
       <p className="text-sm leading-relaxed text-ink-700">
@@ -583,23 +583,7 @@ function ShipToPanel({ order }: { order: OrderRecord }) {
             : `${order.shippingMethod} delivery`}{" "}
         · {bindingNoun(bindingOf(order.productSku))}
       </p>
-      {correction && (
-        <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
-          The carrier adjusted this to{" "}
-          <span className="font-medium">
-            {[
-              correction.line1,
-              correction.line2,
-              correction.townOrCity,
-              correction.stateOrCounty,
-              correction.postalOrZipCode,
-            ]
-              .filter(Boolean)
-              .join(", ")}
-          </span>
-          . If that&apos;s wrong, contact us now — the order can still be stopped.
-        </p>
-      )}
+      <AddressCorrectionNote order={order} className="mt-2" />
     </Panel>
   );
 }
