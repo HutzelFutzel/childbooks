@@ -8,6 +8,9 @@ import { COVER_BACK_ID, COVER_FRONT_ID } from "../types";
 import { getCursor } from "../versioning";
 import { coverLinesOf, paintsCoverLettering } from "./coverLines";
 
+/** What a cover without painted words is told about its words: they go on later, as text. */
+export const OVERLAY_COVER_NOTE = "Cover art. Leave clean space for the title text (added in design).";
+
 /**
  * Build a generatable pseudo-spread for a cover spec. Given the book, the front
  * cover's words come from {@link coverLinesOf}, the one reading every surface shares.
@@ -26,7 +29,7 @@ export function coverSpread(id: string, spec: CoverSpec, project?: Project): Scr
     illustration: spec.illustration,
     layoutNote: bake
       ? "Cover art with the title typography integrated into the artwork."
-      : "Cover art. Leave clean space for the title text (added in design).",
+      : OVERLAY_COVER_NOTE,
     anchorIds: spec.anchorIds,
     anchorNames: spec.anchorNames,
     textMode: bake ? "in-image" : "overlay",

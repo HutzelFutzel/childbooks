@@ -480,6 +480,18 @@ function assertNotDrawing(project: Project): void {
   }
 }
 
+/**
+ * A run that has really ended can still look open here (the listener missed the
+ * last write). Reconcile it first, so a finished book never refuses a redraw.
+ */
+async function projectOnceSettled(project: Project): Promise<Project> {
+  const run = authoringOf(project).drawBook;
+  if (!run?.jobId || (run.phase !== "cast" && run.phase !== "pages")) return project;
+  await continueDrawBook().catch(() => undefined);
+  const live = useProjectsStore.getState().current();
+  return live && live.id === project.id ? live : project;
+}
+
 // --- Scoped redraws ---------------------------------------------------------
 
 /**
@@ -492,9 +504,10 @@ export async function startRedraw(
   edit: string | Record<string, string>,
   region?: NormRect,
 ): Promise<boolean> {
-  const project = useProjectsStore.getState().current();
+  const current = useProjectsStore.getState().current();
   const unit = quote.units[0];
-  if (!project || !unit || project.id !== quote.projectId) return false;
+  if (!current || !unit || current.id !== quote.projectId) return false;
+  const project = await projectOnceSettled(current);
   assertNotDrawing(project);
   // One sentence for one picture; a map when several people were changed together.
   const instructionFor = (id: string): string => (typeof edit === "string" ? edit : edit[id] ?? "").trim();
@@ -548,8 +561,9 @@ export async function startRedraw(
 
 /** Retry the failed pages only, against a fresh quote naming just them. */
 export async function startPageRetry(quote: GenerationQuote): Promise<boolean> {
-  const project = useProjectsStore.getState().current();
-  if (!project || project.id !== quote.projectId) return false;
+  const current = useProjectsStore.getState().current();
+  if (!current || current.id !== quote.projectId) return false;
+  const project = await projectOnceSettled(current);
   assertNotDrawing(project);
   await createRefreshJob(
     project,

@@ -80,6 +80,7 @@ import {
   type ResolvedEditOp,
 } from "./intentResolve";
 import {
+  growToMinPartSide,
   locateAndCountSubjects,
   locateEditPart,
   locateEmbeddedObsolete,
@@ -90,12 +91,15 @@ import {
 import { IN_PLACE_EDIT_FAILED } from "./inPlaceMessage";
 import { effectiveAnchorIds } from "../book/anchorRefs";
 import { bakedTextOf } from "../book/coverLines";
+import { OVERLAY_COVER_NOTE } from "../book/units";
 import {
   coverLetteringSafeArea,
+  coverMarginPercent,
   judgeLettering,
   readCoverLettering,
   type LetteringBox,
   type LetteringReading,
+  type LetteringVerdict,
 } from "./coverLettering";
 import { heightFractions } from "../book/anchorScale";
 import { cellBox } from "./anchorLayout";
@@ -283,6 +287,12 @@ export interface IllustrationRunOptions {
    */
   wholePage?: boolean;
   signal?: AbortSignal;
+  /**
+   * When the host will stop this render (epoch ms): the worker's own limit for
+   * the attempt. A cover that repaints its words plans its paintings inside it,
+   * rather than start one the host is about to cut off.
+   */
+  deadlineAt?: number;
 }
 
 /** An edit that had to stay in place could not be done there. */
@@ -993,6 +1003,11 @@ async function trySurgicalModifyOne(args: {
     return composited.base64 ? { base64: composited.base64, mimeType: composited.mimeType } : null;
   } catch (error) {
     if (signal?.aborted) throw error;
+    // Falling back is intended, but never silent: this is where an in-place failure comes from.
+    console.warn(
+      "[illustration] in-place change to " + targetAnchor.name + (part ? " (" + part + ")" : "") + " failed:",
+      error instanceof Error ? error.message : error,
+    );
     return null;
   }
 }
@@ -1234,7 +1249,8 @@ async function narrowToPart(args: {
     if (!found || !found.part) return whole;
     if (!partOnSubject(subjectBox, found.box)) return whole;
     if (area(found.box) >= area(subjectBox) * 0.85) return whole;
-    return { box: found.box, part: found.part };
+    // A hand is a few percent of a page: give the hole room to be repainted.
+    return { box: growToMinPartSide(found.box), part: found.part };
   } catch (error) {
     if (signal?.aborted) throw error;
     return whole;
@@ -1373,15 +1389,18 @@ async function tryStructuredEdit(args: {
         signal,
       });
       // One more try: a masked edit that came back empty or unusable is often
-      // fine the second time, and the alternative is a redraw of the picture.
+      // fine the second time, and the alternative is a redraw of the picture. A
+      // part that would not take (a hand) is retried over the whole subject,
+      // still in place: a wider hole beats an edit that fails outright.
       let modified: { base64: string; mimeType: string } | null = null;
       for (let attempt = 0; attempt < 2 && !modified; attempt++) {
+        const widen = attempt > 0 && Boolean(region.part);
         modified = await trySurgicalModifyOne({
           config: project.config,
           targetAnchor: a,
           instruction,
-          targetBox: region.box,
-          part: region.part,
+          targetBox: widen ? d.box : region.box,
+          part: widen ? undefined : region.part,
           sheetRef,
           page: current,
           imageModel,
@@ -2069,12 +2088,16 @@ async function renderPage(
         })
       : [];
 
+  const coverSafe = coverLetteringSafeArea(project.config);
   const promptFor = (
     bake: boolean,
     calm?: { overshoot: number; retry: boolean },
     letteringProblems?: string[],
   ) => withLetteringNote(buildIllustrationPrompt({
-    spread,
+    // A cover drawn without its words (the way out of a failed lettering) must
+    // not be told the typography is part of the art: its words go on as text.
+    spread: bake || !spread.bakeText ? spread : { ...spread, layoutNote: OVERLAY_COVER_NOTE },
+    coverMarginPercent: coverMarginPercent(coverSafe),
     config: project.config,
     referencedAnchors,
     refreshAnchors,
@@ -2116,7 +2139,7 @@ async function renderPage(
     caps.operations.referenceEditing && references.length ? references : undefined;
   const outputSize = chooseImageSize(spread.kind, project.config, layoutPlan, caps);
   const callImageModel = (prompt: string, bake: boolean) =>
-    generateIllustrationImage({
+    withImageCallTimeout(options.signal, (signal) => generateIllustrationImage({
       prompt,
       size: outputSize,
       creds: { apiKey: key },
@@ -2137,8 +2160,8 @@ async function renderPage(
           : undefined,
       retries: actionTuning.retries,
       allowText: bake,
-      signal: options.signal,
-    });
+      signal,
+    }));
   let lastDrawMs = 0;
   const timedImage = async (prompt: string, bake: boolean) => {
     const drawStarted = Date.now();
@@ -2152,9 +2175,9 @@ async function renderPage(
     runStep(step, () => timedImage(prompt, bake));
   const lettered = await drawCoverLettering({
     spread,
-    safe: coverLetteringSafeArea(project.config),
+    safe: coverSafe,
     startedAt,
-    deadlineMs: COVER_LETTERING_DEADLINE_MS,
+    deadlineMs: letteringDeadlineMs(options.deadlineAt, startedAt),
     // A masked touch-up keeps the painted words outside the mask as they were.
     check: !maskMode,
     draw: async (bake, attempt) => {
@@ -2299,6 +2322,46 @@ const LETTERING_DEADLINE_MS = 170_000;
  */
 const COVER_LETTERING_DEADLINE_MS = 330_000;
 export const COVER_LETTERING_DRAWS = 4;
+/** Paintings a cover gets once its words are right and only their placement is in question. */
+const SOFT_REPAINT_DRAWS = 2;
+/** What binding, the calm-area check and the upload still need once the paintings are done. */
+const AFTER_DRAWING_RESERVE_MS = 60_000;
+
+/**
+ * How long, from the start of the render, the cover's paintings (and the plain
+ * cover that is the way out of them) may take. The longest the cover would ever
+ * spend, cut to what the host will really allow this attempt: a later attempt
+ * has less of the task's time left, and a painting that would be cut off
+ * halfway is paid for and thrown away.
+ */
+export function letteringDeadlineMs(deadlineAt: number | undefined, startedAt: number): number {
+  if (deadlineAt === undefined) return COVER_LETTERING_DEADLINE_MS;
+  return Math.min(COVER_LETTERING_DEADLINE_MS, Math.max(0, deadlineAt - startedAt - AFTER_DRAWING_RESERVE_MS));
+}
+
+/**
+ * The longest one image request may take. A request that hangs used to hold
+ * the whole attempt until its eight-minute limit; this fails it in about three
+ * minutes, with a timeout the worker hands back to the queue to try again.
+ */
+export const IMAGE_CALL_TIMEOUT_MS = 200_000;
+
+async function withImageCallTimeout<T>(
+  parent: AbortSignal | undefined,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const timeout = AbortSignal.timeout(IMAGE_CALL_TIMEOUT_MS);
+  const signal = parent ? AbortSignal.any([parent, timeout]) : timeout;
+  try {
+    return await run(signal);
+  } catch (error) {
+    // Only this call's own limit: a cancel from the host stays a cancel.
+    if (timeout.aborted && !parent?.aborted && !(error instanceof ProviderError && error.kind === "timeout")) {
+      throw new ProviderError("The image request took too long.", { kind: "timeout", cause: error });
+    }
+    throw error;
+  }
+}
 
 /**
  * After a painting whose words were read back wrong, say what was wrong, so the
@@ -2410,10 +2473,17 @@ export interface LetteringAttempt {
  * null, or there is none) accepts the lettered cover rather than cost the
  * reader one.
  *
- * A cover without its words is not an acceptable result, and neither is one
- * that failed its reading: when no painting passes this throws, so the task
- * fails (uncharged, retryable) instead of delivering a cover the reader would
- * have to catch.
+ * The cover always ends with something the reader can print, and never with a
+ * wrong word on it:
+ *  - a painting whose words are all right but sit close to an edge (or carry a
+ *    stray mark) is kept — the best such one — as `accepted`;
+ *  - otherwise the cover is drawn once more without words and they are set as
+ *    text on top (`fellBack`, `textMode: "overlay"`). The loop keeps time back
+ *    for that drawing for as long as it has nothing it could deliver;
+ *  - only when there is no time left for even that does this throw, retryable,
+ *    so the task is tried again from scratch (uncharged).
+ * A repainting that fails (a throttle, the deadline) never loses a painting
+ * that could already be delivered.
  */
 export async function drawCoverLettering(args: {
   spread: ScreenplaySpread;
@@ -2458,26 +2528,58 @@ export async function drawCoverLettering(args: {
   let drawMs = Date.now() - drawStarted;
   if (!check || spread.id !== COVER_FRONT_ID) return accept(drawn);
   if (!read) return accept(drawn, { outcome: "unchecked", attempts: 1 });
-  const anotherDrawFits = () => Date.now() - startedAt + drawMs * 1.15 <= deadlineMs;
+  // `drawings` more paintings of the last one's length still fit the deadline.
+  const fits = (drawings: number) => Date.now() - startedAt + drawMs * 1.15 * drawings <= deadlineMs;
 
   let attempts = 1;
   let problems: string[] = [];
+  let best: { drawn: { prompt: string; image: ImageResult }; verdict: LetteringVerdict } | undefined;
   for (;;) {
     const reading = await read(drawn.image, expected);
     if (!reading) return accept(drawn, { outcome: "unchecked", attempts });
     const verdict = judgeLettering(expected, reading, safe);
     if (verdict.ok) return accept(drawn, { outcome: "passed", attempts });
     problems = verdict.problems;
-    if (attempts >= maxDraws || !anotherDrawFits()) break;
+    if (
+      !best ||
+      verdict.blocking.length < best.verdict.blocking.length ||
+      (verdict.blocking.length === best.verdict.blocking.length && verdict.problems.length < best.verdict.problems.length)
+    ) {
+      best = { drawn, verdict };
+    }
+    const deliverable = best.verdict.blocking.length === 0;
+    // With every word right and only placement left to improve, one more try is
+    // enough. Without a painting to deliver, one more must leave room for the
+    // plain cover that is the way out.
+    const limit = deliverable ? Math.min(maxDraws, SOFT_REPAINT_DRAWS) : maxDraws;
+    if (attempts >= limit || !fits(deliverable ? 1 : 2)) break;
     attempts += 1;
     drawStarted = Date.now();
-    drawn = await draw(true, { number: attempts, problems });
+    try {
+      drawn = await draw(true, { number: attempts, problems });
+    } catch (error) {
+      // The repainting was only a try at doing better: what is in hand stands.
+      if (deliverable) break;
+      throw error;
+    }
     drawMs = Date.now() - drawStarted;
   }
-  throw new ProviderError(
-    `The cover's words never came out right after ${attempts} painting${attempts === 1 ? "" : "s"}: ${problems.join("; ")}.`,
-    { kind: "lettering", retryable: false, details: problems.join("; ") },
-  );
+
+  if (best && best.verdict.blocking.length === 0) {
+    return accept(best.drawn, { outcome: "accepted", attempts, problems: best.verdict.problems });
+  }
+  const failure = `The cover's words never came out right after ${attempts} painting${attempts === 1 ? "" : "s"}: ${problems.join("; ")}.`;
+  if (!fits(1)) {
+    throw new ProviderError(failure, { kind: "lettering", retryable: true, details: problems.join("; ") });
+  }
+  // No painting spelled its words right: draw the cover without them and set
+  // them as text on top. The art is told nothing about the failed lettering.
+  const plain = await draw(false, { number: attempts + 1, problems: [] });
+  return {
+    ...plain,
+    textMode: "overlay",
+    lettering: { outcome: "fellBack", attempts, problems },
+  };
 }
 
 /** The lettering check's reader for this host: the binding vision model, metered as "lettering". */

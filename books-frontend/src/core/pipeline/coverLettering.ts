@@ -45,6 +45,13 @@ export interface LetteringReading {
 export interface LetteringVerdict {
   ok: boolean;
   problems: string[];
+  /**
+   * The problems that make the printed words wrong: a line missing, misspelled
+   * or not asked for, or real writing nobody wrote. What is left in `problems`
+   * only concerns where a correct line sits or a stray mark, which a cover can
+   * be delivered with.
+   */
+  blocking: string[];
 }
 
 const boxFields = {
@@ -97,6 +104,36 @@ export function letteringKey(text: string): string {
 
 /** Author lines are often set as "by …"; that word alone is not a misspelling. */
 const BYLINE = /^(by|von|par|por|de|di|door|av|af|przez)\s+/u;
+const BYLINE_WORDS: ReadonlySet<string> = new Set(["by", "von", "par", "por", "de", "di", "door", "av", "af", "przez"]);
+
+/**
+ * Extra writing this short (a mark, an initial) is not worth another painting.
+ * Anything longer is real text on the cover and blocks it.
+ */
+const STRAY_MARK_LETTERS = 3;
+
+/**
+ * Whether a piece of "other writing" is only the cover's own words again: a
+ * line the reader split in two, or the byline word, listed apart from the line
+ * it belongs to. The cover carries nothing it shouldn't.
+ */
+function repeatsExpectedWords(text: string, expected: BakedCoverText): boolean {
+  const words = new Set(
+    ROLES.flatMap((role) => letteringKey(expected[role] ?? "").split(" ")).filter(Boolean),
+  );
+  const parts = letteringKey(text).split(" ").filter(Boolean);
+  return parts.length > 0 && parts.every((word) => words.has(word) || BYLINE_WORDS.has(word));
+}
+
+/**
+ * How far in from every edge the words must stay, as a whole percent of the
+ * image, for the prompt to ask for. A little more than the check's real margin,
+ * so a model that is slightly off still lands inside it.
+ */
+export function coverMarginPercent(safe: LetteringBox): number {
+  const margin = Math.max(safe.x, safe.y, 0);
+  return Math.min(30, Math.max(8, Math.ceil(margin * 100) + 2));
+}
 
 function sameWords(expected: string, read: string, role: LetteringRole): boolean {
   const want = letteringKey(expected);
@@ -105,7 +142,13 @@ function sameWords(expected: string, read: string, role: LetteringRole): boolean
   return role === "author" && !BYLINE.test(want) && got.replace(BYLINE, "") === want;
 }
 
-function inside(box: LetteringBox, area: LetteringBox, tolerance = 0.015): boolean {
+/**
+ * A vision model's boxes are good to a few percent, not a pixel, so a line is
+ * only outside when it is clearly past the edge of the safe area.
+ */
+const BOX_TOLERANCE = 0.03;
+
+function inside(box: LetteringBox, area: LetteringBox, tolerance = BOX_TOLERANCE): boolean {
   return (
     box.x >= area.x - tolerance &&
     box.y >= area.y - tolerance &&
@@ -120,25 +163,29 @@ export function judgeLettering(
   reading: LetteringReading,
   safe: LetteringBox,
 ): LetteringVerdict {
-  const problems: string[] = [];
+  const blocking: string[] = [];
+  const soft: string[] = [];
   for (const role of ROLES) {
     const want = (expected[role] ?? "").trim();
     const line = reading.lines[role];
     if (!want) {
-      if (line?.found && letteringKey(line.text)) problems.push(`unexpected ${role}: "${line.text}"`);
+      if (line?.found && letteringKey(line.text)) blocking.push(`unexpected ${role}: "${line.text}"`);
       continue;
     }
     if (!line?.found) {
-      problems.push(`${role} missing`);
+      blocking.push(`${role} missing`);
       continue;
     }
-    if (!sameWords(want, line.text, role)) problems.push(`${role} reads "${line.text}", wanted "${want}"`);
-    if (line.box && !inside(line.box, safe)) problems.push(`${role} outside the safe area`);
+    if (!sameWords(want, line.text, role)) blocking.push(`${role} reads "${line.text}", wanted "${want}"`);
+    if (line.box && !inside(line.box, safe)) soft.push(`${role} outside the safe area`);
   }
   for (const text of reading.other) {
-    if (letteringKey(text).replace(/\s/g, "").length >= 2) problems.push(`extra text: "${text}"`);
+    const letters = letteringKey(text).replace(/\s/g, "").length;
+    if (letters < 2 || repeatsExpectedWords(text, expected)) continue;
+    (letters <= STRAY_MARK_LETTERS ? soft : blocking).push(`extra text: "${text}"`);
   }
-  return { ok: problems.length === 0, problems };
+  const problems = [...blocking, ...soft];
+  return { ok: problems.length === 0, problems, blocking };
 }
 
 export interface ReadCoverLetteringInput {
@@ -158,9 +205,12 @@ export interface ReadCoverLetteringInput {
  */
 export async function readCoverLettering(input: ReadCoverLetteringInput): Promise<LetteringReading | null> {
   const provider = getTextProvider(input.providerId);
-  const expected = ROLES.filter((role) => (input.expected[role] ?? "").trim())
-    .map((role) => `- ${role}: "${input.expected[role]!.trim()}"`)
-    .join("\n");
+  // A line the cover must not carry is listed too: a proofreader only told what
+  // to expect reads past an author name nobody asked for.
+  const expected = ROLES.map((role) => {
+    const want = (input.expected[role] ?? "").trim();
+    return want ? `- ${role}: "${want}"` : `- ${role}: NONE (this line must not be on the cover)`;
+  }).join("\n");
   const { system, user } = renderTextPrompt(resolvePromptsConfig(input.prompts), "bindingPass/coverLettering", {
     vars: { expected },
   });

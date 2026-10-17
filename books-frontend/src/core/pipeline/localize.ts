@@ -532,15 +532,23 @@ export function classifyLocatedPart(raw: {
   ) {
     return { kind: "failed", reason: "The located part had no usable box." };
   }
-  const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
-  const w = Math.max(MIN_PART_SIDE, clamp01(width));
-  const h = Math.max(MIN_PART_SIDE, clamp01(height));
-  // Grow around the centre, then slide back inside the picture.
-  const left = Math.min(1 - w, Math.max(0, clamp01(x) + clamp01(width) / 2 - w / 2));
-  const top = Math.min(1 - h, Math.max(0, clamp01(y) + clamp01(height) / 2 - h / 2));
-  const box = { x: left, y: top, width: w, height: h };
+  const box = growToMinPartSide({ x, y, width, height });
   const part = (raw.part ?? "").trim().slice(0, 40);
-  return w * h >= WHOLE_SUBJECT_AREA ? { kind: "whole", box, part } : { kind: "part", box, part };
+  return box.width * box.height >= WHOLE_SUBJECT_AREA ? { kind: "whole", box, part } : { kind: "part", box, part };
+}
+
+/**
+ * Give a located part at least {@link MIN_PART_SIDE} on each side: grown around
+ * its centre, then slid back inside the picture. A hand on a full page is a few
+ * percent across, and a hole that small gives the model nothing to repaint.
+ */
+export function growToMinPartSide(box: SubjectBox): SubjectBox {
+  const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+  const w = Math.max(MIN_PART_SIDE, clamp01(box.width));
+  const h = Math.max(MIN_PART_SIDE, clamp01(box.height));
+  const left = Math.min(1 - w, Math.max(0, clamp01(box.x) + clamp01(box.width) / 2 - w / 2));
+  const top = Math.min(1 - h, Math.max(0, clamp01(box.y) + clamp01(box.height) / 2 - h / 2));
+  return { x: left, y: top, width: w, height: h };
 }
 
 /** What the worker does with an {@link EditPartOutcome}. */

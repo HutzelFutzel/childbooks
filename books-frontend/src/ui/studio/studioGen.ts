@@ -4,6 +4,7 @@
  * single "Generate everything" button can fill in the whole book.
  */
 import type { AnchorTask, RefreshTask, TaskDoc } from "../../core/jobs/types";
+import { DEADLINE_GRACE_MS } from "../../core/jobs/liveness";
 import type { ResolvedModels } from "../../core/models/registry";
 import type { Project } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID, SPINE_ID } from "../../core/types";
@@ -206,13 +207,17 @@ export interface BatchOutcome {
 }
 
 /**
- * Safety bound on watching a single job from the client. The worker always
- * drives the job to a terminal state (and its own function timeout is 540s), so
- * this only fires if the document never updates at all (e.g. the worker never
- * ran). When it does, we stop watching and clear spinners; any results that
+ * Safety bound on watching a single job from the client. The server always
+ * drives the job to a terminal state and stamps it with a deadline; the watch
+ * outlasts that deadline by the time the reaper needs to close the job, so it
+ * only fires if the document never updates at all (e.g. the worker never ran).
+ * Until the job's own deadline is known the bound is the shortest one the
+ * server uses (a base of twenty minutes), not a guess shorter than a cover's
+ * retries, which used to leave the spinner off while the cover was still being
+ * drawn. When it fires, we stop watching and clear spinners; any results that
  * still land later are folded in by the jobs store on reconcile.
  */
-const JOB_WATCH_TIMEOUT_MS = 600_000;
+const JOB_WATCH_TIMEOUT_MS = 20 * 60_000 + DEADLINE_GRACE_MS;
 
 /**
  * Watch a job to completion across BOTH its aggregate doc (for terminal status +
@@ -275,9 +280,16 @@ async function watchJob(
         }
       }
     });
+    let watchedDeadline: number | undefined;
     unsubJob = subscribeJob(jobId, (job) => {
       if (!job) return;
       if (opts.signal?.aborted) return finish();
+      // A big job's deadline is later than the default bound: wait for the server's own.
+      if (typeof job.deadlineAt === "number" && job.deadlineAt !== watchedDeadline && job.status !== "done" && job.status !== "error") {
+        watchedDeadline = job.deadlineAt;
+        clearTimeout(timer);
+        timer = setTimeout(finish, Math.max(30_000, job.deadlineAt + DEADLINE_GRACE_MS - Date.now()));
+      }
       if (job.status === "done" || job.status === "error") {
         if (job.status === "error" && !surfacedError) {
           opts.onError(new Error(job.error || "Generation failed."));

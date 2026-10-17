@@ -39,9 +39,11 @@ import { authorIdeas, coverCardLines, coverWordsSettled, subtitleIdeas } from ".
 import { authoringOf, withAuthoring } from "../books-frontend/src/core/guide/projectState";
 import {
   coverLetteringSafeArea,
+  coverMarginPercent,
   judgeLettering,
   type LetteringReading,
 } from "../books-frontend/src/core/pipeline/coverLettering";
+import { absentCoverLines } from "../books-frontend/src/core/pipeline/illustration";
 import { applyIllustrationRender, drawCoverLettering } from "../books-frontend/src/core/pipeline/illustrationRun";
 import { cleanSubtitleIdeas } from "../books-frontend/src/core/pipeline/storyDraft";
 import { createDefaultStoryBrief } from "../books-frontend/src/core/story/brief";
@@ -216,7 +218,7 @@ const reading = (changes: Partial<LetteringReading["lines"]> = {}, other: string
 });
 
 {
-  check(safe.x > 0 && safe.x < 0.15 && Math.abs(safe.x + safe.w - (1 - safe.x)) < 1e-9, "The lettering safe area isn't a symmetric inset.");
+  check(safe.x > 0 && safe.x < 0.2 && Math.abs(safe.x + safe.w - (1 - safe.x)) < 1e-9, "The lettering safe area isn't a symmetric inset.");
   check(judgeLettering(EXPECTED, reading(), safe).ok, `A right cover is rejected: ${judgeLettering(EXPECTED, reading(), safe).problems.join("; ")}.`);
   check(!judgeLettering(EXPECTED, reading({ title: { found: true, text: "The Blanket Frot", box: inside } }), safe).ok, "A misspelled title passes.");
   check(!judgeLettering(EXPECTED, reading({ author: { found: false, text: "" } }), safe).ok, "A missing author passes.");
@@ -226,13 +228,35 @@ const reading = (changes: Partial<LetteringReading["lines"]> = {}, other: string
   const noSubtitle = { title: TITLE, author: "Uncle David" };
   check(!judgeLettering(noSubtitle, reading(), safe).ok, "A subtitle nobody asked for passes.");
   check(!judgeLettering(EXPECTED, reading({ title: { found: true, text: "by The Blanket Fort", box: inside } }), safe).ok, '"by" is tolerated on the title.');
+
+  // A byline nobody asked for is the usual invention, and it blocks the cover.
+  const noAuthor = { title: TITLE, subtitle: "A Bedtime Story" };
+  const invented = { found: true, text: "by Jane Whitmore", box: inside };
+  check(!judgeLettering(noAuthor, reading({ author: invented }), safe).ok, "An invented author passes.");
+  check(judgeLettering(noAuthor, reading({ author: invented }), safe).blocking.length > 0, "An invented author doesn't block the cover.");
+  check(!judgeLettering(noAuthor, reading({ author: { found: false, text: "" } }, ["by Jane Whitmore"]), safe).ok, "An invented author read as other writing passes.");
+  check(judgeLettering(noAuthor, reading({ author: { found: false, text: "" } }), safe).ok, "A cover without an author is rejected for having none.");
+  check(/author name/.test(absentCoverLines({ subtitle: "x", author: "" })), "A cover without an author isn't told to leave it out.");
+  check(/subtitle/.test(absentCoverLines({ subtitle: "", author: "Uncle David" })) && !/author name/.test(absentCoverLines({ subtitle: "", author: "Uncle David" })), "An absent subtitle is forbidden wrongly, or the author is.");
+  check(absentCoverLines({ subtitle: "x", author: "Uncle David" }) === "", "A cover with every line is told to leave one out.");
+
+  // The check allows for a vision model's loose boxes and its own listing habits.
+  const slightlyOut = { x: safe.x - 0.02, y: 0.3, w: 0.4, h: 0.1 };
+  check(judgeLettering(EXPECTED, reading({ title: { found: true, text: "THE BLANKET FORT", box: slightlyOut } }), safe).ok, "A box a hair past the safe area fails the cover.");
+  check(judgeLettering(EXPECTED, reading({}, ["Uncle", "by", "Bedtime Story"]), safe).ok, "The cover's own words listed as extra text fail it.");
+  const stray = judgeLettering(EXPECTED, reading({}, ["Ab"]), safe);
+  check(!stray.ok && stray.blocking.length === 0, "A stray mark blocks the cover.");
+  const misspelled = judgeLettering(EXPECTED, reading({ title: { found: true, text: "The Blanket Frot", box: inside } }), safe);
+  check(misspelled.blocking.length === 1, "A misspelled title doesn't block the cover.");
+  const margin = coverMarginPercent(safe);
+  check(Number.isInteger(margin) && margin >= Math.ceil(safe.x * 100), "The prompt asks for less margin than the check requires.");
 }
 
 // --- Redraw, then fall back ----------------------------------------------------------------------------
 
 async function lettering(
   readings: (LetteringReading | null)[],
-  options: { check?: boolean; deadlineMs?: number; maxDraws?: number } = {},
+  options: { check?: boolean; deadlineMs?: number; maxDraws?: number; failDraw?: number } = {},
 ) {
   const spread = coverSpread(COVER_FRONT_ID, getCursor(book().screenplay!).content.frontCover!, withCover(book(), EXPECTED_CHOICE));
   const draws: boolean[] = [];
@@ -249,6 +273,7 @@ async function lettering(
       deadlineMs: options.deadlineMs,
       maxDraws: options.maxDraws,
       draw: async (bake, attempt) => {
+        if (attempt.number === options.failDraw) throw new Error("the provider hiccuped");
         draws.push(bake);
         told.push(attempt.problems);
         return { prompt: bake ? "with words" : "plain", image: { base64: "", mimeType: "image/png", model: "fake" } };
@@ -276,11 +301,36 @@ async function checkLetteringLoop(): Promise<void> {
   const third = await lettering([bad, bad, bad, good]);
   check(third.draws.join() === "true,true,true,true" && third.result?.lettering?.outcome === "passed", `A cover that takes four paintings isn't delivered (draws: ${third.draws.join()}).`);
 
-  // A cover that never comes out right is not delivered: not plain, not wrong.
+  // A cover that never comes out right is never delivered wrong, and never fails
+  // for it either: it is drawn once more without words, which go on as text.
   const never = await lettering([bad, bad, bad, bad, bad]);
-  check(never.result === undefined && never.error instanceof ProviderError && never.error.kind === "lettering", "A cover that never passes is delivered anyway.");
-  check(never.draws.length === 4 && never.draws.every((bake) => bake), `A failing cover is drawn without its words (draws: ${never.draws.join()}).`);
-  check(!never.error || !((never.error as ProviderError).retryable), "A lettering failure is retried as if the provider had hiccuped.");
+  check(never.error === undefined, `A cover that never passes ends in an error (${String(never.error)}).`);
+  check(never.draws.join() === "true,true,true,true,false", `A failing cover isn't drawn plain after its paintings (draws: ${never.draws.join()}).`);
+  check(never.told[4]?.length === 0, "The plain cover is told about the lettering that failed.");
+  check(
+    never.result?.textMode === "overlay" && never.result.bakedText === undefined && never.result.lettering?.outcome === "fellBack",
+    "A cover that fell back still claims painted words.",
+  );
+  check(never.result?.lettering?.attempts === 4 && (never.result.lettering.problems?.length ?? 0) > 0, "A fallen-back cover doesn't record why.");
+
+  // Words all right, one line near the edge: delivered as it is, after at most one more try.
+  const edge = reading({ author: { found: true, text: "by Uncle David", box: { x: 0, y: 0.3, w: 0.5, h: 0.1 } } });
+  check(judgeLettering(EXPECTED, edge, safe).blocking.length === 0, "A line near the edge blocks the cover.");
+  const soft = await lettering([edge, edge, edge, edge]);
+  check(
+    soft.draws.join() === "true,true" && soft.result?.lettering?.outcome === "accepted" && soft.result.textMode === "in-image",
+    `A cover with only a placement problem isn't delivered painted (draws: ${soft.draws.join()}).`,
+  );
+  const softThenGood = await lettering([edge, good]);
+  check(softThenGood.result?.lettering?.outcome === "passed", "A better painting after a placement problem isn't taken.");
+  const softThenBad = await lettering([edge, bad]);
+  check(softThenBad.result?.lettering?.outcome === "accepted" && softThenBad.draws.length === 2, "A worse repainting replaces a deliverable cover.");
+
+  // A repainting that fails (a throttle, a timeout) doesn't lose a painting that could be delivered.
+  const throttled = await lettering([edge], { failDraw: 2 });
+  check(throttled.error === undefined && throttled.result?.lettering?.outcome === "accepted", "A failed repainting loses the cover already painted.");
+  const lost = await lettering([bad], { failDraw: 2 });
+  check(lost.error !== undefined, "A failed repainting with nothing to deliver is swallowed.");
 
   const unchecked = await lettering([null]);
   check(unchecked.draws.length === 1 && unchecked.result?.lettering?.outcome === "unchecked", "A check that can't run costs a redraw.");
@@ -288,11 +338,16 @@ async function checkLetteringLoop(): Promise<void> {
   const masked = await lettering([bad], { check: false });
   check(masked.reads === 0 && masked.result?.textMode === "in-image", "A masked touch-up is read back.");
 
+  // No time even for the way out: the task is tried again, never delivered wrong.
   const late = await lettering([bad], { deadlineMs: -1 });
-  check(late.draws.length === 1 && late.error instanceof ProviderError, "A wrong cover past the deadline is shipped.");
+  check(
+    late.draws.length === 1 && late.error instanceof ProviderError && late.error.kind === "lettering" && late.error.retryable,
+    "A wrong cover past the deadline is shipped, or can't be retried.",
+  );
 
+  // With time for one painting and the way out, but not two paintings.
   const capped = await lettering([bad, bad, bad], { maxDraws: 2 });
-  check(capped.draws.length === 2 && capped.error instanceof ProviderError, "The number of paintings isn't capped.");
+  check(capped.draws.join() === "true,true,false", `The number of paintings isn't capped (draws: ${capped.draws.join()}).`);
 
   const render = {
     blobId: "b2",

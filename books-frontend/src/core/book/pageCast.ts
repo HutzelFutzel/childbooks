@@ -32,7 +32,13 @@ export function anchorsNamedIn(text: string, anchors: readonly Anchor[] | undefi
 export function anchorByName(name: string, anchors: readonly Anchor[] | undefined): Anchor | null {
   const key = normalizeAnchorName(name);
   if (!key) return null;
-  return (anchors ?? []).find((anchor) => anchorNameKeys(anchor).includes(key)) ?? null;
+  const find = (wanted: string) => (anchors ?? []).find((anchor) => anchorNameKeys(anchor).includes(wanted)) ?? null;
+  const exact = find(key);
+  if (exact) return exact;
+  // The reader's own possessive ("Hugos", "Hugo's") still means the person, when nobody is named that.
+  const bare = key.replace(/['’]s$/u, "");
+  if (bare !== key) return find(bare);
+  return key.length > 3 && key.endsWith("s") ? find(key.slice(0, -1)) : null;
 }
 
 type Listed = Pick<CoverSpec, "anchorIds" | "anchorNames">;

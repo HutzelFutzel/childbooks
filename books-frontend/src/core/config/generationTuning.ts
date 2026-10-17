@@ -123,6 +123,14 @@ export const generationTuningConfigSchema = z.object({
   }
 });
 
+/**
+ * Most reference images a front or back cover sends. A cover shows its few main
+ * characters and one place, and every extra sheet slows the painting that the
+ * lettering check may ask to be repeated. Applied to stored settings too, so an
+ * old "send everything" value can't slow covers down.
+ */
+export const COVER_MAX_REFERENCE_IMAGES = 6;
+
 function actionDefaults(
   action: ImageActionId,
 ): ActionGenerationTuning {
@@ -135,7 +143,7 @@ function actionDefaults(
     outputCompression: null,
     retries: 1,
     references: {
-      maxImages: 64,
+      maxImages: cover ? COVER_MAX_REFERENCE_IMAGES : 64,
       maxDimension: 1024,
       encodingQuality: 80,
     },
@@ -193,6 +201,12 @@ export function normalizeGenerationTuningConfig(
         ...(stored?.qualityControl ?? {}),
       },
     };
+    if (action === "coverIllustration") {
+      actions[action].references.maxImages = Math.min(
+        actions[action].references.maxImages,
+        COVER_MAX_REFERENCE_IMAGES,
+      );
+    }
   }
 
   const parsed = generationTuningConfigSchema.safeParse({

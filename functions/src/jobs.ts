@@ -221,6 +221,12 @@ const COVER_TASK_BUDGET_MS = 18 * 60_000;
 /** An attempt that cannot get at least this long is not started. */
 const MIN_ATTEMPT_MS = 45_000;
 /**
+ * The same for the front cover, whose one painting alone takes one to three
+ * minutes before its words are read back: an attempt started with less than
+ * this is cut off mid-painting, paid for and thrown away.
+ */
+const COVER_MIN_ATTEMPT_MS = 4 * 60_000;
+/**
  * A non-terminal job whose `updatedAt` is older than this is looked at by the
  * reaper. Just above the task lease, so a worker that died is noticed on the
  * first sweep after its lease lapses.
@@ -309,6 +315,11 @@ function withTaskTimeout(ms: number): { signal: AbortSignal; done: () => void; a
 /** How long one attempt at this task may run. */
 function attemptTimeoutMs(taskId: string): number {
   return taskId === COVER_FRONT_ID ? COVER_TASK_TIMEOUT_MS : TASK_TIMEOUT_MS;
+}
+
+/** The least time an attempt at this task must have to be worth starting. */
+function minAttemptMs(taskId: string): number {
+  return taskId === COVER_FRONT_ID ? COVER_MIN_ATTEMPT_MS : MIN_ATTEMPT_MS;
 }
 
 /** Everything one wave may spend on this task, all attempts together. */
@@ -484,13 +495,16 @@ async function enqueueTasks(
 ): Promise<void> {
   if (taskIds.length === 0) return;
   const queue = getFunctions().taskQueue(queueForKind(kind));
-  await Promise.all(
-    taskIds.map((taskId) =>
-      queue.enqueue({ uid, jobId, taskId }).catch((err) => {
-        logger.error("[fan] enqueue failed", { jobId, taskId, err: String(err) });
-      }),
-    ),
-  );
+  const send = (taskId: string) =>
+    queue.enqueue({ uid, jobId, taskId }).catch((err) => {
+      logger.error("[fan] enqueue failed", { jobId, taskId, err: String(err) });
+    });
+  // The front cover is the longest, most throttle-prone render in a book and the
+  // one that can least afford to start late, so it goes into the queue first and
+  // is dispatched ahead of the pages queued behind it.
+  const first = taskIds.filter((taskId) => taskId === COVER_FRONT_ID);
+  if (first.length > 0) await Promise.all(first.map(send));
+  await Promise.all(taskIds.filter((taskId) => taskId !== COVER_FRONT_ID).map(send));
 }
 
 // ---------------------------------------------------------------------------
@@ -1610,6 +1624,8 @@ async function renderTask(
   task: TaskDoc,
   tier: ImageTier,
   signal: AbortSignal,
+  /** When this attempt will be cut off (epoch ms), so a render can plan inside it. */
+  deadlineAt?: number,
 ): Promise<{ result: TaskResult; stats: TaskStats }> {
   if (job.kind === "book") {
     const kind = taskKindOf(job, task);
@@ -1617,7 +1633,7 @@ async function renderTask(
     // Sheets drawn earlier in this job aren't in the snapshot yet.
     if (kind === "refresh") await hydrateAnchorDeps(uid, jobId, task, project);
     const view = { ...job, kind, project } as PipelineRefreshJob | AnchorsJob;
-    return renderTask(uid, jobId, view as AnyJob, task, tier, signal);
+    return renderTask(uid, jobId, view as AnyJob, task, tier, signal, deadlineAt);
   }
   if (job.kind === "screenplay") {
     const [model, prompts] = await Promise.all([
@@ -2016,7 +2032,12 @@ async function renderTask(
       renderIllustration(
         project,
         spread,
-        { ...runOptions, ...(regionMask ? { mask: regionMask, useReference: true } : {}), signal },
+        {
+          ...runOptions,
+          ...(regionMask ? { mask: regionMask, useReference: true } : {}),
+          signal,
+          ...(deadlineAt !== undefined ? { deadlineAt } : {}),
+        },
         env,
       ),
     );
@@ -2446,7 +2467,7 @@ async function runClaimedTask(run: ClaimedRun): Promise<void> {
   const attemptNo = task.attempts ?? attempt;
   const remainingMs = taskBudgetMs(taskId) - (Date.now() - (task.firstClaimedAt ?? Date.now()));
   const pastDeadline = typeof job.deadlineAt === "number" && Date.now() > job.deadlineAt;
-  if (attemptNo > TASK_MAX_ATTEMPTS || remainingMs < MIN_ATTEMPT_MS || pastDeadline) {
+  if (attemptNo > TASK_MAX_ATTEMPTS || remainingMs < minAttemptMs(taskId) || pastDeadline) {
     const cause = new ProviderError(
       pastDeadline
         ? DEADLINE_ERROR
@@ -2468,7 +2489,9 @@ async function runClaimedTask(run: ClaimedRun): Promise<void> {
   // `expandJob` validated this and persisted it onto the job doc (guests
   // already downgraded), so this only re-reads a known-good value.
   const tier = normalizeImageTier(job.tier);
-  const timeout = withTaskTimeout(Math.min(attemptTimeoutMs(taskId), remainingMs));
+  const attemptMs = Math.min(attemptTimeoutMs(taskId), remainingMs);
+  const timeout = withTaskTimeout(attemptMs);
+  const attemptDeadlineAt = Date.now() + attemptMs;
   // The lease is only as long as the worker is demonstrably alive. If it is
   // lost, the render is stopped rather than left to spend money on a task
   // someone else now owns.
@@ -2486,7 +2509,7 @@ async function runClaimedTask(run: ClaimedRun): Promise<void> {
   let stats: TaskStats;
   try {
     ({ result, stats } = await runWithSpendLedger(ledger, () =>
-      runWithCarriedCost(carry, () => renderTask(uid, jobId, job, task, tier, timeout.signal)),
+      runWithCarriedCost(carry, () => renderTask(uid, jobId, job, task, tier, timeout.signal, attemptDeadlineAt)),
     ));
   } catch (err) {
     stopHeartbeat();

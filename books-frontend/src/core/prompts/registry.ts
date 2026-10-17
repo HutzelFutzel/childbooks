@@ -521,7 +521,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     user: [
       blk(
         "ask",
-        'The cover was meant to carry exactly these lines:\n{{expected}}\n\nFor each of "title", "subtitle" and "author", return {"found", "text", "x", "y", "width", "height"}: "text" is what is ACTUALLY painted for that line (join a line broken over several rows with spaces), and the box is the tightest rectangle around all of it. Set "found": false when that line is not on the cover. Put any other writing you can see — stray letters, labels, signatures, gibberish — in "other" as a list of strings (empty when there is none). Return {"title": {...}, "subtitle": {...}, "author": {...}, "other": [...]}.',
+        'The cover was meant to carry exactly these lines:\n{{expected}}\n\nFor each of "title", "subtitle" and "author", return {"found", "text", "x", "y", "width", "height"}: "text" is what is ACTUALLY painted for that line (join a line broken over several rows with spaces), and the box is the tightest rectangle around all of it. Set "found": false when that line is not on the cover. A line marked NONE must come back "found": false; if a name, a "by …" credit or a tagline is painted there anyway, report it as that line with "found": true and its text. Put any other writing you can see — stray letters, labels, signatures, gibberish — in "other" as a list of strings (empty when there is none). Return {"title": {...}, "subtitle": {...}, "author": {...}, "other": [...]}.',
       ),
     ],
   },
@@ -1257,7 +1257,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "bakeText",
-        "Render {{bakeTextInstruction}} as beautiful, legible cover typography integrated into the artwork — well composed and high contrast against the background. The title is the largest line; the subtitle sits close to it in a smaller size; the author line is smaller still, usually at the top or bottom. Keep ALL text comfortably inside the central safe area, well away from the outer trim edges (roughly a 12% margin), because the outer edge may be trimmed during printing — nothing readable should touch or run off the edge. Spell every word EXACTLY as written, letter for letter, including accents and capitals as given, and write each line once. Write NO other words, letters or numbers anywhere — no \"by\" unless it is part of the author line, no series name, no publisher.",
+        "Render {{bakeTextInstruction}} as beautiful, legible cover typography integrated into the artwork — well composed and high contrast against the background. The title is the largest line; a subtitle, only if one is listed, sits close to it in a smaller size; an author line, only if one is listed, is smaller still, usually at the top or bottom. Keep ALL text comfortably inside the central safe area: every letter at least {{coverMarginPercent}}% of the image's width (and of its height) in from each edge, because the outer edge is trimmed during printing — nothing readable should touch or run off the edge, and a line that is long should be set smaller or broken over two rows rather than pushed toward an edge. Spell every word EXACTLY as written, letter for letter, including accents and capitals as given, and write each line once. Write NO other words, letters or numbers anywhere — never an author name or a \"by …\" line unless it is listed above, no series name, no publisher, no tagline.",
         "bakeText",
       ),
       blk(
@@ -2409,6 +2409,11 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("subjectInsetFraction", "The same margin as a fraction word.", "twentieth"),
           V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE),
           V("bakeTextInstruction", "Cover typography to render into the art.", 'the title "Mila\'s Big Day"'),
+          V(
+            "coverMarginPercent",
+            "How far in from each edge painted cover words must stay, as a whole percent — from the book's binding.",
+            "12",
+          ),
           V("edit", "Revision instruction.", "make it night-time"),
           V("refreshClause", "Appended when subjects also need refreshing.", ""),
           V("changedClause", "Appended when subjects changed (no-edit refresh).", ""),

@@ -140,6 +140,8 @@ export interface BuildIllustrationPromptInput {
   coverSubtitle?: string;
   /** Author line to bake into the cover art (optional). */
   coverAuthor?: string;
+  /** How far in from each edge painted cover words must stay, in whole percent. */
+  coverMarginPercent?: number;
   /**
    * Whether this render is a front/back cover — adds a strong "no barcode / QR /
    * logo / badge" negative (image models tend to invent one on covers, and it's
@@ -192,6 +194,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     coverTitle,
     coverSubtitle,
     coverAuthor,
+    coverMarginPercent = 12,
     isCover = false,
     edit,
     prompts,
@@ -329,7 +332,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   // it used to reach the image model at all.
   const audience = resolveAudienceOverlays(config.ageRangeId, config.readingModeId, prompts);
 
-  return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/default", {
+  const prompt = renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/default", {
     vars: {
       illustrationBrief: spread.illustration.trim(),
       ageVisualGuidance: audience.illustration,
@@ -350,6 +353,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       subjectInsetFraction: insetWords.fraction,
       artStyle: styleText,
       bakeTextInstruction,
+      coverMarginPercent: String(coverMarginPercent),
       edit: edit?.trim() ?? "",
       refreshClause,
       changedClause,
@@ -404,6 +408,29 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       tailPlainEdit,
     },
   });
+  if (!bakeTextActive) return prompt;
+  const absent = absentCoverLines({ subtitle: coverSubtitle, author: coverAuthor });
+  return absent ? `${prompt}\n\n${absent}` : prompt;
+}
+
+/**
+ * What a painted cover is told about the lines it does NOT have. Image models
+ * dress a cover up with what covers usually carry, and a made-up "by …" name is
+ * the usual one, so an absent line is named and forbidden rather than left
+ * unsaid. Appended in code, so it holds whatever the stored prompt says.
+ * Empty when every line has words.
+ */
+export function absentCoverLines(lines: { subtitle?: string; author?: string }): string {
+  const missing: string[] = [];
+  if (!(lines.subtitle ?? "").trim()) missing.push("a subtitle or tagline");
+  if (!(lines.author ?? "").trim()) {
+    missing.push("an author name, a byline, a \"by …\" line, an illustrator credit or a publisher");
+  }
+  if (missing.length === 0) return "";
+  return (
+    `This cover has NO ${missing.join(" and NO ")}. Do not write ${missing.length > 1 ? "any of them" : "it"}, ` +
+    "and never invent a name or a phrase to fill that place: leave it as plain artwork. The cover carries only the lines listed above."
+  );
 }
 
 /**

@@ -846,13 +846,16 @@ export interface IllustrationImage extends AnchorImage {
   bakedText?: BakedCoverText;
   /**
    * Cover-only: what the lettering check read. `passed`: every word spelled
-   * right, inside the safe area. `unchecked`: the check could not run.
-   * `fellBack` and `failed` are only found on covers drawn before a cover that
-   * never passed its reading stopped being delivered at all: a cover without
-   * its painted words, or with wrong ones, is no longer an outcome.
+   * right, inside the safe area. `accepted`: every word spelled right, but a
+   * line sat a little close to the edge or a stray mark was painted, and no
+   * further painting did better (see `problems`). `fellBack`: no painting came
+   * out right, so the cover was drawn without words and they are set as text
+   * on top (`textMode` is then `overlay`). `unchecked`: the check could not
+   * run. `failed` is only found on covers drawn before this: a cover with
+   * wrong words is never delivered.
    */
   lettering?: {
-    outcome: "passed" | "fellBack" | "failed" | "unchecked";
+    outcome: "passed" | "accepted" | "fellBack" | "failed" | "unchecked";
     attempts: number;
     problems?: string[];
   };
