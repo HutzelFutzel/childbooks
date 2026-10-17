@@ -141,11 +141,6 @@ function sampleFor(id: StoryDetailId, project: Project): DetailPatch {
     check(STORY_DETAIL_POLICIES.includes(defaults.details[id]), `Story detail ${id} has no default policy.`);
     check(Boolean(enBrief.fields?.[id]), `Story detail ${id} has no English label (guide.brief.fields).`);
     check(Boolean(deBrief.fields?.[id]), `Story detail ${id} has no German label (guide.brief.fields).`);
-    const takesWords = def.kind === "text" || (def.ownWords && def.kind !== "toggle");
-    if (takesWords) {
-      check(Boolean(enBrief.examples?.[id]), `Story detail ${id} takes the parent's words but has no English example for its field.`);
-      check(Boolean(deBrief.examples?.[id]), `Story detail ${id} takes the parent's words but has no German example for its field.`);
-    }
     // Fixed lists are labeled in the UI language; catalog ones use the admin's own labels.
     const fixed = def.options({ themes: [], settings: [], devices: [] });
     for (const option of fixed) {
@@ -159,7 +154,7 @@ function sampleFor(id: StoryDetailId, project: Project): DetailPatch {
     const line = detailPromptLines(brief, craftOf(project), []);
     check(line.trim().length > 0, `Story detail ${id} set on a book adds nothing to the draft prompt.`);
   }
-  for (const section of ["fields", "examples", "title", "hint", "status", "ownWords", "ownWordsHint", "add", "cancel", "remove"]) {
+  for (const section of ["fields", "title", "hint", "status", "bedtimeHint", "typeBelowHint", "cancel", "remove"]) {
     check(section in enBrief && section in deBrief, `guide.brief.${section} is missing in English or German.`);
   }
   const flat = (value: unknown): string[] =>

@@ -38,12 +38,32 @@ import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import type { GuideTurnResult } from "../../books-frontend/src/core/pipeline/guideInterpret";
 import type { ModelSelection } from "../../books-frontend/src/core/types";
+import { cleanEventDetail, type GuideEventKind } from "../../books-frontend/src/core/guide/events";
 
 /** 90 days: long enough to explain a complaint, short enough not to hoard. */
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 /** Cap on stored text, so one pasted novel can't bloat the collection. */
 const MAX_TEXT = 4000;
+
+/** Cap on one stored claim value, measured as JSON. */
+const MAX_VALUE_JSON = 1500;
+
+/**
+ * A claim's value in a form Firestore will take: JSON-round-tripped (drops
+ * `undefined`, which Firestore rejects outright and which would fail the WHOLE
+ * turn write), and bounded. Anything too large or unserialisable becomes `null`
+ * — the claim is still logged with its evidence, just without the value.
+ */
+function storableValue(value: unknown): unknown {
+  try {
+    const json = JSON.stringify(value);
+    if (json === undefined || json.length > MAX_VALUE_JSON) return null;
+    return JSON.parse(json) as unknown;
+  } catch {
+    return null;
+  }
+}
 
 export interface RecordGuideTurnArgs {
   uid: string;
@@ -96,6 +116,11 @@ export async function recordGuideTurn(args: RecordGuideTurnArgs): Promise<string
        */
       claims: args.result.claims.slice(0, 24).map((claim) => ({
         slot: claim.slot,
+        // What the model proposed writing. Without it a row cannot be replayed or
+        // promoted into the evaluation corpus — the admin's "add as reviewed
+        // example" needs exactly this — and `op` is always a plain set.
+        value: storableValue(claim.value),
+        op: "set",
         evidence: claim.evidence.slice(0, 400),
         confidence: claim.confidence,
       })),
@@ -185,4 +210,69 @@ export async function recordGuideTurnOutcome(args: {
       },
       { merge: true },
     );
+}
+
+// ---- Everything that is not a typed message ----------------------------------
+
+/**
+ * Per-instance ceiling on events per user per minute.
+ *
+ * The route is unmetered and each call is a write we pay for, so one runaway
+ * client (a render loop, someone poking the endpoint) must not be able to turn
+ * telemetry into a bill. Per instance and in memory — approximate across a scaled
+ * fleet, which is fine for a ceiling that only has to stop abuse, not count.
+ */
+const EVENTS_PER_MINUTE = 90;
+const eventWindow = new Map<string, { start: number; count: number }>();
+
+function underEventLimit(uid: string, now: number): boolean {
+  const entry = eventWindow.get(uid);
+  if (!entry || now - entry.start >= 60_000) {
+    // Opportunistic cleanup so the map can't grow with every uid ever seen.
+    if (eventWindow.size > 5000) {
+      for (const [key, value] of eventWindow) if (now - value.start >= 60_000) eventWindow.delete(key);
+    }
+    eventWindow.set(uid, { start: now, count: 1 });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= EVENTS_PER_MINUTE;
+}
+
+export interface RecordGuideEventArgs {
+  uid: string;
+  projectId: string;
+  kind: GuideEventKind;
+  detail?: unknown;
+}
+
+/**
+ * Append one non-message interaction to the user's own event log.
+ *
+ * Same shape of promise as the turn log — backend-only writes, owner-readable,
+ * TTL'd on `expiresAt` (a `Timestamp`, for the same reason as there), erased with
+ * the user tree. Returns false when it was dropped for rate, so the route can say
+ * so; a drop is never an error to the reader.
+ *
+ * `detail` is cleaned by {@link cleanEventDetail}: flat scalars only, bounded. The
+ * log is for counting and sequencing what people DO, so there is no field in it
+ * that could hold what they WROTE — that belongs to the turn log, which already
+ * has its own retention and reasons.
+ */
+export async function recordGuideEvent(args: RecordGuideEventArgs): Promise<boolean> {
+  const now = Date.now();
+  if (!underEventLimit(args.uid, now)) return false;
+  ensureAdmin();
+  const eventId = randomUUID();
+  await getFirestore()
+    .doc(`users/${args.uid}/guideEvents/${eventId}`)
+    .set({
+      eventId,
+      projectId: args.projectId.slice(0, 200),
+      kind: args.kind,
+      detail: cleanEventDetail(args.detail),
+      createdAt: now,
+      expiresAt: new Date(now + RETENTION_MS),
+    });
+  return true;
 }

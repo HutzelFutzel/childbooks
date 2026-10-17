@@ -66,7 +66,8 @@ export type BrandAssetSlot =
   | "defaultCoverBackWide"
   | "defaultCoverFrontPortrait"
   | "defaultCoverBackPortrait"
-  | "backCoverLogo";
+  | "backCoverLogo"
+  | "guideAvatar";
 
 export const BRAND_ASSET_SLOTS: BrandAssetSlot[] = [
   "logo",
@@ -81,6 +82,7 @@ export const BRAND_ASSET_SLOTS: BrandAssetSlot[] = [
   "defaultCoverFrontPortrait",
   "defaultCoverBackPortrait",
   "backCoverLogo",
+  "guideAvatar",
 ];
 
 /** Brand colors (hex). `primary` also drives the browser theme color. */
@@ -125,6 +127,8 @@ export interface BrandingConfig {
    * on the server, so nothing the customer does in the studio can take it off.
    */
   backCoverLogo: BrandAsset | null;
+  /** Profile picture of the guide character in the Chat studio. */
+  guideAvatar: BrandAsset | null;
   /**
    * Fixed edge of {@link backCoverLogo}, in centimetres. Landscape logos
    * (wider than tall) get this as their *height*; portrait / square logos get
@@ -171,6 +175,7 @@ export function createDefaultBrandingConfig(): BrandingConfig {
     defaultCoverFrontPortrait: null,
     defaultCoverBackPortrait: null,
     backCoverLogo: null,
+    guideAvatar: null,
     backCoverLogoSizeCm: DEFAULT_BACK_COVER_LOGO_SIZE_CM,
     colors: { primary: "#f96a4d", accent: "#f79b04" },
     watermark: null,
@@ -282,6 +287,7 @@ export function normalizeBrandingConfig(input: unknown): BrandingConfig {
     defaultCoverFrontPortrait: normalizeAsset(b.defaultCoverFrontPortrait),
     defaultCoverBackPortrait: normalizeAsset(b.defaultCoverBackPortrait),
     backCoverLogo: normalizeAsset(b.backCoverLogo),
+    guideAvatar: normalizeAsset(b.guideAvatar),
     backCoverLogoSizeCm: clamp(
       b.backCoverLogoSizeCm,
       MIN_BACK_COVER_LOGO_SIZE_CM,

@@ -8,7 +8,7 @@
 import { storyTextHash } from "../../../story/revision";
 import type { Project } from "../../../types";
 import { hasEarlier } from "../../history";
-import { journeyEntry } from "../../journey";
+import { journeyEntry, storyBegun } from "../../journey";
 import { authoringOf } from "../../projectState";
 import { portraitStatus } from "../../portrait";
 import type { GuideMessage } from "../../session";
@@ -21,12 +21,14 @@ type Vars = { name?: string } | null;
 const FIT_CHECK_MIN_CHARS = 120;
 
 export const whenStory = (p: Project): Vars => (p.config.storyText.trim().length > 0 ? {} : null);
-export const whenNoStory = (p: Project): Vars => (p.config.storyText.trim().length === 0 ? {} : null);
+export const whenNoStory = (p: Project): Vars => (!storyBegun(p) ? {} : null);
 export const whenStoryToChange = (p: Project): Vars => (p.config.storyText.trim().length >= 20 ? {} : null);
 export const whenLongStory = (p: Project): Vars => (p.config.storyText.trim().length > 200 ? {} : null);
 
 export const whenCast = (p: Project): Vars => (castOf(p).length > 0 ? {} : null);
 export const whenSeveralPeople = (p: Project): Vars => (castOf(p).length > 1 ? {} : null);
+export const whenPlace = (p: Project): Vars =>
+  (p.anchors ?? []).some((a) => a.include !== false && (a.type === "place" || a.type === "object")) ? {} : null;
 
 /** The first character, by name. */
 export function whenNamedPerson(p: Project): Vars {
@@ -92,6 +94,6 @@ export function whenBookSetUp(p: Project): Vars {
   return setup?.formatConfirmedAt || setup?.layoutConfirmedAt ? {} : null;
 }
 
-/** The guide is writing the story with the reader and none exists yet, so writing it themselves is still open. */
+/** The guide is writing the story with the reader and none has started yet, so writing it themselves is still open. */
 export const whenCanWriteMyself = (p: Project): Vars =>
-  journeyEntry(p) === "guided" && p.config.storyText.trim().length === 0 ? {} : null;
+  journeyEntry(p) === "guided" && !storyBegun(p) ? {} : null;

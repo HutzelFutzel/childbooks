@@ -356,9 +356,14 @@ function findByName(cast: StoryCastMember[], name: string): StoryCastMember | un
   return cast.find((member) => member.name.trim().toLowerCase() === key);
 }
 
+/** Whether the story is being written or has already been written. */
+function storyLockedForSetup(project: Project): boolean {
+  return authoringOf(project).storyRun?.status === "running" || Boolean(project.config.storyText?.trim());
+}
+
 const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
   storyMode: writer(
-    '"guided" (we write it) | "co-write" (their details, our words) | "own" (they write it)',
+    '"guided" (we write it) | "co-write" (their details, our words) | "own" (they write it) — only before the story is written',
     z.enum(["guided", "co-write", "own"]),
     (project, mode) => {
       const brief = briefOf(project.config);
@@ -368,6 +373,11 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       // like a no-op, writes nothing, and the guide asks the same question forever.
       // The absence of a persisted brief is itself the change worth writing.
       if (project.config.storyBrief && brief.mode === mode) return UNCHANGED;
+      if (storyLockedForSetup(project)) {
+        return refused("the story mode cannot change once the story is being written or has been written", {
+          speak: "The story is already underway, so the writing mode stays as it is.",
+        });
+      }
       return wrote(withBrief(project, { ...brief, mode }));
     },
     // Only once a brief exists: see the note on `capture` about defaults.
@@ -840,7 +850,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
   ),
 
   language: writer(
-    () => `${idList(BOOK_LANGUAGES.map((language) => language.id))} — the language the BOOK is written in`,
+    () => `${idList(BOOK_LANGUAGES.map((language) => language.id))} — the language the BOOK is written in (only before the story is written)`,
     z.string().min(2).max(35),
     (project, locale) => {
       // Restating the book's own value is always a no-op — see the note on `audience`.
@@ -849,6 +859,12 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         return refused(`unknown book language "${locale}"`, {
           speak: "I can't write the book in that language yet.",
           allowed: BOOK_LANGUAGES.map((language) => language.id),
+        });
+      }
+      if (storyLockedForSetup(project)) {
+        return refused("the book language cannot change once the story is being written or has been written", {
+          speak: "The story is already written, so to change the language, start a new book.",
+          reroute: { command: "setBookLanguage", args: { language: locale } },
         });
       }
       return wrote(withConfig(project, { contentLocale: locale }));

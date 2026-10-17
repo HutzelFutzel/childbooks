@@ -2,12 +2,12 @@
 
 /**
  * The story card: optional details before the first draft, and "Write the
- * story". Choices are taps. A detail in the parent's own words is typed right
- * here, in a small field under the chips, and saved as it is: the card never
- * sends the parent down to the message field and back.
+ * story". It is tap-only: toggles and choice trays stay right on the card, and
+ * anything in the parent's own words is typed in the chat composer below, which
+ * is the one place to type. The card never has an input of its own.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Check, Moon, Plus, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, MessageSquareText, Moon, X } from "lucide-react";
 import { resolveStoryCraft } from "../../../core/config/storyCraft";
 import { offeredDetails } from "../../../core/guide/briefPolicy";
 import {
@@ -38,12 +38,13 @@ export function StoryBriefWell({
   const storyCraft = useAppConfigStore((s) => s.storyCraft);
   const setDetail = useChatStudio((s) => s.setStoryDetail);
   const startStory = useChatStudio((s) => s.startStory);
-  const [open, setOpen] = useState<StoryDetailId | null>(focus);
-  /** The detail being typed in the parent's own words. */
-  const [writing, setWriting] = useState<StoryDetailId | null>(null);
+  const [open, setOpen] = useState<StoryDetailId | null>(() =>
+    focus && STORY_DETAILS[focus].kind !== "text" && STORY_DETAILS[focus].kind !== "toggle" ? focus : null,
+  );
   useEffect(() => {
-    setOpen(focus);
-    setWriting(null);
+    setOpen(
+      focus && STORY_DETAILS[focus].kind !== "text" && STORY_DETAILS[focus].kind !== "toggle" ? focus : null,
+    );
   }, [focus]);
 
   const craft = useMemo(
@@ -52,7 +53,19 @@ export function StoryBriefWell({
   );
   const brief = briefOf(project.config);
   const chosen = filledDetails(brief);
-  const offered = offeredDetails(config).filter((id) => !chosen.includes(id));
+  const allOffered = offeredDetails(config);
+  // Toggles get their own dedicated switch row; choice pills (with dropdown trays) sit in the pill grid.
+  const toggleOffered = allOffered.filter((id) => STORY_DETAILS[id].kind === "toggle");
+  const choiceOffered = allOffered.filter((id) => {
+    const kind = STORY_DETAILS[id].kind;
+    if (kind === "text" || kind === "toggle") return false;
+    return !chosen.includes(id);
+  });
+  // Text-only details ("Favorite things", "Anything else", "Leave out"…) are
+  // explained as a single quiet hint pointing to the chat composer below,
+  // instead of spawning separate mini-inputs.
+  const textOffered = allOffered.filter((id) => STORY_DETAILS[id].kind === "text" && !chosen.includes(id));
+  const chosenNonToggle = chosen.filter((id) => STORY_DETAILS[id].kind !== "toggle");
 
   const optionLabel = (id: StoryDetailId, optionId: string): string => {
     const key = `options.${id}.${optionId}`;
@@ -64,26 +77,22 @@ export function StoryBriefWell({
     if (!value || STORY_DETAILS[id].kind === "toggle") return "";
     return [...(value.ids ?? []).map((optionId) => optionLabel(id, optionId)), ...(value.text ? [value.text] : [])].join(", ");
   };
-  const ownWords = (id: StoryDetailId) => {
-    setOpen(null);
-    setWriting(id);
+  const focusComposer = () => {
+    useChatStudio.setState((state) => ({ composerFocus: state.composerFocus + 1 }));
   };
   const pick = (id: StoryDetailId) => {
     const def = STORY_DETAILS[id];
-    setWriting(null);
-    if (def.kind === "toggle") void setDetail(id, { on: true });
-    else if (def.kind === "text") ownWords(id);
-    else setOpen(open === id ? null : id);
+    if (def.kind === "toggle") {
+      const isOn = chosen.includes(id);
+      void setDetail(id, isOn ? null : { on: true });
+    } else if (def.kind === "text") {
+      focusComposer();
+    } else {
+      setOpen(open === id ? null : id);
+    }
   };
 
   const tap = useChatStudio((s) => s.tap);
-  const saveOwnWords = (id: StoryDetailId, text: string) => {
-    setWriting(null);
-    void tap(`${t(`fields.${id}`)}: ${text}`, () => setDetail(id, { text }), {
-      undoable: true,
-      reply: [{ key: "briefMore", priority: "question" }],
-    });
-  };
   const write = () => void tap(label("writeStory"), startStory);
   const start = useRef(write);
   start.current = write;
@@ -94,37 +103,42 @@ export function StoryBriefWell({
 
   return (
     <div className="flex w-full flex-col gap-3">
-      <p className="px-1 text-sm leading-snug text-ink-600">{t("hint")}</p>
+      <p className="px-0.5 text-sm leading-snug text-ink-600">{t("hint")}</p>
 
-      {chosen.length > 0 && (
+      {chosenNonToggle.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {chosen.map((id) => {
+          {chosenNonToggle.map((id) => {
             const field = t(`fields.${id}`);
             const text = valueText(id);
             const kind = STORY_DETAILS[id].kind;
-            const editable = kind !== "toggle";
             return (
               <span
                 key={id}
                 className={cn(
-                  "inline-flex max-w-full items-center rounded-full bg-ink-900/5 text-xs text-ink-800 ring-1 ring-ink-900/10",
-                  open === id && "ring-ink-400",
+                  "inline-flex max-w-full items-center rounded-full bg-magic-50/80 text-xs text-ink-900 ring-1 ring-magic-300/70 shadow-2xs",
+                  open === id && "ring-2 ring-magic-500",
                 )}
               >
-                <button
-                  type="button"
-                  disabled={!editable}
-                  onClick={() => (kind === "text" ? ownWords(id) : (setWriting(null), setOpen(open === id ? null : id)))}
-                  className="min-w-0 truncate py-1.5 pl-3 text-left focus-visible:outline-none enabled:hover:text-ink-900"
-                >
-                  <span className="font-medium">{field}</span>
-                  {text && <span className="text-ink-600">: {text}</span>}
-                </button>
+                {kind === "text" ? (
+                  <span className="min-w-0 truncate py-1.5 pl-3 text-left">
+                    <span className="font-semibold text-magic-900">{field}</span>
+                    {text && <span className="text-ink-700">: {text}</span>}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setOpen(open === id ? null : id)}
+                    className="min-w-0 truncate py-1.5 pl-3 text-left focus-visible:outline-none hover:text-magic-800"
+                  >
+                    <span className="font-semibold text-magic-900">{field}</span>
+                    {text && <span className="text-ink-700">: {text}</span>}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => void setDetail(id, null)}
                   aria-label={t("remove", { label: field })}
-                  className="ml-0.5 mr-1 rounded-full p-1 text-ink-400 transition hover:bg-ink-900/10 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
+                  className="ml-0.5 mr-1 rounded-full p-1 text-ink-400 transition hover:bg-magic-200/50 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
                 >
                   <X className="size-3" aria-hidden />
                 </button>
@@ -134,44 +148,109 @@ export function StoryBriefWell({
         </div>
       )}
 
-      {offered.length > 0 && (
+      {choiceOffered.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {offered.map((id) => (
-            <button
-              key={id}
-              type="button"
-              aria-expanded={STORY_DETAILS[id].kind === "toggle" ? undefined : open === id || writing === id}
-              onClick={() => pick(id)}
-              className={cn(
-                "inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs text-ink-700 ring-1 ring-ink-200 transition hover:text-ink-900 hover:ring-ink-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
-                (open === id || writing === id) && "text-ink-900 ring-ink-500",
-              )}
-            >
-              {id === "bedtime" ? <Moon className="size-3" aria-hidden /> : <Plus className="size-3" aria-hidden />}
-              {t(`fields.${id}`)}
-            </button>
-          ))}
+          {choiceOffered.map((id) => {
+            const isOpen = open === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-expanded={isOpen}
+                onClick={() => pick(id)}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+                  isOpen
+                    ? "bg-magic-50 text-magic-900 ring-1.5 ring-magic-400"
+                    : "bg-white text-ink-700 shadow-2xs ring-1 ring-ink-200 hover:text-ink-900 hover:ring-ink-400",
+                )}
+              >
+                {t(`fields.${id}`)}
+                <ChevronDown
+                  className={cn("size-3 text-ink-400 transition-transform", isOpen && "rotate-180 text-magic-700")}
+                  aria-hidden
+                />
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {open && !writing && (
-        <DetailOptions id={open} project={project} craft={craft} optionLabel={optionLabel} onOwnWords={() => ownWords(open)} />
-      )}
-      {writing && (
-        <OwnWordsField
-          key={writing}
-          id={writing}
-          initial={cleanDetailValue(STORY_DETAILS[writing].read(brief))?.text ?? ""}
-          onSave={(text) => saveOwnWords(writing, text)}
-          onCancel={() => setWriting(null)}
+      {open && (
+        <DetailOptions
+          id={open}
+          project={project}
+          craft={craft}
+          optionLabel={optionLabel}
+          onDone={() => setOpen(null)}
         />
       )}
 
-      <div className="w-full border-t border-ink-100 pt-3">
+      {toggleOffered.map((id) => {
+        const activeToggle = chosen.includes(id);
+        return (
+          <button
+            key={id}
+            type="button"
+            role="switch"
+            aria-checked={activeToggle}
+            onClick={() => pick(id)}
+            className={cn(
+              "flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left transition active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+              activeToggle
+                ? "bg-magic-50/80 text-ink-900 ring-1 ring-magic-300/80"
+                : "bg-white/90 text-ink-700 ring-1 ring-ink-200/80 hover:bg-white hover:ring-ink-300",
+            )}
+          >
+            <span className="flex min-w-0 items-center gap-2.5">
+              <span
+                className={cn(
+                  "flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors",
+                  activeToggle ? "bg-magic-600 text-white" : "bg-ink-100/80 text-ink-500",
+                )}
+              >
+                {id === "bedtime" ? <Moon className="size-3.5" aria-hidden /> : <Check className="size-3.5" aria-hidden />}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-xs font-semibold text-ink-900">{t(`fields.${id}`)}</span>
+                {id === "bedtime" && (
+                  <span className="block text-[11px] leading-snug text-ink-500">{t("bedtimeHint")}</span>
+                )}
+              </span>
+            </span>
+            <span
+              aria-hidden
+              className={cn(
+                "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors",
+                activeToggle ? "bg-ink-900" : "bg-ink-200",
+              )}
+            >
+              <span
+                className={cn(
+                  "size-4 rounded-full bg-white shadow-2xs transition-transform",
+                  activeToggle && "translate-x-4",
+                )}
+              />
+            </span>
+          </button>
+        );
+      })}
+      {textOffered.length > 0 && (
+        <button
+          type="button"
+          onClick={focusComposer}
+          className="flex w-full items-center gap-2 rounded-xl bg-ink-900/3 px-3 py-2 text-left text-xs leading-snug text-ink-500 ring-1 ring-inset ring-ink-900/5 transition hover:bg-ink-900/5 hover:text-ink-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
+        >
+          <MessageSquareText className="size-3.5 shrink-0 text-ink-400" aria-hidden />
+          <span>{t("typeBelowHint")}</span>
+        </button>
+      )}
+
+      <div className="w-full border-t border-ink-100/90 pt-3">
         <button
           type="button"
           onClick={() => start.current()}
-          className="inline-flex min-h-11 items-center gap-2 rounded-full bg-ink-900 px-5 text-[15px] font-semibold text-white shadow-soft transition hover:bg-ink-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2"
+          className="inline-flex min-h-11 items-center gap-2 rounded-full bg-linear-to-b from-ink-800 to-ink-900 px-5 text-[15px] font-semibold text-white shadow-[0_2px_8px_-2px_rgba(20,22,58,0.28),inset_0_1px_0_rgba(255,255,255,0.16)] ring-1 ring-ink-900 transition hover:-translate-y-0.5 hover:from-ink-700 hover:to-ink-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2"
         >
           {label("writeStory")}
           <ArrowRight className="size-4" aria-hidden />
@@ -181,89 +260,18 @@ export function StoryBriefWell({
   );
 }
 
-/** One detail in the parent's own words, typed in the card. Enter adds it; Escape closes. */
-function OwnWordsField({
-  id,
-  initial,
-  onSave,
-  onCancel,
-}: {
-  id: StoryDetailId;
-  initial: string;
-  onSave: (text: string) => void;
-  onCancel: () => void;
-}) {
-  const t = useGuideT("brief");
-  const [text, setText] = useState(initial);
-  const field = useRef<HTMLInputElement>(null);
-  useEffect(() => field.current?.focus({ preventScroll: true }), []);
-  const example = t.has(`examples.${id}`) ? t(`examples.${id}`) : "";
-  const save = () => {
-    const value = text.trim().slice(0, 500);
-    if (value && value !== initial.trim()) onSave(value);
-    else onCancel();
-  };
-  return (
-    <form
-      className="flex flex-col gap-1.5 rounded-xl border border-ink-100 bg-ink-50/60 p-2.5"
-      onSubmit={(event) => {
-        event.preventDefault();
-        save();
-      }}
-    >
-      <label htmlFor={`brief-${id}`} className="px-0.5 text-[10px] font-semibold tracking-[0.12em] text-ink-400 uppercase">
-        {t(`fields.${id}`)}
-      </label>
-      <div className="flex items-center gap-1.5">
-        <input
-          id={`brief-${id}`}
-          ref={field}
-          value={text}
-          maxLength={500}
-          placeholder={example}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              onCancel();
-            }
-          }}
-          className="h-9 min-w-0 flex-1 rounded-lg bg-white px-3 text-sm text-ink-900 ring-1 ring-ink-200 outline-none placeholder:text-ink-400 focus:ring-2 focus:ring-ink-400"
-        />
-        <button
-          type="submit"
-          disabled={!text.trim()}
-          className="inline-flex h-9 items-center gap-1 rounded-full bg-ink-900 px-3 text-xs font-semibold text-white transition hover:bg-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 disabled:opacity-40"
-        >
-          <Check className="size-3.5" aria-hidden />
-          {t("add")}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          aria-label={t("cancel")}
-          className="rounded-full p-2 text-ink-400 transition hover:bg-ink-900/10 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
-        >
-          <X className="size-3.5" aria-hidden />
-        </button>
-      </div>
-      <p className="px-0.5 text-[11px] text-ink-400">{t("ownWordsHint")}</p>
-    </form>
-  );
-}
-
 function DetailOptions({
   id,
   project,
   craft,
   optionLabel,
-  onOwnWords,
+  onDone,
 }: {
   id: StoryDetailId;
   project: Project;
   craft: ReturnType<typeof resolveStoryCraft>;
   optionLabel: (id: StoryDetailId, optionId: string) => string;
-  onOwnWords: () => void;
+  onDone: () => void;
 }) {
   const t = useGuideT("brief");
   const setDetail = useChatStudio((s) => s.setStoryDetail);
@@ -279,12 +287,26 @@ function DetailOptions({
       void setDetail(id, { ids: next.length > 0 ? next : null });
       return;
     }
-    void setDetail(id, selected.includes(optionId) ? { ids: null } : { ids: [optionId] });
+    const clearing = selected.includes(optionId);
+    void setDetail(id, clearing ? { ids: null } : { ids: [optionId] });
+    if (!clearing) onDone();
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-ink-100 bg-ink-50/60 p-2.5">
-      <span className="px-0.5 text-[10px] font-semibold tracking-[0.12em] text-ink-400 uppercase">{t(`fields.${id}`)}</span>
+    <div className="flex flex-col gap-2 rounded-xl border border-ink-100 bg-ink-50/70 p-3">
+      <div className="flex items-center justify-between gap-2 px-0.5">
+        <span className="text-[10px] font-semibold tracking-[0.12em] text-ink-500 uppercase">
+          {t(`fields.${id}`)}
+        </span>
+        <button
+          type="button"
+          onClick={onDone}
+          aria-label={t("cancel")}
+          className="rounded-full p-0.5 text-ink-400 transition hover:bg-ink-900/10 hover:text-ink-800"
+        >
+          <X className="size-3.5" aria-hidden />
+        </button>
+      </div>
       <div className="flex flex-wrap gap-1.5">
         {options.map((option) => {
           const on = selected.includes(option.id);
@@ -295,9 +317,9 @@ function DetailOptions({
               aria-pressed={on}
               onClick={() => toggle(option.id)}
               className={cn(
-                "rounded-full px-3 py-1.5 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+                "rounded-full px-3 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
                 on
-                  ? "bg-ink-900 text-white"
+                  ? "bg-ink-900 text-white shadow-2xs"
                   : "bg-white text-ink-700 ring-1 ring-ink-200 hover:text-ink-900 hover:ring-ink-400",
               )}
             >
@@ -305,15 +327,6 @@ function DetailOptions({
             </button>
           );
         })}
-        {def.ownWords && (
-          <button
-            type="button"
-            onClick={onOwnWords}
-            className="rounded-full px-3 py-1.5 text-xs text-ink-600 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
-          >
-            {t("ownWords")}
-          </button>
-        )}
       </div>
     </div>
   );

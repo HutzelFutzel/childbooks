@@ -130,7 +130,9 @@ export type AuditAction =
   | "remove_admin"
   | "set_grants"
   | "set_role"
-  | "pii_reveal";
+  | "pii_reveal"
+  /** Opened a user's studio timeline with their own typed messages included. */
+  | "studio_words_view";
 
 export interface AuditEntry {
   id: string;
@@ -610,6 +612,9 @@ const ROUTE_RULES: RouteRule[] = [
   // Analysis (view-only surfaces the matrix still separately write-gates,
   // e.g. resolving an alert or importing a cost import).
   { test: /^\/admin\/analytics\/users\/[^/]+\/reveal$/, gate: key("analysis.users.pii", "read") },
+  // The system-written timeline. Typed messages inside it are a further, audited
+  // step that the handler itself gates on `analysis.users.pii`.
+  { test: /^\/admin\/analytics\/users\/[^/]+\/studio$/, gate: key("analysis.users", "read") },
   { test: /^\/admin\/analytics\/users$/, gate: key("analysis.users", "read") },
   { test: /^\/admin\/analytics\/overview$/, gate: key("analysis.users", "read") },
   { test: /^\/admin\/analytics\/funnel$/, gate: key("analysis.users", "read") },

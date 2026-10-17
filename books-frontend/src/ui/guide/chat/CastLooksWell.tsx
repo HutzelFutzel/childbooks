@@ -2,7 +2,8 @@
 
 /**
  * Where one person's look comes from. Letting the story decide comes first and
- * asks nothing of the reader; a photo, a drawing or a few words sit below it.
+ * asks nothing of the reader; a photo or a drawing sits below it, and any
+ * description in the parent's own words is typed in the chat composer below.
  * Asked in the chat, one person at a time, before the book's style: the first
  * drawing can become the whole book's style, so the style picker never asks
  * what a drawing is about to answer.
@@ -17,14 +18,14 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, Camera, ImagePlus, PencilLine, Sparkles } from "lucide-react";
+import { AlertCircle, Camera, ImagePlus, MessageSquareText, Sparkles } from "lucide-react";
 import { describeError, ProviderError } from "../../../core/errors";
 import {
   lookFocusOf,
   lookSourceOf,
   looksToDecide,
+  PORTRAIT_EDIT_NOT_VISIBLE,
   portraitStatus,
-  type LookChoice,
 } from "../../../core/guide/portrait";
 import { briefOf } from "../../../core/story/brief";
 import { missingDetails } from "../../../core/story/castKinds";
@@ -33,19 +34,20 @@ import { useAppConfigStore } from "../../../state/appConfigStore";
 import { redrawUnits, startRedraw } from "../../../state/chatGeneration";
 import { useChatStudio } from "../../../state/chatStudio";
 import { useJobsStore } from "../../../state/jobsStore";
+import { useRedrawOwned } from "../../../state/unitBusy";
 import {
   chooseAndStartPortraits,
   lookChoiceStartEstimate,
   storyLooksStartEstimate,
 } from "../../../state/portraitAutoStart";
 import { cn } from "../../lib/cn";
-import { decideLooksFromStory, updateCastMember } from "../bookActions";
+import { decideLooksFromStory } from "../bookActions";
 import { useGuideLabel, useGuideT } from "../intl";
 import { PaidAction } from "./PaidAction";
-import { DrawingPanel, PanelShell, PhotoPanel, photoWasUsedUp, StartNote, type StartEstimate } from "./LookPickers";
+import { DrawingPanel, PhotoPanel, photoWasUsedUp, StartNote } from "./LookPickers";
 import { PortraitAgeRow } from "./PortraitAgeRow";
 
-type Panel = LookChoice | null;
+type UploadPanel = "photo" | "drawing" | null;
 
 /** Recomputed when prices, the running jobs, or the book change. */
 function useStartEstimates(project: Project, castId: string, storyIds: readonly string[]) {
@@ -95,12 +97,21 @@ export function CastLooksWell({
   const label = useGuideLabel();
   const sheet = useGuideT("sheet");
   const tap = useChatStudio((s) => s.tap);
+  // A redraw that is running, starting, or already offered in the chat is not offered a second time.
+  const redrawOwned = useRedrawOwned(castId);
   const focus = lookFocusOf(project);
-  const [panel, setPanel] = useState<Panel>(() =>
-    focus?.castId === castId ? focus.source : quiet ? currentSourcePanel(project, castId) : null,
-  );
+  const [panel, setPanel] = useState<UploadPanel>(() => {
+    if (focus?.castId === castId && (focus.source === "photo" || focus.source === "drawing")) return focus.source;
+    return quiet ? currentSourcePanel(project, castId) : null;
+  });
   useEffect(() => {
-    if (focus?.castId === castId) setPanel(focus.source);
+    if (focus?.castId !== castId) return;
+    if (focus.source === "photo" || focus.source === "drawing") {
+      setPanel(focus.source);
+    } else if (focus.source === "describe") {
+      setPanel(null);
+      useChatStudio.setState((state) => ({ composerFocus: state.composerFocus + 1 }));
+    }
   }, [focus?.castId, focus?.source, castId]);
 
   const styled = project.config.styleReady !== false;
@@ -140,10 +151,15 @@ export function CastLooksWell({
 
   if (!member) return null;
   const needsAge = missingDetails(member).includes("age");
-  const stale = quiet && portraitStatus(project, castId) === "stale";
+  const stale = quiet && !redrawOwned && portraitStatus(project, castId) === "stale";
   const photoUsedUp = photoWasUsedUp(project, member);
+  const described = !member.appearanceFromStory && member.appearance?.trim() ? member.appearance.trim() : null;
 
-  const options: { id: LookChoice; icon: typeof Camera; title: string; hint: string }[] = [
+  const focusComposer = () => {
+    useChatStudio.setState((state) => ({ composerFocus: state.composerFocus + 1 }));
+  };
+
+  const options: { id: "photo" | "drawing"; icon: typeof Camera; title: string; hint: string }[] = [
     { id: "photo", icon: Camera, title: t("photo", { name }), hint: t("photoHint", { name }) },
     {
       id: "drawing",
@@ -151,7 +167,6 @@ export function CastLooksWell({
       title: t("drawing", { name }),
       hint: t(styled ? "drawingHint" : "drawingHintStyle", { name }),
     },
-    { id: "describe", icon: PencilLine, title: t("describe", { name }), hint: t("describeHint") },
   ];
 
   return (
@@ -198,7 +213,7 @@ export function CastLooksWell({
               onClick={() => surprise(storyIds)}
               className="rounded-full px-1 py-1 text-xs font-medium text-ink-600 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
             >
-              {t("surpriseAll", { count: storyIds.length })}
+              {t("surpriseAll", { count: idsCount(storyIds) })}
             </button>
             <StartNote estimate={estimates.everyone} />
           </div>
@@ -207,7 +222,7 @@ export function CastLooksWell({
 
       <div className="flex flex-col gap-1.5">
         <p className="px-0.5 text-xs font-medium text-ink-500">{t("ownRow")}</p>
-        <div className="grid w-full grid-cols-1 gap-1.5 sm:grid-cols-3">
+        <div className="grid w-full grid-cols-1 gap-1.5 sm:grid-cols-2">
           {options.map((option) => {
             const active = panel === option.id;
             const Icon = option.icon;
@@ -255,18 +270,28 @@ export function CastLooksWell({
             {panel === "drawing" && (
               <DrawingPanel project={project} member={member} name={name} estimate={estimates.own} quiet={quiet} />
             )}
-            {panel === "describe" && (
-              <DescribePanel
-                castId={castId}
-                name={name}
-                initial={member.appearanceFromStory ? "" : member.appearance ?? ""}
-                cap={styled ? estimates.own : null}
-                quiet={quiet}
-              />
-            )}
           </motion.div>
         )}
       </AnimatePresence>
+
+      {described && (
+        <div className="flex flex-wrap gap-1.5">
+          <span className="inline-flex max-w-full items-center rounded-full bg-magic-50/80 px-3 py-1.5 text-xs text-ink-900 ring-1 ring-magic-300/70 shadow-2xs">
+            <span className="font-semibold text-magic-900">{name}</span>
+            <span className="truncate text-ink-700">: {described}</span>
+          </span>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={focusComposer}
+        className="flex w-full items-center gap-2 rounded-xl bg-ink-900/3 px-3 py-2 text-left text-xs leading-snug text-ink-500 ring-1 ring-inset ring-ink-900/5 transition hover:bg-ink-900/5 hover:text-ink-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
+      >
+        <MessageSquareText className="size-3.5 shrink-0 text-ink-400" aria-hidden />
+        <span>{t("describeBelowHint", { name })}</span>
+      </button>
+
       {stale && (
         <PaidAction
           purpose="redraw"
@@ -298,13 +323,16 @@ export function CastLooksWell({
   );
 }
 
+function idsCount(ids: readonly string[]): number {
+  return ids.length;
+}
+
 /** The option a person already uses, so the card opens on it with what was chosen showing. */
-function currentSourcePanel(project: Project, castId: string): Panel {
+function currentSourcePanel(project: Project, castId: string): UploadPanel {
   const member = (briefOf(project.config).cast ?? []).find((m) => m.id === castId);
   if (!member) return null;
   const source = lookSourceOf(member);
   if (source === "photo" || source === "drawing") return source;
-  if (source === "describe" && !member.appearanceFromStory) return "describe";
   return null;
 }
 
@@ -321,6 +349,7 @@ function PortraitFailed({ castId, name, onAddPhoto }: { castId: string; name: st
   const active = useJobsStore((s) => s.activeUnitIds.has(castId));
   if (!failure || active || failure.kind !== "portrait") return null;
   const photoGone = failure.error.startsWith("The photo has expired");
+  const notVisible = failure.error === PORTRAIT_EDIT_NOT_VISIBLE;
   const reason = photoGone ? t("portraitFailedPhoto") : failureReason(failure);
   return (
     <div
@@ -328,6 +357,9 @@ function PortraitFailed({ castId, name, onAddPhoto }: { castId: string; name: st
       className="flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-xs leading-snug text-amber-900 ring-1 ring-amber-200"
     >
       <AlertCircle className="mt-px size-3.5 shrink-0 text-amber-600" aria-hidden />
+      {notVisible ? (
+        <span>{t("portraitFailedNotVisible", { name })}</span>
+      ) : (
       <span>
         <span className="font-medium">{t("portraitFailed", { name })}</span>
         {reason && <> {reason}</>}
@@ -344,73 +376,7 @@ function PortraitFailed({ castId, name, onAddPhoto }: { castId: string; name: st
           </>
         )}
       </span>
+      )}
     </div>
-  );
-}
-
-function DescribePanel({
-  castId,
-  name,
-  initial,
-  cap,
-  quiet,
-}: {
-  castId: string;
-  name: string;
-  initial: string;
-  cap: StartEstimate;
-  quiet: boolean;
-}) {
-  const t = useGuideT("looks");
-  const [text, setText] = useState(initial);
-  const field = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => field.current?.focus({ preventScroll: true }), []);
-  const save = () => {
-    const look = text.trim().slice(0, 600);
-    if (!look) return;
-    if (quiet) {
-      void updateCastMember(castId, { appearance: look, lookSource: "describe", appearanceFromStory: false });
-      return;
-    }
-    void useChatStudio.getState().tap(
-      look,
-      () =>
-        chooseAndStartPortraits(
-          () => updateCastMember(castId, { appearance: look, lookSource: "describe", appearanceFromStory: false }),
-          cap?.maxSparks ?? null,
-        ),
-      { undoable: true, reply: [{ key: "lookNoted", priority: "result", vars: { names: name } }] },
-    );
-  };
-  return (
-    <PanelShell>
-      <label className="text-xs font-medium text-ink-700" htmlFor={`look-${castId}`}>
-        {t("describeLabel", { name })}
-      </label>
-      <textarea
-        id={`look-${castId}`}
-        ref={field}
-        rows={2}
-        value={text}
-        maxLength={600}
-        placeholder={t("describePlaceholder")}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            save();
-          }
-        }}
-        className="w-full resize-none rounded-lg bg-white px-3 py-2 text-sm text-ink-900 ring-1 ring-ink-200 outline-none placeholder:text-ink-400 focus:ring-2 focus:ring-ink-400"
-      />
-      <button
-        type="button"
-        disabled={!text.trim()}
-        onClick={save}
-        className="inline-flex min-h-10 items-center self-start rounded-full bg-ink-900 px-4 text-sm font-semibold text-white shadow-soft transition hover:bg-ink-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2 disabled:opacity-40"
-      >
-        {t("save")}
-      </button>
-    </PanelShell>
   );
 }

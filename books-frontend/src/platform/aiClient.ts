@@ -27,6 +27,7 @@ import type {
   GenerationQuoteUnit,
 } from "../core/billing/generationQuote";
 import type { ManuscriptCast } from "../core/guide/ownWords";
+import type { GuideEventDetail, GuideEventKind } from "../core/guide/events";
 
 export { IntentAmbiguousError };
 
@@ -118,8 +119,15 @@ export function touchProjectRemote(args: {
   flow?: "guide" | "legacy";
   /** True when the reader has reached the finished-book preview. */
   previewed?: boolean;
-}): void {
-  void postAi<{ ok: boolean }>("/ai/project-touch", args).catch(() => {});
+  /** Another milestone the browser observed. The server accepts a closed list. */
+  reached?: "previewed" | "finished" | "setupLocked";
+}): Promise<boolean> {
+  // Resolves to whether the server took it, never rejects: callers that care
+  // (the flow beacon, which must not mark a book as reported when the request
+  // failed) read the answer; everyone else can ignore it exactly as before.
+  return postAi<{ ok: boolean }>("/ai/project-touch", args)
+    .then((result) => result?.ok !== false)
+    .catch(() => false);
 }
 
 /** Strip non-serializable fields (AbortSignal) from run options for the wire. */
@@ -310,6 +318,19 @@ export function tryGuideTurnRemote(
  * not wait on it or fail with it. A dropped report costs one row's outcome field;
  * a report that could block the conversation would cost the conversation.
  */
+/**
+ * Record something the reader did that is not a typed message — a tap, an undo, a
+ * price shown. Fire-and-forget for the same reason as the outcome report: the
+ * reader's action must not wait on, or fail with, its own bookkeeping.
+ */
+export function reportGuideEventRemote(event: {
+  projectId: string;
+  kind: GuideEventKind;
+  detail?: GuideEventDetail;
+}): void {
+  void postAi<{ ok: boolean }>("/ai/guide/event", event).catch(() => {});
+}
+
 export function reportGuideTurnOutcomeRemote(report: {
   turnId: string;
   applied: string[];

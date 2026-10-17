@@ -517,9 +517,14 @@ export async function executeAgentCalls(
     const reshapes = writes.some((call) => GUIDE_COMMANDS[call.id].structural);
     // A change that ends in a redraw makes its pages out of date the moment it is saved: the redraw is
     // offered by this turn, so the page's own card waits.
-    const redrawing = plan.steps.flatMap((step) =>
-      step.result.kind === "write" && step.result.then?.kind === "redrawPage" ? step.result.then.unitIds : [],
-    );
+    // People are held the same way as pages: their portrait is "out of date" from the save too.
+    const redrawing = plan.steps.flatMap((step) => {
+      if (step.result.kind !== "write") return [];
+      const then = step.result.then;
+      if (then?.kind === "redrawPage") return then.unitIds;
+      if (then?.kind === "redraw") return [then.castId];
+      return [];
+    });
     if (redrawing.length > 0) useRedrawHold.getState().hold(redrawing);
     await useProjectsStore.getState().patchCurrent((latest) => {
       const writeCtx = { ...ctx, now: Date.now() };

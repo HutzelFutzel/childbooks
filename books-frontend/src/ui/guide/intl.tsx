@@ -67,7 +67,7 @@ export function useGuideList(): (names: readonly string[]) => string {
 }
 
 export function useGuideT(
-  namespace: "chrome" | "views" | "plate" | "sheet" | "conflict" | "storyTools" | "agent" | "ideas" | "brief" | "looks",
+  namespace: "chrome" | "views" | "plate" | "sheet" | "conflict" | "storyTools" | "agent" | "ideas" | "examples" | "brief" | "looks",
 ) {
   return useTranslations(`guide.${namespace}`);
 }

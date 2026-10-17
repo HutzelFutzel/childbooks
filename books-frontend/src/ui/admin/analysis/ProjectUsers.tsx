@@ -1,13 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Copy, Download, Search } from "lucide-react";
+import { Copy, Download, History, Search } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { CardHeader, CardTitle } from "../../components/Card";
 import { useAdminProjects, type UserBehaviourRow } from "../../../state/adminProjectsStore";
+import { describeFlowArm } from "../../../core/guide/flow";
 import { downloadCsv } from "./csv";
+import { UserStudioModal } from "./UserStudioModal";
 import { fmtDuration, fmtNumber, fmtPct, fmtRelative, fmtSparks, fmtUsd } from "./format";
 
 type UserSort = "recent" | "books" | "cost" | "net" | "rework" | "images";
@@ -57,6 +59,7 @@ export function ProjectUsers() {
   const setQuery = useAdminProjects((s) => s.setQuery);
   const [sort, setSort] = useState<UserSort>("recent");
   const [search, setSearch] = useState("");
+  const [studioUid, setStudioUid] = useState<string | null>(null);
 
   const rows = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -91,7 +94,7 @@ export function ProjectUsers() {
             variant="secondary"
             size="sm"
             leftIcon={<Download className="size-4" />}
-            onClick={() => downloadCsv("book-users", rows.map((u) => ({ ...u })))}
+            onClick={() => downloadCsv("book-users", rows.map(({ flows, booksByArm, ...u }) => ({ ...u, flows: flows.join("+"), guideBooks: booksByArm.guide ?? 0, legacyBooks: booksByArm.legacy ?? 0 })))}
           >
             Export CSV
           </Button>
@@ -125,6 +128,12 @@ export function ProjectUsers() {
               </th>
               <th className="px-4 py-2.5 text-right">Net</th>
               <th className="px-4 py-2.5">Preferred</th>
+              <th
+                className="px-4 py-2.5"
+                title="Which studio this person's books were made in, and how far they got. Mixed means they used both."
+              >
+                Studio
+              </th>
               <th className="px-4 py-2.5">Last active</th>
             </tr>
           </thead>
@@ -218,13 +227,34 @@ export function ProjectUsers() {
                       </div>
                     )}
                   </td>
+                  <td className="px-4 py-2.5 text-[11px] text-ink-600">
+                    <div className="font-medium">{describeFlowArm(u.arm)}</div>
+                    {(u.finished > 0 || u.checkoutStarted > 0) && (
+                      <div className="text-ink-400">
+                        {u.finished > 0 && <>{u.finished} finished</>}
+                        {u.finished > 0 && u.checkoutStarted > 0 && " · "}
+                        {u.checkoutStarted > 0 && <>{u.checkoutStarted} to checkout</>}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setStudioUid(u.uid);
+                      }}
+                      className="mt-0.5 inline-flex items-center gap-1 text-brand-600 hover:underline"
+                    >
+                      <History className="size-3" />
+                      History
+                    </button>
+                  </td>
                   <td className="px-4 py-2.5 text-xs text-ink-600">{fmtRelative(u.lastActionAt)}</td>
                 </tr>
               );
             })}
             {rows.length === 0 && !loading && (
               <tr>
-                <td colSpan={11} className="px-4 py-10 text-center text-sm text-ink-400">
+                <td colSpan={12} className="px-4 py-10 text-center text-sm text-ink-400">
                   No users match this selection.
                 </td>
               </tr>
@@ -232,6 +262,7 @@ export function ProjectUsers() {
           </tbody>
         </table>
       </div>
+      <UserStudioModal uid={studioUid} onClose={() => setStudioUid(null)} />
     </div>
   );
 }

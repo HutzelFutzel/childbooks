@@ -83,6 +83,19 @@ export function ProjectFilterBar() {
           options={milestoneOptions("Died before…")}
         />
         <Select
+          aria-label="Studio"
+          value={filters.arm}
+          onChange={(e) => setFilters({ arm: e.target.value })}
+          className="h-9 w-40"
+          options={[
+            { value: "", label: "Any studio" },
+            { value: "guide", label: "Guided studio" },
+            { value: "legacy", label: "Step wizard" },
+            { value: "mixed", label: "Both flows" },
+            { value: "unknown", label: "Not recorded" },
+          ]}
+        />
+        <Select
           aria-label="Image tier"
           value={filters.tier}
           onChange={(e) => setFilters({ tier: e.target.value })}

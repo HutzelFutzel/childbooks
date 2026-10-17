@@ -17,7 +17,11 @@
  *
  * Offline and deterministic: pure functions over synthesized books.
  */
+import { aimAtSelection } from "../books-frontend/src/core/guide/agent/aim";
+import { planTurn } from "../books-frontend/src/core/guide/agent/plan";
 import { GUIDE_COMMANDS } from "../books-frontend/src/core/guide/agent/registry";
+import { createDefaultGuideAgentConfig } from "../books-frontend/src/core/config/guideAgent";
+import { describeSelectedPerson } from "../books-frontend/src/core/guide/target";
 import type { CommandCall, CommandContext } from "../books-frontend/src/core/guide/agent/types";
 import { changePersonAge } from "../books-frontend/src/core/guide/ageSync";
 import { wellStage } from "../books-frontend/src/core/guide/conversation";
@@ -25,12 +29,25 @@ import { createDefaultGuideFactPolicies } from "../books-frontend/src/core/guide
 import { deriveJourney } from "../books-frontend/src/core/guide/journey";
 import { manuscriptHash, sanitizeManuscriptCast, withAnalysisCharacters, withManuscriptCast } from "../books-frontend/src/core/guide/ownWords";
 import { agedPortraits, PICTURE_CHOICE_COMMANDS } from "../books-frontend/src/core/guide/pictureSettling";
-import { currentPortrait, portraitInputs, portraitIsCurrent, portraitStatus } from "../books-frontend/src/core/guide/portrait";
+import {
+  currentPortrait,
+  portraitInputs,
+  portraitIsCurrent,
+  portraitPrompt,
+  portraitReferencePlan,
+  portraitStatus,
+} from "../books-frontend/src/core/guide/portrait";
+import { plannedPortraitReferences } from "../books-frontend/src/core/billing/referencePlan";
+import { createDefaultPromptsConfig } from "../books-frontend/src/core/prompts/registry";
+import { resolvePromptsConfig } from "../books-frontend/src/core/prompts/context";
 import { ageShiftMatters } from "../books-frontend/src/core/guide/visualAge";
 import { authoringOf, withAuthoring } from "../books-frontend/src/core/guide/projectState";
-import { asksForRedraw, identityChanged, redrawModeFor, visualChange } from "../books-frontend/src/core/guide/redrawMode";
+import { ageShifted, asksForRedraw, beingChanged, identityChanged, redrawModeFor, visualChange } from "../books-frontend/src/core/guide/redrawMode";
 import { guideMessage } from "../books-frontend/src/core/guide/session";
 import { statedAgeCalls } from "../books-frontend/src/core/guide/statedAges";
+import { classifyLocatedPart, MIN_PART_SIDE, planPartEdit, WHOLE_SUBJECT_AREA } from "../books-frontend/src/core/pipeline/localize";
+import { PORTRAIT_ASPECT, PORTRAIT_SIZE } from "../books-frontend/src/core/guide/portraitFrame";
+import { jpegQuality } from "../functions/src/jpegQuality";
 import { createDefaultStoryBrief } from "../books-frontend/src/core/story/brief";
 import { relationsOf } from "../books-frontend/src/core/story/relations";
 import { createDefaultConfig, type Project, type StoryCastMember } from "../books-frontend/src/core/types";
@@ -383,6 +400,166 @@ const twins = (project: Project): Project => ({
     check(PICTURE_CHOICE_COMMANDS.has(id), `${id} no longer starts the portraits it makes possible.`);
   }
   check(!PICTURE_CHOICE_COMMANDS.has("setPersonAge"), "An age counts as a choice of look.");
+}
+
+
+// A change to a named part: only that part is repainted, and a failure to find
+// the part is never quietly a whole-picture redraw.
+{
+  const boots = classifyLocatedPart({ found: true, part: "boots", x: 0.3, y: 0.82, width: 0.4, height: 0.15 });
+  check(boots.kind === "part", "A located part was not edited as a part.");
+  const eyes = classifyLocatedPart({ found: true, part: "eyes", x: 0.4, y: 0.3, width: 0.01, height: 0.01 });
+  check(
+    eyes.kind === "part" && eyes.box.width >= MIN_PART_SIDE && eyes.box.height >= MIN_PART_SIDE,
+    "A tiny part (an eye) was thrown away instead of given a box to repaint.",
+  );
+  const corner = classifyLocatedPart({ found: true, part: "eye", x: 0.99, y: 0.99, width: 0.01, height: 0.01 });
+  check(
+    corner.kind === "part" && corner.box.x + corner.box.width <= 1 && corner.box.y + corner.box.height <= 1,
+    "A grown part box left the picture.",
+  );
+  const age = classifyLocatedPart({ found: true, part: "whole", x: 0, y: 0, width: 1, height: 1 });
+  check(age.kind === "whole" && WHOLE_SUBJECT_AREA <= 0.6, "A change about the whole subject was masked as a part.");
+  check(classifyLocatedPart({ found: false }).kind === "absent", "A part that isn't shown was not reported as absent.");
+  check(classifyLocatedPart({ found: true, part: "hat" }).kind === "failed", "An answer with no box was treated as found.");
+  check(
+    classifyLocatedPart({ found: true, part: "hat", x: 0.1, y: 0.1, width: 0, height: 0 }).kind === "failed",
+    "A zero-sized box was treated as found.",
+  );
+
+  check(planPartEdit(boots, { finalAttempt: false }).path === "masked", "A located part is not edited in place.");
+  check(planPartEdit(age, { finalAttempt: false }).path === "whole", "A whole-subject change is not a whole-picture edit.");
+  check(planPartEdit({ kind: "unsupported" }, { finalAttempt: false }).path === "whole", "A model that cannot mask has no whole-picture edit.");
+  check(planPartEdit({ kind: "absent" }, { finalAttempt: true }).path === "notVisible", "An absent part was drawn anyway.");
+  const failed = { kind: "failed" as const, reason: "boom" };
+  check(planPartEdit(failed, { finalAttempt: false }).path === "retry", "A failed locate redrew the whole picture instead of retrying.");
+  const gaveUp = planPartEdit(failed, { finalAttempt: true });
+  check(gaveUp.path === "whole" && gaveUp.reason === "locate_gave_up", "The last attempt did not fall back, and never completes.");
+
+  check(jpegQuality(0.85) === 85, "A fractional JPEG quality is not scaled (sharp rejects it).");
+  check(jpegQuality(82) === 82 && jpegQuality(0) === 1 && jpegQuality(500) === 100 && jpegQuality(Number.NaN) === 80, "JPEG quality is not kept in range.");
+
+  const [w, h] = PORTRAIT_SIZE.split("x").map(Number);
+  check(Math.abs(PORTRAIT_ASPECT - w! / h!) < 1e-9, "The cast sheet's portrait shape is not the generated canvas.");
+}
+
+// --- A selected person is who a skill is about ----------------------------------------------------
+//
+// The report: with a portrait selected, "make him 2 years old" only redrew it. The sentence was never
+// read, because a selected picture used to skip the interpreter. Now the interpreter is told who is
+// selected, and a skill call that names no one is about them: by id, in any language, with no pronoun
+// list. These are the structural halves of that, which need no model.
+
+{
+  const start = drawn(book([arthur, amanda]), "m");
+  const chip = { kind: "person" as const, castId: "m", name: "Amanda" };
+  const defaults = createDefaultGuideAgentConfig();
+  const call = (id: CommandCall["id"], args: Record<string, string>): CommandCall => ({
+    id,
+    args,
+    evidence: "x",
+    confidence: 0.9,
+    source: "model",
+  });
+
+  check(describeSelectedPerson(chip) === "Amanda's portrait", "The interpreter is not told who is selected.");
+  check(describeSelectedPerson({ ...chip, name: "  Amanda  " }) === "Amanda's portrait", "The selected name was not trimmed.");
+  check(describeSelectedPerson({ ...chip, name: "x".repeat(300) })!.length <= 120, "A long name can overflow what the server keeps.");
+  check(
+    describeSelectedPerson(null) === undefined &&
+      describeSelectedPerson({ kind: "cover", unitId: "cover" }) === undefined &&
+      describeSelectedPerson({ kind: "page", unitId: "p1", page: 1 }) === undefined,
+    "Something that is not a person was described as one.",
+  );
+
+  const filled = aimAtSelection("setPersonAge", { age: "2" }, start, { chip });
+  check(filled.person === "Amanda" && filled.age === "2", "A call with no person was not aimed at the selected person.");
+  check(
+    aimAtSelection("setPersonAge", { person: "Arthur", age: "2" }, start, { chip }).person === "Arthur",
+    "A call that names someone was moved to the selected person.",
+  );
+  check(
+    aimAtSelection("setPersonAge", { person: "Zed", age: "2" }, start, { chip }).person === "Zed",
+    "A name that matches no one was replaced by the selection.",
+  );
+  check(aimAtSelection("setPersonAge", { age: "2" }, start, { chip: null }).person === undefined, "Nothing selected still filled a person.");
+  check(
+    aimAtSelection("setPersonAge", { age: "2" }, start, { chip: { kind: "person", castId: "gone", name: "Gone" } }).person === undefined,
+    "A selected person who left the book was filled in.",
+  );
+  check(
+    aimAtSelection("removePerson", {}, start, { chip }).person === undefined &&
+      aimAtSelection("deletePhoto", {}, start, { chip }).person === undefined,
+    "Removing someone was aimed by the selection instead of by name.",
+  );
+
+  // In a book of two, an age with no name is aimed by the selection, and asks without one.
+  const aimed = planTurn({ project: start, calls: [call("setPersonAge", { age: "2" })], ctx: { ...ctx, chip }, config: defaults });
+  check(aimed.steps.length === 1 && aimed.ask === null, "An age for the selected person asked who it was for.");
+  check(member(aimed.project, "Amanda").age === 2 && member(aimed.project, "Arthur").age === 3, "The age went to the wrong person.");
+  check(
+    identityChanged(aimed.project, "m") && redrawModeFor(aimed.project, chip) === "new",
+    "An age change through the selection did not make the next picture a new one.",
+  );
+  const unaimed = planTurn({ project: start, calls: [call("setPersonAge", { age: "2" })], ctx, config: defaults });
+  check(unaimed.steps.length === 0 && unaimed.ask !== null, "An age for nobody in particular was applied to someone.");
+
+  // A look and an age in one message: the age first, then a redraw that starts anew; no note keeps the age.
+  const both = planTurn({
+    project: start,
+    calls: [call("setPersonAge", { age: "2" }), call("editPersonLook", { change: "give him red boots" })],
+    ctx: { ...ctx, chip },
+    config: defaults,
+  });
+  const redrawn = both.effects.find((effect) => effect.kind === "redraw");
+  check(redrawn?.kind === "redraw" && redrawn.castId === "m", "A look for the selected person was not a redraw of their portrait.");
+  check(member(both.project, "Amanda").age === 2, "The age was lost when a look came with it.");
+  check(redrawModeFor(both.project, chip) === "new", "An age and a look drew an edit of the old face.");
+}
+
+// --- An older or younger person keeps their look ------------------------------------------------
+//
+// An age change is drawn anew (an edit would keep the old age), but from the old portrait, so the
+// person is recognizably the same. Only another kind of being starts from the description.
+
+{
+  const start = drawn(book([arthur, amanda]), "m");
+  const prompts = resolvePromptsConfig(createDefaultPromptsConfig());
+  const plan = (project: Project) => portraitReferencePlan(project, member(project, "Amanda"));
+
+  check(plan(start).existing.length === 0, "A portrait that is current was sent as its own reference.");
+  const younger = written(GUIDE_COMMANDS.setPersonAge.run(start, { person: "Amanda", age: "3" }, ctx))!;
+  check(identityChanged(younger, "m") && ageShifted(younger, "m") && !beingChanged(younger, "m"), "A younger person is not an age change alone.");
+  check(plan(younger).existing.length === 1, "A person who became younger is drawn from the description, not from their portrait.");
+  check(
+    plannedPortraitReferences(younger, "m", { referenceEditing: true, maxReferenceImages: 4, maxImages: 4 }) >= 1,
+    "The portrait kept for the look is not in the quote.",
+  );
+  check(
+    plannedPortraitReferences(younger, "m", { referenceEditing: false, maxReferenceImages: 0, maxImages: 0 }) === 0,
+    "A model that can't take a picture was quoted one.",
+  );
+  const text = portraitPrompt(younger, member(younger, "Amanda"), prompts, null, { currentPortraitIdentity: true });
+  check(
+    text.includes("shows Amanda at approximately 6 years old") && text.includes("Amanda is now 3 years old"),
+    "The picture model isn't told which age the attached portrait shows and which is wanted.",
+  );
+  check(
+    !portraitPrompt(younger, member(younger, "Amanda"), prompts, null, {}).includes("Draw the same person at the new age"),
+    "A drawing with no portrait to follow was told to keep one.",
+  );
+
+  const asDog = {
+    ...younger,
+    config: {
+      ...younger.config,
+      storyBrief: {
+        ...younger.config.storyBrief!,
+        cast: castOf(younger).map((m) => (m.id === "m" ? { ...m, kind: "animal" as const, species: "dog" } : m)),
+      },
+    },
+  };
+  check(beingChanged(asDog, "m") && plan(asDog).existing.length === 0, "A girl who became a dog is drawn from her old portrait.");
 }
 
 report.push("Typed picture changes and twins");

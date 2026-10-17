@@ -69,14 +69,34 @@ const AMBIGUOUS_BELOW = 0.6;
 /** Cap on turn-log documents read per report, so one chatty book can't stall it. */
 const MAX_TURNS = 20_000;
 
+/** Same ceiling for the event log, which is chattier per book than the turn log. */
+const MAX_EVENTS = 40_000;
+
 function emptyTurnStats(): FlowTurnStats {
   return {
+    scope: { books: 0, excludedBooks: 0 },
     turns: 0,
     books: 0,
     perBook: emptyStat(),
     latencyMs: emptyStat(),
     ambiguityRate: 0,
     skipRate: 0,
+    withOutcome: 0,
+    appliedRate: 0,
+    rejectedRate: 0,
+    admittedFailureRate: 0,
+    refusedClaimRate: 0,
+    commandRate: 0,
+    repairRate: 0,
+    taps: {
+      events: 0,
+      books: 0,
+      perBook: emptyStat(),
+      byKind: {},
+      tapOnlyBooks: 0,
+      typedBooks: 0,
+      truncated: false,
+    },
     byIntent: {},
     lastComponent: {},
     byComponent: {},
@@ -96,19 +116,40 @@ function emptyTurnStats(): FlowTurnStats {
  * have no place in an aggregate — so nothing here touches them, and none of them
  * can end up in the response.
  */
-export async function summarizeGuideTurns(fromMs: number, toMs: number): Promise<FlowTurnStats> {
+export async function summarizeGuideTurns(
+  fromMs: number,
+  toMs: number,
+  /**
+   * Only count these books, as `uid__projectId` keys. The comparison passes the
+   * guided arm: a turn from a mixed or unknown book, or from an excluded account,
+   * is evidence about nobody being compared. Omitted, everything in the window
+   * counts (the admin turn browser's view).
+   */
+  books?: ReadonlySet<string>,
+): Promise<FlowTurnStats> {
   ensureAdmin();
-  const snap = await getFirestore()
-    .collectionGroup("guideTurns")
-    .where("createdAt", ">=", fromMs)
-    .where("createdAt", "<=", toMs)
-    .orderBy("createdAt", "asc")
-    .limit(MAX_TURNS + 1)
-    .get();
+  const db = getFirestore();
+  const [turnSnap, eventSnap] = await Promise.all([
+    db
+      .collectionGroup("guideTurns")
+      .where("createdAt", ">=", fromMs)
+      .where("createdAt", "<=", toMs)
+      .orderBy("createdAt", "asc")
+      .limit(MAX_TURNS + 1)
+      .get(),
+    db
+      .collectionGroup("guideEvents")
+      .where("createdAt", ">=", fromMs)
+      .where("createdAt", "<=", toMs)
+      .orderBy("createdAt", "asc")
+      .limit(MAX_EVENTS + 1)
+      .get(),
+  ]);
 
   const stats = emptyTurnStats();
-  stats.truncated = snap.size > MAX_TURNS;
-  const docs = stats.truncated ? snap.docs.slice(0, MAX_TURNS) : snap.docs;
+  stats.scope.books = books?.size ?? 0;
+  stats.truncated = turnSnap.size > MAX_TURNS;
+  const docs = stats.truncated ? turnSnap.docs.slice(0, MAX_TURNS) : turnSnap.docs;
 
   const perBook = new Map<string, number>();
   /** Book → the last component it was heard from, by `createdAt`. */
@@ -116,6 +157,15 @@ export async function summarizeGuideTurns(fromMs: number, toMs: number): Promise
   const latencies: number[] = [];
   let ambiguous = 0;
   let skipped = 0;
+  let outcomes = 0;
+  let applied = 0;
+  let rejected = 0;
+  let admitted = 0;
+  let refusedClaims = 0;
+  let asked = 0;
+  let repaired = 0;
+
+  const nonEmpty = (value: unknown): boolean => Array.isArray(value) && value.length > 0;
 
   for (const doc of docs) {
     const d = doc.data() as Record<string, unknown>;
@@ -126,6 +176,7 @@ export async function summarizeGuideTurns(fromMs: number, toMs: number): Promise
     const projectId = typeof d.projectId === "string" ? d.projectId : "";
     if (!uid || !projectId) continue;
     const book = `${uid}__${projectId}`;
+    if (books && !books.has(book)) continue;
 
     stats.turns += 1;
     perBook.set(book, (perBook.get(book) ?? 0) + 1);
@@ -144,8 +195,25 @@ export async function summarizeGuideTurns(fromMs: number, toMs: number): Promise
     // Absent confidence is not counted as confident: a turn the log couldn't
     // describe should not improve the score.
     if (typeof d.confidence === "number" && d.confidence < AMBIGUOUS_BELOW) ambiguous += 1;
-    if (d.skipped === true) skipped += 1;
+    // `skipped` is the list of components the reader declined, not a flag.
+    if (nonEmpty(d.skipped)) skipped += 1;
     if (typeof d.latencyMs === "number" && d.latencyMs >= 0) latencies.push(d.latencyMs);
+
+    if (nonEmpty(d.refused)) refusedClaims += 1;
+    if (nonEmpty(d.commands)) asked += 1;
+    if (typeof d.repairs === "number" && d.repairs > 0) repaired += 1;
+
+    // The browser's report on what it did. Rows without one (tab closed, request
+    // lost) are left out of these shares rather than counted as "nothing applied".
+    const outcome = d.outcome as
+      | { applied?: unknown; rejected?: unknown; admittedFailure?: unknown }
+      | undefined;
+    if (outcome && typeof outcome === "object") {
+      outcomes += 1;
+      if (nonEmpty(outcome.applied)) applied += 1;
+      if (nonEmpty(outcome.rejected)) rejected += 1;
+      if (outcome.admittedFailure === true) admitted += 1;
+    }
   }
 
   for (const { component } of lastSeen.values()) {
@@ -157,6 +225,34 @@ export async function summarizeGuideTurns(fromMs: number, toMs: number): Promise
   stats.latencyMs = summarize(latencies);
   stats.ambiguityRate = rate(ambiguous, stats.turns);
   stats.skipRate = rate(skipped, stats.turns);
+  stats.withOutcome = outcomes;
+  stats.appliedRate = rate(applied, outcomes);
+  stats.rejectedRate = rate(rejected, outcomes);
+  stats.admittedFailureRate = rate(admitted, outcomes);
+  stats.refusedClaimRate = rate(refusedClaims, stats.turns);
+  stats.commandRate = rate(asked, stats.turns);
+  stats.repairRate = rate(repaired, stats.turns);
+
+  // ---- Taps and the rest ----
+  stats.taps.truncated = eventSnap.size > MAX_EVENTS;
+  const eventDocs = stats.taps.truncated ? eventSnap.docs.slice(0, MAX_EVENTS) : eventSnap.docs;
+  const eventsPerBook = new Map<string, number>();
+  for (const doc of eventDocs) {
+    const d = doc.data() as Record<string, unknown>;
+    const uid = doc.ref.parent.parent?.id ?? "";
+    const projectId = typeof d.projectId === "string" ? d.projectId : "";
+    if (!uid || !projectId) continue;
+    const book = `${uid}__${projectId}`;
+    if (books && !books.has(book)) continue;
+    const kind = typeof d.kind === "string" ? d.kind : "unknown";
+    stats.taps.events += 1;
+    stats.taps.byKind[kind] = (stats.taps.byKind[kind] ?? 0) + 1;
+    eventsPerBook.set(book, (eventsPerBook.get(book) ?? 0) + 1);
+  }
+  stats.taps.books = eventsPerBook.size;
+  stats.taps.perBook = summarize([...eventsPerBook.values()]);
+  stats.taps.typedBooks = perBook.size;
+  stats.taps.tapOnlyBooks = [...eventsPerBook.keys()].filter((book) => !perBook.has(book)).length;
   return stats;
 }
 
@@ -177,6 +273,7 @@ function caveatsFor(
   byArm: Map<FlowArm, ProjectMirror[]>,
   turns: FlowTurnStats,
   truncated: boolean,
+  staffBooks = 0,
 ): string[] {
   const out: string[] = [];
   const guide = byArm.get("guide") ?? [];
@@ -222,6 +319,31 @@ function caveatsFor(
     );
   }
 
+  if (staffBooks > 0) {
+    out.push(
+      `${staffBooks} book${staffBooks === 1 ? " belongs" : "s belong"} to accounts on the exclusion ` +
+        `list and ${staffBooks === 1 ? "is" : "are"} left out of every arm and of the conversation figures.`,
+    );
+  }
+
+  // Turn figures are shares of the turns that reported back. A low coverage means
+  // the shares describe the tabs that stayed open, which is not a random sample.
+  if (turns.turns > 0 && turns.withOutcome < turns.turns * 0.7) {
+    out.push(
+      `Only ${turns.withOutcome} of ${turns.turns} guided turns reported what happened to them ` +
+        `(tab closed, or the report was lost), so the applied, rejected and "didn't understand" ` +
+        `shares describe those turns only.`,
+    );
+  }
+
+  if (turns.taps.tapOnlyBooks > 0) {
+    out.push(
+      `${turns.taps.tapOnlyBooks} guided book${turns.taps.tapOnlyBooks === 1 ? " was" : "s were"} ` +
+        `made entirely by tapping and ${turns.taps.tapOnlyBooks === 1 ? "has" : "have"} no typed turns, ` +
+        `so the conversation figures describe the people who type, not every guided book.`,
+    );
+  }
+
   const drafted = guide.filter((m) => m.milestones?.storyDrafted).length;
   if (guide.length > 0 && drafted < guide.length / 2) {
     out.push(
@@ -252,10 +374,17 @@ export async function flowComparison(args: {
   toMs: number;
   limit?: number;
   allocateSubscriptions?: boolean;
+  /**
+   * Accounts on the admin exclusion list, as uids. Their books are removed before
+   * anything is grouped, the same way every other dashboard figure drops them —
+   * a comparison that quietly included the team's own test books would be
+   * measuring the team.
+   */
+  excludeUids?: ReadonlySet<string>;
 }): Promise<FlowComparison> {
   ensureAdmin();
   const limit = Math.min(Math.max(args.limit ?? 1000, 1), 1000);
-  const [mirrors, finance] = await Promise.all([
+  const [allMirrors, finance] = await Promise.all([
     listProjectMirrors({ fromMs: args.fromMs, toMs: args.toMs, limit }),
     projectFinanceIndex({
       fromMs: args.fromMs,
@@ -263,6 +392,11 @@ export async function flowComparison(args: {
       allocateSubscriptions: args.allocateSubscriptions,
     }),
   ]);
+
+  const mirrors = args.excludeUids
+    ? allMirrors.filter((m) => !args.excludeUids!.has(m.uid))
+    : allMirrors;
+  const staffBooks = allMirrors.length - mirrors.length;
 
   const byArm = new Map<FlowArm, ProjectMirror[]>();
   for (const mirror of mirrors) {
@@ -283,22 +417,30 @@ export async function flowComparison(args: {
       comparable: isComparable(arm),
       books: rows.length,
       stats: summarizeProjects(rows, finance.byProject),
+      finishedRate: milestoneRate(rows, "finished"),
       previewRate: milestoneRate(rows, "previewed"),
+      checkoutRate: milestoneRate(rows, "checkoutStarted"),
       orderRate: milestoneRate(rows, "ordered"),
     };
   });
 
-  const turns = await summarizeGuideTurns(args.fromMs, args.toMs);
-  const truncated = mirrors.length >= limit;
+  // The conversation is only evidence about the books actually being compared.
+  const guideBooks = new Set(
+    (byArm.get("guide") ?? []).map((m) => `${m.uid}__${m.projectId}`),
+  );
+  const turns = await summarizeGuideTurns(args.fromMs, args.toMs, guideBooks);
+  turns.scope.excludedBooks = staffBooks;
+  const truncated = allMirrors.length >= limit;
 
   return {
     window: { fromMs: args.fromMs, toMs: args.toMs },
     arms,
     turns,
-    caveats: caveatsFor(byArm, turns, truncated),
+    caveats: caveatsFor(byArm, turns, truncated, staffBooks),
     excluded: {
       mixed: (byArm.get("mixed") ?? []).length,
       unknown: (byArm.get("unknown") ?? []).length,
+      staff: staffBooks,
     },
     truncated,
   };

@@ -144,7 +144,7 @@ export function ComposerWell({
         initial={initial}
         animate="show"
         exit="exit"
-        className="w-full rounded-2xl bg-white p-3.5 shadow-soft ring-1 ring-ink-900/8 sm:p-4"
+        className="w-full rounded-2xl bg-linear-to-b from-white to-ink-50/35 p-3.5 shadow-[0_12px_32px_-12px_rgba(20,22,58,0.12),0_1px_3px_rgba(20,22,58,0.06),inset_0_1px_0_rgba(255,255,255,0.9)] ring-1 ring-ink-900/10 sm:p-4"
       >
         {personEditor}
       </motion.section>
@@ -173,7 +173,7 @@ export function ComposerWell({
       initial={initial}
       animate="show"
       exit="exit"
-      className="w-full rounded-2xl bg-white p-3.5 shadow-soft ring-1 ring-ink-900/8 sm:p-4"
+      className="w-full rounded-2xl bg-linear-to-b from-white to-ink-50/35 p-3.5 shadow-[0_12px_32px_-12px_rgba(20,22,58,0.12),0_1px_3px_rgba(20,22,58,0.06),inset_0_1px_0_rgba(255,255,255,0.9)] ring-1 ring-ink-900/10 sm:p-4"
     >
       <TaskHeader well={shown} />
       <div className="mt-3 flex flex-col gap-3">
@@ -306,18 +306,18 @@ function TaskHeader({ well }: { well: ChatWell }) {
         ? MousePointer2
         : Sparkles;
   return (
-    <header className="flex items-center justify-between gap-3 border-b border-ink-100 pb-2.5">
-      <span className="font-display text-sm font-semibold text-ink-900">
+    <header className="flex items-center justify-between gap-3 border-b border-ink-100/90 pb-2.5">
+      <span className="font-display text-sm font-semibold tracking-tight text-ink-900">
         {title}
       </span>
       <span
         className={cn(
-          "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold tracking-wide",
+          "inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold tracking-wide ring-1 ring-inset",
           attention
-            ? "bg-amber-50 text-amber-800"
+            ? "bg-amber-50 text-amber-800 ring-amber-200/80"
             : ready
-              ? "bg-emerald-50 text-emerald-700"
-              : "bg-magic-50 text-magic-700",
+              ? "bg-emerald-50 text-emerald-700 ring-emerald-200/80"
+              : "bg-magic-50 text-magic-700 ring-magic-300/60",
         )}
       >
         <Icon className="size-3" aria-hidden />
@@ -506,26 +506,26 @@ function WellBody({
     case "drawBook": {
       return (
         <div className="flex w-full flex-col items-start gap-3">
-          <BookLookRow project={project} onChange={() => onView("style")} />
-          <PeopleRow
-            project={project}
-            selectedId={selected?.id ?? null}
-            onSelect={(member) => {
-              const store = useChatStudio.getState();
-              const name = member.name.trim();
-              store.setChip(selected?.id === member.id ? null : { kind: "person", castId: member.id, name });
-              store.setView("cast");
-            }}
-            onReview={() => onView("cast")}
-          />
-          <BookSetupSummary project={project} />
-          <div className="w-full border-t border-ink-100 pt-3">
-            <DrawBookAction
+          <div className="w-full divide-y divide-ink-100/90 overflow-hidden rounded-xl border border-ink-100 bg-white/95 shadow-2xs">
+            <BookLookRow project={project} onChange={() => onView("style")} />
+            <PeopleRow
               project={project}
-              label={label("createIllustratedBook")}
-              onDefault={onDefault}
+              selectedId={selected?.id ?? null}
+              onSelect={(member) => {
+                const store = useChatStudio.getState();
+                const name = member.name.trim();
+                store.setChip(selected?.id === member.id ? null : { kind: "person", castId: member.id, name });
+                store.setView("cast");
+              }}
+              onReview={() => onView("cast")}
             />
+            <BookSetupSummary project={project} />
           </div>
+          <DrawBookAction
+            project={project}
+            label={label("createIllustratedBook")}
+            onDefault={onDefault}
+          />
         </div>
       );
     }
@@ -785,8 +785,8 @@ function Quiet({
       className={cn(
         "inline-flex min-h-10 items-center gap-1.5 rounded-full px-4 text-sm font-medium transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2",
         subtle
-          ? "text-ink-600 hover:bg-ink-100 hover:text-ink-900"
-          : "bg-white text-ink-900 ring-1 ring-ink-200 shadow-soft hover:ring-ink-400",
+          ? "text-ink-600 hover:bg-ink-100/80 hover:text-ink-900"
+          : "bg-white text-ink-900 shadow-[0_1px_3px_rgba(20,22,58,0.06),inset_0_1px_0_rgba(255,255,255,0.9)] ring-1 ring-ink-200 hover:-translate-y-0.5 hover:ring-ink-400 hover:shadow-soft",
       )}
     >
       {children}
@@ -1145,47 +1145,49 @@ function PeopleRow({
   if (cast.length === 0) return null;
   const places = (project.anchors ?? []).filter((anchor) => anchor.include && anchor.type === "place");
   return (
-    <div className="flex w-full flex-col gap-2.5 rounded-xl border border-ink-100 bg-white/80 px-3 py-2.5 text-sm shadow-xs">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-xs font-semibold tracking-wide text-ink-500 uppercase">{t("people")}</span>
-        <button
-          type="button"
-          onClick={onReview}
-          className="shrink-0 rounded-md px-1.5 py-1 text-xs font-medium text-ink-600 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
-        >
-          {label("reviewPeople")}
-        </button>
+    <div className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-sm">
+      <div className="min-w-0 flex-1">
+        <span className="block text-[10px] font-semibold tracking-wide text-ink-400 uppercase">{t("people")}</span>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          {cast.map((member) => {
+            const picked = selectedId === member.id;
+            return (
+              <button
+                key={member.id}
+                type="button"
+                aria-pressed={picked}
+                onClick={() => onSelect(member)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full py-0.5 pr-2.5 pl-0.5 text-xs font-medium text-ink-800 ring-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+                  picked
+                    ? "bg-magic-50 text-magic-900 ring-magic-300"
+                    : "bg-ink-50/70 ring-ink-200/70 hover:bg-ink-100/70 hover:ring-ink-300",
+                )}
+              >
+                <CharacterAvatar
+                  project={project}
+                  characterId={member.id}
+                  name={member.name}
+                  className="size-6 text-[10px]"
+                />
+                <span className="max-w-24 truncate">{member.name}</span>
+              </button>
+            );
+          })}
+        </div>
+        {places.length > 0 && (
+          <span className="mt-1 block truncate text-xs text-ink-500">
+            {t("places")}: <span className="font-medium text-ink-800">{places.map((place) => place.name).join(", ")}</span>
+          </span>
+        )}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {cast.map((member) => {
-          const picked = selectedId === member.id;
-          return (
-            <button
-              key={member.id}
-              type="button"
-              aria-pressed={picked}
-              onClick={() => onSelect(member)}
-              className={cn(
-                "flex items-center gap-1.5 rounded-full py-0.5 pr-2 pl-0.5 text-xs font-medium text-ink-800 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
-                picked ? "bg-ink-900/5 ring-1 ring-ink-900" : "hover:bg-ink-50",
-              )}
-            >
-              <CharacterAvatar
-                project={project}
-                characterId={member.id}
-                name={member.name}
-                className="size-9 text-xs"
-              />
-              <span className="max-w-24 truncate">{member.name}</span>
-            </button>
-          );
-        })}
-      </div>
-      {places.length > 0 && (
-        <span className="truncate text-ink-500">
-          {t("places")}: <span className="font-medium text-ink-900">{places.map((place) => place.name).join(", ")}</span>
-        </span>
-      )}
+      <button
+        type="button"
+        onClick={onReview}
+        className="shrink-0 rounded-full bg-ink-50 px-2.5 py-1 text-xs font-medium text-ink-700 ring-1 ring-ink-200/80 transition hover:bg-ink-100 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
+      >
+        {label("reviewPeople")}
+      </button>
     </div>
   );
 }
@@ -1205,27 +1207,37 @@ function BookLookRow({ project, onChange }: { project: Project; onChange: () => 
   });
   const [lookUrl] = useStylePreviewUrls(lookStrip);
   const imageUrl = referenceUrl ?? lookUrl;
+  const styleName =
+    referenceUrl && project.config.artStyle.derivedFromNames?.[0]
+      ? project.config.artStyle.derivedFromNames.join(", ")
+      : current?.label ?? t("look");
   return (
-    <div className="flex w-full items-center justify-between gap-3 rounded-xl border border-ink-100 bg-white/80 p-2 shadow-xs">
-      <span className="relative flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[#eee8de] p-1.5">
-        {imageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={imageUrl}
-            alt={t("look")}
-            className={cn(
-              "size-full rounded-sm bg-white",
-              referenceUrl ? "object-contain" : "object-cover",
-            )}
-          />
-        ) : (
-          <ImagePlus className="size-5 text-ink-400" aria-hidden />
-        )}
-      </span>
+    <div className="flex w-full items-center justify-between gap-3 px-3 py-2.5">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[#eee8de] ring-1 ring-ink-900/8">
+          {imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imageUrl}
+              alt={t("look")}
+              className={cn(
+                "size-full bg-white",
+                referenceUrl ? "object-contain p-0.5" : "object-cover",
+              )}
+            />
+          ) : (
+            <ImagePlus className="size-4 text-ink-400" aria-hidden />
+          )}
+        </span>
+        <div className="min-w-0">
+          <span className="block text-[10px] font-semibold tracking-wide text-ink-400 uppercase">{t("look")}</span>
+          <span className="mt-0.5 block truncate text-[13px] font-medium text-ink-900">{styleName}</span>
+        </div>
+      </div>
       <button
         type="button"
         onClick={onChange}
-        className="shrink-0 rounded-md px-1.5 py-1 text-xs font-medium text-ink-600 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
+        className="shrink-0 rounded-full bg-ink-50 px-2.5 py-1 text-xs font-medium text-ink-700 ring-1 ring-ink-200/80 transition hover:bg-ink-100 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
       >
         {t("changeLook")}
       </button>

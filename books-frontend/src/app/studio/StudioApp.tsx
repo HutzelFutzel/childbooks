@@ -54,7 +54,8 @@ import {
   type StudioDestination,
 } from "@/ui/studio/studioRoutes";
 import { studioEntryPath, useGuidePlaylist } from "@/ui/guide/useGuideMode";
-import { useFlowAttribution, usePreviewReached } from "@/ui/studio/useFlowAttribution";
+import { useFlowAttribution } from "@/ui/studio/useFlowAttribution";
+import { useMilestoneReached, usePreviewReached } from "@/ui/studio/useMilestoneReached";
 import { GuideModeToggle } from "@/ui/guide/GuideModeToggle";
 import { useChatStudio } from "@/state/chatStudio";
 
@@ -491,7 +492,13 @@ export default function StudioApp() {
   // comparison — see docs/LEGACY-GUIDE.md.
   const attributedProjectId = inProject ? route.bookId : null;
   useFlowAttribution(attributedProjectId, inProject ? (guidePlaylist ? "guide" : "legacy") : null);
-  usePreviewReached(attributedProjectId, activeDestination === "order");
+  // The wizard's order step is a real screen, so being routed to it is both "the
+  // book is finished" and "the reader is looking at it". The guided studio's order
+  // panel has no route — it reports both for itself (see `GuideStudio`), from what
+  // the reader actually opened, rather than from where the engine would send them.
+  const wizardOrderStep = !guidePlaylist && activeDestination === "order";
+  usePreviewReached(attributedProjectId, wizardOrderStep);
+  useMilestoneReached(attributedProjectId, wizardOrderStep, "finished");
 
   // The Chat studio shows work and Sparks in the conversation itself.
   const chatStudio = inProject && Boolean(guidePlaylist);

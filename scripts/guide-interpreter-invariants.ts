@@ -367,6 +367,28 @@ for (const book of books) {
       fail(`The worked examples don't reach the assembled prompt for a ${book.name} book.`);
     }
   }
+
+  // A selected person reaches the prompt, and the prompt tells the model to name them and to keep an age
+  // out of a look change by meaning, not by words (the report: "make him 2 years old" only redrew).
+  {
+    const vars = buildGuideTurnVars({
+      project: books[0]!.project,
+      message: "make him 2 years old",
+      playlist,
+      transcript: [],
+      patchContext,
+      selected: "Nile's portrait",
+    });
+    const { system, user } = renderTextPrompt(prompts, TEMPLATE_KEY, { vars });
+    cases += 1;
+    if (!user.includes("Nile's portrait")) fail("The selected person does not reach the interpreter's prompt.");
+    cases += 1;
+    if (!/setPersonAge[^.]*never[^.]*editPersonLook/.test(system)) {
+      fail("The interpreter is not told that an age is setPersonAge and never a look change.");
+    }
+    cases += 1;
+    if (!system.includes("never a pronoun")) fail("The interpreter is not told to name the selected person, not a pronoun.");
+  }
 }
 
 // Facts are described for every slot, always — a slot missing from the rundown is

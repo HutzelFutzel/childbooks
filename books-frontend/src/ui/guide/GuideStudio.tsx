@@ -44,6 +44,8 @@ import { takeMark, useStoryMark } from "../../state/storyMark";
 import { setProjectConflictResolver, useProjectsStore } from "../../state/projectsStore";
 import { mergeBooks } from "../../core/guide/merge";
 import { OrderCheckout } from "../checkout/OrderDialog";
+import { useMilestoneReached, usePreviewReached } from "../studio/useMilestoneReached";
+import { reportGuideEventRemote } from "../../platform/aiClient";
 import { EbookCheckout } from "../checkout/EbookDialog";
 import { useAuthStore } from "../../state/authStore";
 import { Drawer } from "../components/Drawer";
@@ -62,9 +64,11 @@ import { ViewSwitch } from "./book/ViewSwitch";
 import { ChatThread } from "./chat/ChatThread";
 import { Composer } from "./chat/Composer";
 import { ComposerWell } from "./chat/ComposerWell";
+import { activeQuestion } from "../../core/guide/questions";
 import { IdeaChips, useIdeaPlaceholder } from "./chat/IdeaChips";
 import { IdeaMenu } from "./chat/IdeaMenu";
 import { ConflictCard } from "./chat/ConflictCard";
+import { GuideAvatar } from "./chat/GuideAvatar";
 import { OpeningScene } from "./chat/OpeningScene";
 import { GuideIntl, useGuideLabel, useGuideList, useGuideT } from "./intl";
 import { useHandOverStory } from "./useHandOverStory";
@@ -149,6 +153,19 @@ function ChatShell({
   onOrdering: (open: boolean) => void;
 }) {
   useChatDrivers(project, journey);
+  // What only the browser can see, for the flow comparison: the setup was locked,
+  // the book became finished, and the reader opened the order panel. The last is
+  // reported from `ordering` — what they opened — not from the journey, which only
+  // says the book is ready for it.
+  useMilestoneReached(project.id, journey.locked, "setupLocked");
+  useMilestoneReached(project.id, journey.phase === "order", "finished");
+  usePreviewReached(project.id, ordering);
+  // Every opening, not just the first: coming back to the order panel after
+  // thinking about it is itself something the funnel should see. (The milestone
+  // above keeps only the first, which is what the arm comparison needs.)
+  useEffect(() => {
+    if (ordering) reportGuideEventRemote({ projectId: project.id, kind: "orderOpened" });
+  }, [ordering, project.id]);
   usePrintCheck(project, journey.locked && journey.pages.total > 0 && journey.pages.done === journey.pages.total);
   const { holding, hold } = useCardHold();
   const talk = useWellConversation(project, journey, holding);
@@ -331,6 +348,13 @@ function ChatShell({
   // says what a typed line would do beside this card instead.
   const cardOpen = !opening && liveWell !== null;
   // Nobody is in the book yet and the guide asked who: the field shows what an answer looks like.
+  const question = useMemo(() => activeQuestion(journey, liveWell), [journey, liveWell]);
+  const questionName =
+    liveWell?.kind === "castLooks"
+      ? chip?.kind === "person"
+        ? chip.name
+        : liveWell.name
+      : cast[0]?.name.trim();
   const answeringWho =
     !opening && journey.entry === "guided" && !journey.hasBook && journey.missing[0] === "names";
   const placeholder = opening
@@ -342,7 +366,9 @@ function ChatShell({
         // A face is selected: what is typed is about them, and the field says so.
         (chip?.kind === "person" ? t("personPlaceholder", { name: chip.name }) : null) ??
         (cardOpen
-          ? t(cardPlaceholderKind(liveWell.kind) === "type" ? "cardTypePlaceholder" : "cardPickPlaceholder")
+          ? liveWell.kind === "storyBrief"
+            ? t("briefPlaceholder")
+            : t(cardPlaceholderKind(liveWell.kind) === "type" ? "cardTypePlaceholder" : "cardPickPlaceholder")
           : null) ??
         (answeringWho ? t("namesPlaceholder") : null) ??
         livePlaceholder(session.messages, locale) ??
@@ -485,10 +511,14 @@ function ChatShell({
           (!working && !journey.chatWell) ||
           // Looking at drawn people: what the chat can change about them is
           // worth showing even while a card asks its own question.
-          (!working && view === "cast" && portraitProgress.done > 0)) && (
+          (!working && view === "cast" && portraitProgress.done > 0) ||
+          // The guide is waiting on an answer, even with a card up: what one looks like helps.
+          (!working && question !== null)) && (
           <IdeaChips
             project={project}
             view={view}
+            question={question}
+            questionName={questionName}
             messages={session.messages}
             marked={Boolean(markedPassage)}
             onPick={memory.setDraft}
@@ -524,6 +554,8 @@ function ChatShell({
               <IdeaMenu
                 project={project}
                 view={view}
+                question={question}
+                questionName={questionName}
                 onPick={(text) => {
                   memory.setDraft(text);
                   useChatStudio.setState((state) => ({ composerFocus: state.composerFocus + 1 }));
@@ -669,7 +701,7 @@ function ChatShell({
 
   return (
     <LayoutGroup>
-      <div className="relative flex min-h-0 flex-1 overflow-hidden bg-canvas">
+      <div className={cn("relative flex min-h-0 flex-1 overflow-hidden bg-canvas", opening && "bg-aurora")}>
         {layout === "centered" || (layout === "mobile" && !journey.hasBook) ? (
           <motion.section
             layout
@@ -813,31 +845,25 @@ function EntryShortcuts({
   const t = useGuideT("chrome");
   return (
     <section
-      className="rounded-2xl bg-white p-4 shadow-soft ring-1 ring-ink-900/8"
+      className="rounded-2xl bg-linear-to-b from-white to-ink-50/40 p-3.5 shadow-[0_12px_32px_-12px_rgba(20,22,58,0.12),0_1px_3px_rgba(20,22,58,0.06)] ring-1 ring-ink-900/10 sm:p-4"
       aria-label={t("chooseHowToStart")}
     >
-      <div className="mb-3 flex items-center justify-between gap-3 border-b border-ink-100 pb-2.5">
-        <span className="font-display text-sm font-semibold text-ink-900">
-          {t("chooseHowToStart")}
-        </span>
-        <span className="rounded-full bg-magic-50 px-2 py-1 text-[10px] font-semibold text-magic-700">
-          {t("statusChooseOne")}
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-2">
+      <div className="grid gap-2.5 sm:grid-cols-2">
         <button
           type="button"
           onClick={() => onChoose("guided")}
-          className="min-h-11 rounded-full bg-ink-900 px-5 text-sm font-medium text-white transition hover:bg-ink-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2"
+          className="group flex min-h-16 flex-col items-start justify-center gap-0.5 rounded-xl bg-linear-to-b from-ink-800 to-ink-900 px-4 py-3.5 text-left text-white shadow-[0_2px_8px_-2px_rgba(20,22,58,0.28),inset_0_1px_0_rgba(255,255,255,0.16)] ring-1 ring-ink-900 transition hover:-translate-y-0.5 hover:from-ink-700 hover:to-ink-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2"
         >
-          {guideLabel}
+          <span className="font-display text-sm font-semibold tracking-tight">{guideLabel}</span>
+          <span className="text-xs leading-snug text-white/75">{t("guideMeHint")}</span>
         </button>
         <button
           type="button"
           onClick={() => onChoose("own")}
-          className="min-h-11 rounded-full bg-white px-5 text-sm font-medium text-ink-900 ring-1 ring-ink-200 transition hover:ring-ink-400 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2"
+          className="group flex min-h-16 flex-col items-start justify-center gap-0.5 rounded-xl bg-white px-4 py-3.5 text-left text-ink-900 shadow-[0_1px_3px_rgba(20,22,58,0.06)] ring-1 ring-ink-200 transition hover:-translate-y-0.5 hover:ring-ink-400 hover:shadow-soft active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2"
         >
-          {ownLabel}
+          <span className="font-display text-sm font-semibold tracking-tight">{ownLabel}</span>
+          <span className="text-xs leading-snug text-ink-500">{t("ownWordsHintEntry")}</span>
         </button>
       </div>
     </section>
@@ -972,7 +998,7 @@ function BookPane({
           arrived={arrived}
         />
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-          {!journey.locked && !project.config.storyText.trim() && journey.entry && (
+          {!journey.locked && journey.storyStatus === "none" && journey.entry && (
             <StorySourceSwitch value={journey.entry} onChange={(entry) => void useChatStudio.getState().chooseEntry(entry)} />
           )}
           {journey.locked && journey.pages.total > 0 && journey.pages.done < journey.pages.total ? (
@@ -1121,9 +1147,12 @@ function MobileLayout({
       <div className="flex min-h-0 flex-1 flex-col bg-canvas" data-phase={journey.phase}>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-3">
           {lastLine && (
-            <p className="mb-3 border-l-2 border-magic-200/80 px-3 font-display text-[15.5px] leading-7 text-ink-900 [text-wrap:pretty]">
-              {lastLine}
-            </p>
+            <div className="mb-3 flex items-start gap-2.5">
+              <GuideAvatar size="sm" className="mt-0.5" />
+              <p className="font-display text-[15.5px] leading-7 text-ink-900 [text-wrap:pretty]">
+                {lastLine}
+              </p>
+            </div>
           )}
           {stage}
         </div>
@@ -1143,9 +1172,12 @@ function MobileLayout({
             className="mb-2 flex w-full flex-col items-stretch gap-2 rounded-xl px-1 pb-1 text-left transition active:bg-ink-50"
           >
             <span aria-hidden className="mx-auto block h-1 w-8 rounded-full bg-ink-200" />
-            <span className="flex items-start justify-between gap-3">
-              <span className="line-clamp-2 font-display text-[15px] leading-snug text-ink-900">
-                {lastLine ?? t("continueInConversation")}
+            <span className="flex items-start justify-between gap-2.5">
+              <span className="flex min-w-0 items-start gap-2">
+                <GuideAvatar size="xs" className="mt-0.5" />
+                <span className="line-clamp-2 font-display text-[15px] leading-snug text-ink-900">
+                  {lastLine ?? t("continueInConversation")}
+                </span>
               </span>
               {hasTask && (
                 <span className="shrink-0 rounded-full bg-magic-50 px-2 py-1 text-[10px] font-semibold text-magic-700">
@@ -1184,6 +1216,9 @@ function ActivityStatus({
     return () => window.clearTimeout(timer);
   }, [id]);
   if (!activity) return null;
+  // A message in flight shows as the guide's typing bubble in the thread + the
+  // composer ring trace, unless it runs past the slow threshold.
+  if (activity.id === "understanding" && !slow) return null;
   const text =
     activity.id === "drawingPages" && activity.total > 0
       ? t("drawingPages", { n: Math.min(activity.done + 1, activity.total), total: activity.total })

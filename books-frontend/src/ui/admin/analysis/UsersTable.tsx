@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowDown, ArrowUp, Check, Copy, Eye, EyeOff, Search, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, Eye, EyeOff, History, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import { deviceLabel } from "../../../core/analytics/device";
@@ -19,6 +19,7 @@ import { Modal } from "../../components/Modal";
 import { Input, Field } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { CardHeader, CardTitle } from "../../components/Card";
+import { UserStudioModal } from "./UserStudioModal";
 import { fmtDateTime, fmtMoney, fmtNumber, fmtRelative, fmtSparks, fmtUsd, sourceLabel } from "./format";
 
 const COLUMNS: {
@@ -57,6 +58,7 @@ export function UsersTable() {
 
   const [draft, setDraft] = useState(search);
   const [adjustTarget, setAdjustTarget] = useState<AnalyticsUserRow | null>(null);
+  const [studioUid, setStudioUid] = useState<string | null>(null);
 
   const onSort = (key: UserSort) => {
     if (key === sort) setUserQuery({ dir: dir === "desc" ? "asc" : "desc" });
@@ -223,6 +225,15 @@ export function UsersTable() {
                     <Button
                       variant="ghost"
                       size="sm"
+                      leftIcon={<History className="size-3.5" />}
+                      onClick={() => setStudioUid(u.uid)}
+                      title="What this user did in the studio, book by book"
+                    >
+                      Studio
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       leftIcon={<Sparkles className="size-3.5" />}
                       onClick={() => setAdjustTarget(u)}
                       title="Adjust this user's Sparks wallet"
@@ -259,6 +270,7 @@ export function UsersTable() {
       </div>
 
       <AdjustSparksModal target={adjustTarget} onClose={() => setAdjustTarget(null)} />
+      <UserStudioModal uid={studioUid} onClose={() => setStudioUid(null)} />
     </div>
   );
 }

@@ -17,7 +17,7 @@ import { isAdminUid, isAnonymousToken, type AuthedRequest } from "./auth";
 import { backendPipelineEnv } from "./pipelineEnv";
 import { withUsage } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
-import { touchProject } from "./projects";
+import { isClientMilestone, touchProject } from "./projects";
 import { isStudioFlow } from "../../books-frontend/src/core/guide/flow";
 import { ensureAffordAction, InsufficientSparks, referenceLimitsForAction } from "./sparks";
 import { hasLikenessPhotoForSubject } from "./likeness";
@@ -95,7 +95,8 @@ import {
 } from "../../books-frontend/src/core/guide/agent/help";
 import { extractManuscriptCast, OWN_WORDS_MAX_CHARS } from "../../books-frontend/src/core/guide/ownWords";
 import { resolveGuideMode } from "../../books-frontend/src/core/guide/mode";
-import { recordGuideTurn, recordGuideTurnOutcome } from "./guideTurns";
+import { recordGuideEvent, recordGuideTurn, recordGuideTurnOutcome } from "./guideTurns";
+import { isGuideEventKind } from "../../books-frontend/src/core/guide/events";
 import { downloadBlobBase64 } from "./storage";
 import {
   getArtStylesConfig,
@@ -1084,6 +1085,34 @@ export function registerAiRoutes(app: Express): void {
   });
 
   /**
+   * Something the reader did that is not a typed message — a tap, an undo, a price
+   * shown, the order screen opened.
+   *
+   * The turn log only ever sees sentences, so a book answered by tapping was
+   * invisible to every report. This is the other half. A closed list of kinds, a
+   * flat bounded detail, a per-user rate ceiling, and an answer that is always
+   * `ok` unless the request is malformed: telemetry must never be something the
+   * reader can feel.
+   */
+  app.post("/ai/guide/event", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { projectId, kind, detail } = (req.body ?? {}) as {
+        projectId?: unknown;
+        kind?: unknown;
+        detail?: unknown;
+      };
+      if (typeof projectId !== "string" || !projectId || !isGuideEventKind(kind)) {
+        res.status(400).json({ error: { message: "Nothing to record." } });
+        return;
+      }
+      const kept = await recordGuideEvent({ uid: req.uid!, projectId, kind, detail });
+      res.json({ ok: true, kept });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  /**
    * Phrase the guide's configured lines in the reader's chat language.
    *
    * The configured sentence is the meaning; this only decides the words. Names
@@ -1659,12 +1688,13 @@ export function registerAiRoutes(app: Express): void {
    */
   app.post("/ai/project-touch", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { projectId, stage, title, flow, previewed } = req.body as {
+      const { projectId, stage, title, flow, previewed, reached } = req.body as {
         projectId?: string;
         stage?: string;
         title?: string;
         flow?: unknown;
         previewed?: unknown;
+        reached?: unknown;
       };
       if (!projectId) {
         res.status(400).json({ error: { message: "projectId is required." } });
@@ -1679,6 +1709,8 @@ export function registerAiRoutes(app: Express): void {
         // creating a third arm in the comparison out of a typo.
         ...(isStudioFlow(flow) ? { flow } : {}),
         ...(previewed === true ? { previewed: true } : {}),
+        // Same rule: only milestones a browser is allowed to name.
+        ...(isClientMilestone(reached) ? { reached } : {}),
       });
       res.json({ ok: true });
     } catch (err) {

@@ -199,22 +199,23 @@ export function BookSetupSummary({ project }: { project: Project }) {
   const words = coverCardLines(project);
   const settled = coverWordsSettled(project);
   return (
-    <div className="grid w-full grid-cols-2 gap-2">
-      <SetupRow
-        label={t("bookFormat")}
-        value={`${Math.round(product.trim.widthIn * 10) / 10} × ${Math.round(product.trim.heightIn * 10) / 10}″`}
-        change={editable ? t("changeFormat") : null}
-        onChange={() => change("format", t("changeBookFormat"))}
-      />
-      <SetupRow
-        label={t("pageLayout")}
-        value={layout.label}
-        change={editable ? t("changeFormat") : null}
-        onChange={() => change("layout", t("changePageLayout"))}
-      />
+    <div className="w-full divide-y divide-ink-100/90">
+      <div className="grid w-full grid-cols-1 divide-y divide-ink-100/90 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+        <SetupRow
+          label={t("bookFormat")}
+          value={`${Math.round(product.trim.widthIn * 10) / 10} × ${Math.round(product.trim.heightIn * 10) / 10}″`}
+          change={editable ? t("changeFormat") : null}
+          onChange={() => change("format", t("changeBookFormat"))}
+        />
+        <SetupRow
+          label={t("pageLayout")}
+          value={layout.label}
+          change={editable ? t("changeFormat") : null}
+          onChange={() => change("layout", t("changePageLayout"))}
+        />
+      </div>
       {settled && words.title && (
         <SetupRow
-          className="col-span-2"
           label={t("coverWords")}
           value={[words.title, words.subtitle, words.author].filter(Boolean).join(" · ")}
           change={editable ? t("changeFormat") : null}
@@ -239,16 +240,16 @@ function SetupRow({
   className?: string;
 }) {
   return (
-    <div className={cn("flex min-w-0 items-start justify-between gap-2 rounded-xl bg-ink-50 px-3 py-2.5 ring-1 ring-ink-100", className)}>
+    <div className={cn("flex min-w-0 items-center justify-between gap-2 px-3 py-2", className)}>
       <span className="min-w-0">
         <span className="block text-[10px] font-semibold tracking-wide text-ink-400 uppercase">{label}</span>
-        <span className="mt-0.5 block truncate text-sm font-medium text-ink-900">{value}</span>
+        <span className="mt-0.5 block truncate text-[13px] font-medium text-ink-900">{value}</span>
       </span>
       {change && (
         <button
           type="button"
           onClick={onChange}
-          className="shrink-0 rounded-md px-1.5 py-1 text-xs font-medium text-ink-600 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
+          className="shrink-0 rounded-full bg-ink-50 px-2.5 py-1 text-xs font-medium text-ink-700 ring-1 ring-ink-200/80 transition hover:bg-ink-100 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
         >
           {change}
         </button>

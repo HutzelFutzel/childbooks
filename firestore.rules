@@ -88,6 +88,16 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // The non-message half of the same audit trail: taps, undos, prices shown, the
+    // order screen opened. Same reasoning as the turn log above — an event a
+    // client could write is an event a client could forge, and these are what the
+    // flow comparison counts. Appended by `/ai/guide/event`, which validates the
+    // kind and bounds the detail.
+    match /users/{uid}/guideEvents/{eventId} {
+      allow read: if signedInAs(uid);
+      allow write: if false;
+    }
+
     // Per-task docs are read by the owner (also via the project-scoped
     // collection-group query, which needs a rule that authorizes by the doc's
     // own `uid` field — the path wildcard can't be correlated to a field filter

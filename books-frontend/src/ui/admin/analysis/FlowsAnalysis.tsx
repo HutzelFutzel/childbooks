@@ -42,22 +42,16 @@ import { Button } from "../../components/Button";
 import { CardBody, CardHeader, CardTitle } from "../../components/Card";
 import { cn } from "../../lib/cn";
 import { fmtDuration, fmtNumber, fmtPct, fmtUsd } from "./format";
+import { MILESTONES } from "./milestones";
 
 /**
  * The funnel, in the order a book passes it. Mirrors the backend's milestone
  * order; `pagesPlanned` sits after the draft because a page plan is made from a
  * story, even though a reader who brought their own text reaches it first.
  */
-const FUNNEL: { key: string; label: string }[] = [
-  { key: "created", label: "Started" },
-  { key: "storyDrafted", label: "Story written" },
-  { key: "pagesPlanned", label: "Pages planned" },
-  { key: "castStarted", label: "Cast drawn" },
-  { key: "pagesStarted", label: "Pages drawn" },
-  { key: "coverDone", label: "Cover done" },
-  { key: "previewed", label: "Reached preview" },
-  { key: "ordered", label: "Ordered" },
-];
+const FUNNEL: { key: string; label: string; guideOnly?: boolean }[] = MILESTONES.map(
+  ({ key, label, guideOnly }) => ({ key, label, ...(guideOnly ? { guideOnly } : {}) }),
+);
 
 const ARM_TONE: Record<FlowArm, string> = {
   guide: "text-brand-600",
@@ -160,7 +154,9 @@ export function FlowsAnalysis() {
         </>
       )}
 
-      {excluded.length > 0 && <Excluded arms={excluded} excluded={report.excluded} />}
+      {(excluded.length > 0 || report.excluded.staff > 0) && (
+        <Excluded arms={excluded} excluded={report.excluded} />
+      )}
     </div>
   );
 }
@@ -181,10 +177,18 @@ function ArmSummary({ arms }: { arms: FlowArmReport[] }) {
               {arm.stats.users === 1 ? "" : "s"}
             </span>
           </div>
-          <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
+          <dl className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
             <div>
-              <dt className="text-ink-500">Reached preview</dt>
+              <dt className="text-ink-500">Finished</dt>
+              <dd className="font-medium text-ink-900">{fmtPct(arm.finishedRate, 1)}</dd>
+            </div>
+            <div>
+              <dt className="text-ink-500">Opened order screen</dt>
               <dd className="font-medium text-ink-900">{fmtPct(arm.previewRate, 1)}</dd>
+            </div>
+            <div>
+              <dt className="text-ink-500">Started checkout</dt>
+              <dd className="font-medium text-ink-900">{fmtPct(arm.checkoutRate, 1)}</dd>
             </div>
             <div>
               <dt className="text-ink-500">Ordered</dt>
@@ -222,10 +226,19 @@ function FunnelCompare({ arms }: { arms: FlowArmReport[] }) {
             </tr>
           </thead>
           <tbody>
-            {FUNNEL.map(({ key, label }) => (
+            {FUNNEL.map(({ key, label, guideOnly }) => (
               <tr key={key} className="border-b border-line/60 last:border-0">
                 <td className="py-2 text-ink-700">{label}</td>
                 {arms.map((arm) => {
+                  // A stage the wizard doesn't have is "n/a", not 0%: zero would read
+                  // as the wizard losing everyone at a point it never passes through.
+                  if (guideOnly && arm.arm === "legacy") {
+                    return (
+                      <td key={arm.arm} className="py-2 text-right text-ink-300" title="Only the guided studio has this stage">
+                        n/a
+                      </td>
+                    );
+                  }
                   const n = arm.stats.milestones[key] ?? 0;
                   const share = arm.books > 0 ? n / arm.books : 0;
                   return (
@@ -370,10 +383,13 @@ function Conversation({ turns }: { turns: FlowComparison["turns"] }) {
       </CardHeader>
       <CardBody>
         {turns.turns === 0 ? (
-          <p className="text-sm text-ink-500">
-            No guided turns in this window. Free-text answers are what produce these — a book
-            answered entirely by tapping options records none.
-          </p>
+          <>
+            <p className="text-sm text-ink-500">
+              No typed guided turns in this window. Free-text answers are what produce these;
+              taps are counted separately below.
+            </p>
+            <TapSummary taps={turns.taps} />
+          </>
         ) : (
           <>
             <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -390,6 +406,35 @@ function Conversation({ turns }: { turns: FlowComparison["turns"] }) {
                 hint="Felt directly as the guide pausing before it replies."
               />
             </dl>
+
+            <h4 className="mb-1 mt-5 text-sm font-medium text-ink-800">What happened to those turns</h4>
+            <p className="mb-2 text-xs text-ink-500">
+              Shares of the {fmtNumber(turns.withOutcome)} turns whose browser reported back
+              {turns.withOutcome < turns.turns ? ` (of ${fmtNumber(turns.turns)} total)` : ""}.
+            </p>
+            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <Metric label="Changed the book" value={fmtPct(turns.appliedRate, 1)} />
+              <Metric
+                label="Rejected"
+                value={fmtPct(turns.rejectedRate, 1)}
+                hint="At least one proposed change refused by the validator."
+              />
+              <Metric
+                label="Didn't land"
+                value={fmtPct(turns.admittedFailureRate, 1)}
+                hint="Read as an answer or a revision, but wrote nothing and restated nothing."
+              />
+              <Metric label="Asked for a skill" value={fmtPct(turns.commandRate, 1)} />
+              <Metric label="Needed a repair" value={fmtPct(turns.repairRate, 1)} />
+              <Metric label="Claim refused" value={fmtPct(turns.refusedClaimRate, 1)} />
+              <Metric label="Skipped a question" value={fmtPct(turns.skipRate, 1)} />
+            </dl>
+
+            <TapSummary taps={turns.taps} />
+
+            {Object.keys(turns.byIntent).length > 0 && (
+              <CountList title="What they were doing" counts={turns.byIntent} />
+            )}
 
             {stops.length > 0 && (
               <div className="mt-5">
@@ -414,6 +459,52 @@ function Conversation({ turns }: { turns: FlowComparison["turns"] }) {
         )}
       </CardBody>
     </section>
+  );
+}
+
+/** Taps, undos and prices — the half of the conversation that is not typed. */
+function TapSummary({ taps }: { taps: FlowComparison["turns"]["taps"] }) {
+  if (taps.events === 0) return null;
+  const quotes = taps.byKind.quoteShown ?? 0;
+  const paid = taps.byKind.paidConfirm ?? 0;
+  return (
+    <div className="mt-5">
+      <h4 className="mb-1 text-sm font-medium text-ink-800">Everything that isn&apos;t typed</h4>
+      <p className="mb-2 text-xs text-ink-500">
+        {fmtNumber(taps.events)} taps, undos, prices shown and similar across {fmtNumber(taps.books)} book
+        {taps.books === 1 ? "" : "s"}; {fmtNumber(taps.tapOnlyBooks)} had no typed turn at all.
+        {taps.truncated ? " The window is larger than one report can read, so these are the first records." : ""}
+      </p>
+      <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <Metric label="Median per book" value={fmtNumber(taps.perBook.median)} />
+        <Metric label="Undos" value={fmtNumber(taps.byKind.undo ?? 0)} hint="A change the reader took back." />
+        <Metric
+          label="Prices shown → paid"
+          value={`${fmtNumber(quotes)} → ${fmtNumber(paid)}`}
+          hint="Prices put in front of the reader against the ones they paid."
+        />
+        <Metric label="Errors seen" value={fmtNumber(taps.byKind.error ?? 0)} />
+      </dl>
+      <CountList title="By kind" counts={taps.byKind} />
+    </div>
+  );
+}
+
+function CountList({ title, counts }: { title: string; counts: Record<string, number> }) {
+  const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (rows.length === 0) return null;
+  return (
+    <div className="mt-4">
+      <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-ink-400">{title}</h4>
+      <ul className="grid gap-x-6 gap-y-0.5 text-sm sm:grid-cols-2">
+        {rows.map(([key, n]) => (
+          <li key={key} className="flex items-center justify-between gap-3">
+            <span className="text-ink-700">{key}</span>
+            <span className="tabular-nums text-ink-500">{fmtNumber(n)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -467,9 +558,21 @@ function Excluded({
               </span>
             </div>
           ))}
+          {excluded.staff > 0 && (
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="font-medium text-ink-700">Excluded accounts</div>
+                <p className="text-ink-500">
+                  Books of accounts on the exclusion list (staff, test accounts). Removed before any
+                  grouping, the way every other figure on this dashboard drops them.
+                </p>
+              </div>
+              <span className="shrink-0 tabular-nums font-medium text-ink-900">{fmtNumber(excluded.staff)}</span>
+            </div>
+          )}
           <p className="border-t border-line pt-3 text-xs text-ink-400">
-            {fmtNumber(excluded.mixed + excluded.unknown)} book
-            {excluded.mixed + excluded.unknown === 1 ? "" : "s"} excluded in total.
+            {fmtNumber(excluded.mixed + excluded.unknown + excluded.staff)} book
+            {excluded.mixed + excluded.unknown + excluded.staff === 1 ? "" : "s"} excluded in total.
           </p>
         </div>
       </CardBody>

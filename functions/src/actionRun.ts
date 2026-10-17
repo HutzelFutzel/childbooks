@@ -451,6 +451,29 @@ export async function listActionRuns(q: RunQuery): Promise<ActionRunDoc[]> {
   return rows.slice(0, limit);
 }
 
+/**
+ * One user's runs, newest first.
+ *
+ * Its own query rather than `listActionRuns({ uid })` because that one scans a
+ * time window and filters by user in memory: on a busy day the user's rows fall
+ * outside the scan and the answer is "no runs", which is wrong in a way nothing
+ * flags. A single equality filter needs no composite index and reads only this
+ * user's documents; the sort is done here for the same reason. Without a server
+ * ordering the cap takes an arbitrary slice, so callers compare the result length
+ * with `limit` and say "at least" when it is reached.
+ */
+export async function listUserActionRuns(uid: string, limit = 1000): Promise<ActionRunDoc[]> {
+  ensureAdmin();
+  const snap = await db()
+    .collection("actionRuns")
+    .where("uid", "==", uid)
+    .limit(Math.min(Math.max(limit, 1), 1000))
+    .get();
+  return snap.docs
+    .map((d) => d.data() as ActionRunDoc)
+    .sort((a, b) => b.at - a.at);
+}
+
 export async function getActionRun(runId: string): Promise<ActionRunDoc | null> {
   ensureAdmin();
   const snap = await db().collection("actionRuns").doc(runId).get();

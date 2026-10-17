@@ -746,6 +746,8 @@
       "statusReady": "Ready",
       "statusNeedsAttention": "Needs attention",
       "chooseHowToStart": "How would you like to begin?",
+      "guideMeHint": "Answer a few questions—I'll write it",
+      "ownWordsHintEntry": "Type or paste a story you wrote",
       "bookDesign": "Book design",
       "bookDesignLocked": "Shape and layout are fixed once the illustrated pages begin.",
       "continueInConversation": "Continue in the conversation",
@@ -770,6 +772,7 @@
       "drawingBookPlaceholder": "Your book is being drawn. Ask a question, or adjust the text.",
       "personPlaceholder": "Tell me what to change about {name}: hair, clothes, glasses…",
       "cardTypePlaceholder": "Or type your answer, or ask a question…",
+      "briefPlaceholder": "Tell me favorite things, details to include, or anything to leave out…",
       "cardPickPlaceholder": "Pick an option above, or ask a question…",
       "sendingPlaceholder": "Answering… you can keep typing.",
       "storyPlaceholder": "Tell me what to change in the story…",
@@ -832,10 +835,7 @@
       "taskCoverWords": "What the cover says",
       "statusOptional": "Optional",
       "coverNone": "None",
-      "coverOwn": "Write my own",
-      "coverSubtitlePlaceholder": "Your subtitle",
-      "coverAuthorPlaceholder": "Who the book is from",
-      "editTitle": "Edit title",
+      "coverTypeBelowHint": "Want a different title, subtitle, or author? Just type it in the chat below.",
       "coverPainted": "The words are painted into the cover picture.",
       "coverSet": "The words are set on the cover as text.",
       "coverWords": "Cover",
@@ -982,6 +982,7 @@
       "seeAllPacks": "See all packs",
       "noPacks": "Sparks packs aren't available right now.",
       "ideasLabel": "Ideas",
+      "examplesLabel": "Example answers",
       "remedyShow": "Show me",
       "remedyPortraits": "Draw the portraits",
       "tryIdea": "Try “{idea}”"
@@ -1034,6 +1035,7 @@
       "menuLabel": "What can I ask?",
       "menuTitle": "Things you can ask",
       "menuMarkTip": "Tip: select a passage in the story to change just that part.",
+      "groupQuestion": "Ideas for this question",
       "groupCheck": "Check",
       "groupStory": "Improve the story",
       "groupPeople": "Characters",
@@ -1041,6 +1043,52 @@
       "groupHelp": "Questions",
       "nextSuggested": "Suggested next step",
       "dismissNext": "Not now"
+    },
+    "examples": {
+      "names": {
+        "1": "My son Leo, 5, and our dog Max",
+        "2": "Hugo the hedgehog and Momo the mole",
+        "3": "My twins Mia and Noah, 4",
+        "4": "Grandma Rose, 70, and her cat",
+        "5": "A little girl named Zoe, 3",
+        "tip": "Characters can be children, grandparents, pets, toys or made-up creatures."
+      },
+      "ages": {
+        "1": "Mia is 4",
+        "2": "Max is a dog and Fluffy is a teddy bear",
+        "3": "Leo is 18 months, Mia is 4",
+        "tip": "For a pet or a toy, tell me what it is, like a dog or a teddy bear."
+      },
+      "idea": {
+        "1": "A rainy-day adventure at the zoo",
+        "2": "Leo's first day at school",
+        "3": "A bedtime story about a sleepy bear",
+        "4": "Grandma's birthday surprise"
+      },
+      "language": {
+        "1": "Make it in German",
+        "2": "Write the book in Spanish"
+      },
+      "storyBrief": {
+        "1": "Leo loves diggers and pancakes",
+        "2": "Grandpa always whistles when he cooks",
+        "3": "Leave out monsters and the dark",
+        "4": "It's for Grandma's 70th birthday",
+        "5": "Set it at our cabin by the lake",
+        "tip": "Type anything you like, or just go ahead and write the story."
+      },
+      "coverWords": {
+        "1": "Change the title to The Moonlit Garden",
+        "2": "Subtitle: A bedtime adventure",
+        "3": "Written by Grandma & Grandpa",
+        "tip": "Pick an idea on the card, or type any title, subtitle or author."
+      },
+      "castLooks": {
+        "1": "{name} has curly brown hair and glasses",
+        "2": "{name} always wears a yellow raincoat",
+        "3": "I have a photo of {name}",
+        "tip": "Let the story decide, upload a photo or drawing, or describe {name} in a few words."
+      }
     },
     "looks": {
       "switchLabel": "Looks for",
@@ -1059,8 +1107,7 @@
       "drawing": "Artwork of {name}",
       "drawingHintStyle": "Any drawing, sketch or painting, maybe your child's. The whole book takes on its look.",
       "drawingHint": "Any drawing, sketch or painting, maybe your child's. I'll keep {name}'s design.",
-      "describe": "Describe {name}",
-      "describeHint": "Hair, clothes, anything special.",
+      "describeBelowHint": "Want to describe {name} in your own words? Just type hair, clothes, or glasses in the chat below.",
       "startsNow": "Choosing starts {names}'s portrait right away",
       "startsNowMany": "Choosing starts the portraits of {names} right away",
       "upTo": "up to {sparks} Sparks",
@@ -1075,9 +1122,6 @@
       "drawingNoteReplaces": "This picture also becomes the look of the whole book, in place of the style it has now. Pictures already drawn will need redrawing. One picture per character. For a real person or a pet, use a photo instead.",
       "drawingNoteFollows": "{first}'s picture already sets the look of the book, so {name} is drawn in it. One picture per character. For a real person or a pet, use a photo instead.",
       "drawingNoteFollowsAny": "An earlier picture already sets the look of the book, so {name} is drawn in it. One picture per character. For a real person or a pet, use a photo instead.",
-      "describeLabel": "How does {name} look?",
-      "describePlaceholder": "Curly red hair, round glasses, always in rain boots",
-      "save": "Save",
       "uploading": "Uploading…",
       "readingDrawing": "Reading the drawing's style…",
       "uploadFailed": "That didn't upload. Try another image.",
@@ -1086,6 +1130,7 @@
       "addPhotoAgain": "Add the photo again",
       "portraitFailed": "{name}'s last portrait didn't work.",
       "portraitFailedPhoto": "The photo was no longer there.",
+      "portraitFailedNotVisible": "That part isn't shown in {name}'s portrait, so nothing was changed or charged.",
       "photoSlot": "Photo {n}",
       "removePhoto": "Remove photo {n}",
       "addPhotoSlot": "Add photo {n}",
@@ -1110,11 +1155,10 @@
       "title": "Shape the story",
       "status": "Optional",
       "hint": "Everything here is optional. Pick what matters to you, or go straight to writing.",
-      "ownWords": "In my own words…",
       "remove": "Remove {label}",
-      "add": "Add",
       "cancel": "Cancel",
-      "ownWordsHint": "Press Enter to add it to the story.",
+      "bedtimeHint": "Calm pacing that winds down to sleep.",
+      "typeBelowHint": "Have a favorite thing, a family detail, or something to leave out? Just type it in the chat below.",
       "fields": {
         "about": "What happens",
         "bedtime": "Bedtime story",
@@ -1131,20 +1175,6 @@
         "learning": "Learn along",
         "voice": "Who tells it",
         "length": "Length"
-      },
-      "examples": {
-        "about": "A lost teddy finds its way home",
-        "moment": "Grandma's 70th birthday",
-        "place": "Our cabin by the lake",
-        "mood": "Cozy, with lots of giggles",
-        "telling": "In short rhymes, with a line that repeats",
-        "include": "Grandpa always whistles when he cooks",
-        "interests": "Diggers, dinosaurs and pancakes",
-        "avoid": "Monsters and the dark",
-        "lesson": "It's okay to feel scared sometimes",
-        "ending": "Everyone dancing in the kitchen",
-        "time": "On a snowy winter morning",
-        "learning": "Counting to ten"
       },
       "options": {
         "moment": {

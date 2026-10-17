@@ -104,10 +104,10 @@ function journeyOf(project: Project, signals: Parameters<typeof deriveJourney>[2
   cases += 1;
   if (
     opening.entry === null &&
-    (opening.phase !== "opening" || opening.well !== null || !opening.composer || opening.hasBook)
+    (opening.phase !== "opening" || opening.well !== null || opening.composer || opening.hasBook)
   ) {
     fail(
-      `A book with no entry should have one composer and no book/well ` +
+      `A book with no entry should offer only the opening choice and no composer/book/well ` +
         `(got ${opening.phase}, composer ${opening.composer}, book ${opening.hasBook}, ${opening.well?.kind}).`,
     );
   }
@@ -318,9 +318,13 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   for (const key of [
     "sendingPlaceholder",
     "cardTypePlaceholder",
+    "briefPlaceholder",
+    "coverTypeBelowHint",
     "cardPickPlaceholder",
     "drawingPeoplePlaceholder",
     "drawingBookPlaceholder",
+    "guideMeHint",
+    "ownWordsHintEntry",
   ]) {
     cases += 2;
     if (!chromeEn[key]?.trim()) fail(`The English message "${key}" is missing.`);
@@ -328,7 +332,7 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   }
   const looksEn = (en as unknown as { guide: { looks: Record<string, string> } }).guide.looks;
   const looksDe = (de as unknown as { guide: { looks: Record<string, string> } }).guide.looks;
-  for (const key of ["switchLabel", "switchDone", "switchOpen"]) {
+  for (const key of ["switchLabel", "switchDone", "switchOpen", "describeBelowHint"]) {
     cases += 2;
     if (!looksEn[key]?.trim()) fail(`The English looks message "${key}" is missing.`);
     if (!looksDe[key]?.trim()) fail(`The German looks message "${key}" is missing.`);

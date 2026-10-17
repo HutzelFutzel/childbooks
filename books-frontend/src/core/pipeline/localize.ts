@@ -478,6 +478,118 @@ export interface LocateEditPartInput {
 export async function locateEditPart(
   input: LocateEditPartInput,
 ): Promise<{ box: SubjectBox; part: string } | null> {
+  let res: z.infer<typeof partSchema>;
+  try {
+    res = await requestEditPart(input);
+  } catch {
+    return null;
+  }
+  const box = sanitizeBox(res);
+  return box ? { box, part: (res.part ?? "").trim().slice(0, 40) } : null;
+}
+
+/** A part covering this much of the picture is the whole subject, not a part. */
+export const WHOLE_SUBJECT_AREA = 0.6;
+/**
+ * The smallest side, as a share of the picture, a located part is given. An eye
+ * on a full portrait is a couple of percent across; a box that thin gives the
+ * model nothing to repaint and used to be thrown away, sending the edit to a
+ * whole-picture redraw.
+ */
+export const MIN_PART_SIDE = 0.08;
+
+/**
+ * What a portrait or picture edit should do about the part it names:
+ * - `part`: repaint just this box, composite the rest back unchanged.
+ * - `whole`: the change is about most of the picture (an age, a size); there is
+ *   no part to protect, so the picture is edited as a whole.
+ * - `absent`: the part is not in the picture (boots in a chest-up portrait).
+ *   Nothing can be changed there, so nothing is drawn.
+ * - `failed`: the vision call or its answer was unusable; worth another try,
+ *   never worth silently redrawing everything.
+ */
+export type EditPartOutcome =
+  | { kind: "part"; box: SubjectBox; part: string }
+  | { kind: "whole"; box: SubjectBox; part: string }
+  | { kind: "absent" }
+  | { kind: "failed"; reason: string };
+
+/** Turn the vision model's raw answer into an {@link EditPartOutcome}. Pure. */
+export function classifyLocatedPart(raw: {
+  found?: boolean;
+  part?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}): EditPartOutcome {
+  if (!raw.found) return { kind: "absent" };
+  const { x, y, width, height } = raw;
+  if (
+    x == null || y == null || width == null || height == null ||
+    ![x, y, width, height].every(Number.isFinite) ||
+    width <= 0 || height <= 0
+  ) {
+    return { kind: "failed", reason: "The located part had no usable box." };
+  }
+  const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+  const w = Math.max(MIN_PART_SIDE, clamp01(width));
+  const h = Math.max(MIN_PART_SIDE, clamp01(height));
+  // Grow around the centre, then slide back inside the picture.
+  const left = Math.min(1 - w, Math.max(0, clamp01(x) + clamp01(width) / 2 - w / 2));
+  const top = Math.min(1 - h, Math.max(0, clamp01(y) + clamp01(height) / 2 - h / 2));
+  const box = { x: left, y: top, width: w, height: h };
+  const part = (raw.part ?? "").trim().slice(0, 40);
+  return w * h >= WHOLE_SUBJECT_AREA ? { kind: "whole", box, part } : { kind: "part", box, part };
+}
+
+/** What the worker does with an {@link EditPartOutcome}. */
+export type EditPlan =
+  | { path: "masked"; box: SubjectBox; part: string }
+  /** Edit the whole picture: the model can't mask, or the change is about all of it. */
+  | { path: "whole"; reason: "cannot_mask" | "whole_subject" | "locate_gave_up"; detail?: string }
+  /** Nothing usable came back; try the task again rather than redraw everything. */
+  | { path: "retry"; detail: string }
+  /** The part isn't in the picture: nothing to draw. */
+  | { path: "notVisible" };
+
+/**
+ * One decision for every edit, so a failure can never quietly become a
+ * whole-picture redraw. The only fall-through after a failed locate is the last
+ * attempt, which is logged by the caller: a picture that changed too much beats
+ * a request that never completes.
+ */
+export function planPartEdit(
+  outcome: EditPartOutcome | { kind: "unsupported" },
+  options: { finalAttempt: boolean },
+): EditPlan {
+  switch (outcome.kind) {
+    case "unsupported":
+      return { path: "whole", reason: "cannot_mask" };
+    case "part":
+      return { path: "masked", box: outcome.box, part: outcome.part };
+    case "whole":
+      return { path: "whole", reason: "whole_subject" };
+    case "absent":
+      return { path: "notVisible" };
+    case "failed":
+      return options.finalAttempt
+        ? { path: "whole", reason: "locate_gave_up", detail: outcome.reason }
+        : { path: "retry", detail: outcome.reason };
+  }
+}
+
+/** Like {@link locateEditPart}, but says why it found nothing. */
+export async function locateEditPartOutcome(input: LocateEditPartInput): Promise<EditPartOutcome> {
+  try {
+    return classifyLocatedPart(await requestEditPart(input));
+  } catch (error) {
+    if (input.signal?.aborted) throw error;
+    return { kind: "failed", reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function requestEditPart(input: LocateEditPartInput): Promise<z.infer<typeof partSchema>> {
   const provider = getTextProvider(input.providerId);
   const { system, user } = renderTextPrompt(resolvePromptsConfig(input.prompts), "localize/part", {
     vars: {
@@ -486,28 +598,21 @@ export async function locateEditPart(
       instruction: input.instruction,
     },
   });
-  let res: z.infer<typeof partSchema>;
-  try {
-    res = await withRetry(
-      () =>
-        provider.generateStructured(input.creds, {
-          model: input.model,
-          messages: [
-            { role: "system" as const, content: system },
-            { role: "user" as const, content: user },
-          ],
-          schema: partSchema,
-          temperature: 0,
-          images: [{ base64: input.pageBase64, mimeType: input.pageMime }],
-          signal: input.signal,
-        }),
-      { signal: input.signal, retries: 1 },
-    );
-  } catch {
-    return null;
-  }
-  const box = sanitizeBox(res);
-  return box ? { box, part: (res.part ?? "").trim().slice(0, 40) } : null;
+  return withRetry(
+    () =>
+      provider.generateStructured(input.creds, {
+        model: input.model,
+        messages: [
+          { role: "system" as const, content: system },
+          { role: "user" as const, content: user },
+        ],
+        schema: partSchema,
+        temperature: 0,
+        images: [{ base64: input.pageBase64, mimeType: input.pageMime }],
+        signal: input.signal,
+      }),
+    { signal: input.signal, retries: 1 },
+  );
 }
 
 /**

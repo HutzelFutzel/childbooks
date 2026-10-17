@@ -35,7 +35,7 @@ const dryRunSchema = z.object({
   message: z.string().trim().min(1).max(50_000),
 });
 
-type Population = "all" | "low-confidence" | "rejected" | "unhandled" | "self-repeat";
+type Population = "all" | "low-confidence" | "rejected" | "admitted-failure" | "self-repeat";
 
 function inPopulation(row: Record<string, unknown>, population: Population): boolean {
   if (population === "all") return true;
@@ -45,7 +45,11 @@ function inPopulation(row: Record<string, unknown>, population: Population): boo
       Array.isArray((row.outcome as { rejected?: unknown[] } | undefined)?.rejected) &&
       ((row.outcome as { rejected?: unknown[] }).rejected?.length ?? 0) > 0;
   }
-  if (population === "unhandled") return Array.isArray(row.unhandled) && row.unhandled.length > 0;
+  // The reader was told we hadn't understood. Recorded by the browser, so a row
+  // with no outcome (tab closed) is simply not in this population.
+  if (population === "admitted-failure") {
+    return (row.outcome as { admittedFailure?: unknown } | undefined)?.admittedFailure === true;
+  }
   const outcome = row.outcome as { applied?: unknown[]; unchanged?: unknown[] } | undefined;
   return Boolean(
     outcome &&
@@ -56,28 +60,43 @@ function inPopulation(row: Record<string, unknown>, population: Population): boo
 
 export function registerGuideAnalysisRoutes(app: Express): void {
   app.get("/admin/analytics/guide-turns", async (req: Request, res: Response) => {
-    const requested = String(req.query.population ?? "all");
-    const population: Population = [
-      "all",
-      "low-confidence",
-      "rejected",
-      "unhandled",
-      "self-repeat",
-    ].includes(requested) ? requested as Population : "all";
-    const snapshot = await getFirestore()
-      .collectionGroup("guideTurns")
-      .orderBy("createdAt", "desc")
-      .limit(250)
-      .get();
-    const rows = snapshot.docs
-      .map((doc) => ({
-        id: doc.id,
-        uid: doc.ref.parent.parent?.id ?? null,
-        ...doc.data(),
-      }))
-      .filter((row) => inPopulation(row, population))
-      .slice(0, 100);
-    res.json({ population, rows });
+    try {
+      const requested = String(req.query.population ?? "all");
+      const population: Population = [
+        "all",
+        "low-confidence",
+        "rejected",
+        "admitted-failure",
+        "self-repeat",
+      ].includes(requested) ? requested as Population : "all";
+      const uid = String(req.query.uid ?? "").trim();
+      const projectId = String(req.query.projectId ?? "").trim();
+
+      const db = getFirestore();
+      // One person's turns come straight from their own subcollection — cheap, and
+      // unaffected by how busy the rest of the system is. Otherwise the newest
+      // turns anywhere. A named population is a FILTER over what was read, so it
+      // reads a wider slice: 250 rows with one rejection among them would have
+      // answered "rejected turns" with an empty list that looked like good news.
+      const scanLimit = population === "all" ? 100 : 1000;
+      const base = uid
+        ? db.collection(`users/${uid}/guideTurns`)
+        : db.collectionGroup("guideTurns");
+      const snapshot = await base.orderBy("createdAt", "desc").limit(scanLimit).get();
+      const rows = snapshot.docs
+        .map((doc) => ({
+          id: doc.id,
+          uid: doc.ref.parent.parent?.id ?? null,
+          ...doc.data(),
+        }))
+        .filter((row) => !projectId || (row as { projectId?: unknown }).projectId === projectId)
+        .filter((row) => inPopulation(row, population))
+        .slice(0, 100);
+      res.json({ population, rows, scanned: snapshot.size, scanLimit });
+    } catch (err) {
+      console.error("[guide-turns] failed", err);
+      res.status(500).json({ error: { message: "Could not load Guide turns." } });
+    }
   });
 
   app.post("/admin/analytics/guide-examples", express.json({ limit: "64kb" }), async (req: AuthedRequest, res: Response) => {

@@ -746,6 +746,8 @@
       "statusReady": "Bereit",
       "statusNeedsAttention": "Prüfung nötig",
       "chooseHowToStart": "Wie möchtest du beginnen?",
+      "guideMeHint": "Ein paar Fragen – ich schreibe sie",
+      "ownWordsHintEntry": "Eigene Geschichte eintippen oder einfügen",
       "bookDesign": "Buchgestaltung",
       "bookDesignLocked": "Form und Layout stehen fest, sobald die illustrierten Seiten beginnen.",
       "continueInConversation": "Im Gespräch fortfahren",
@@ -770,6 +772,7 @@
       "drawingBookPlaceholder": "Dein Buch wird gezeichnet. Stell eine Frage oder passe den Text an.",
       "personPlaceholder": "Sag mir, was sich bei {name} ändern soll: Haare, Kleidung, Brille …",
       "cardTypePlaceholder": "Oder tippe deine Antwort oder stell eine Frage …",
+      "briefPlaceholder": "Erzähl mir von Lieblingsdingen, Details oder was wegbleiben soll …",
       "cardPickPlaceholder": "Wähl oben eine Option oder stell eine Frage …",
       "sendingPlaceholder": "Ich antworte gerade … du kannst weitertippen.",
       "storyPlaceholder": "Sag mir, was sich in der Geschichte ändern soll …",
@@ -832,10 +835,7 @@
       "taskCoverWords": "Was auf dem Cover steht",
       "statusOptional": "Optional",
       "coverNone": "Ohne",
-      "coverOwn": "Selbst schreiben",
-      "coverSubtitlePlaceholder": "Dein Untertitel",
-      "coverAuthorPlaceholder": "Von wem das Buch ist",
-      "editTitle": "Titel ändern",
+      "coverTypeBelowHint": "Anderer Titel, Untertitel oder Autor? Schreib es einfach unten in den Chat.",
       "coverPainted": "Die Schrift wird direkt ins Coverbild gemalt.",
       "coverSet": "Die Schrift steht als Text auf dem Cover.",
       "coverWords": "Cover",
@@ -983,6 +983,7 @@
       "seeAllPacks": "Alle Pakete ansehen",
       "noPacks": "Sparks-Pakete sind gerade nicht verfügbar.",
       "ideasLabel": "Ideen",
+      "examplesLabel": "Beispielantworten",
       "remedyShow": "Zeig mal",
       "remedyPortraits": "Porträts zeichnen",
       "tryIdea": "Probier mal: „{idea}“"
@@ -1035,6 +1036,7 @@
       "menuLabel": "Was kann ich fragen?",
       "menuTitle": "Das kannst du fragen",
       "menuMarkTip": "Tipp: Markiere eine Stelle in der Geschichte, um nur diesen Teil zu ändern.",
+      "groupQuestion": "Ideen für diese Frage",
       "groupCheck": "Prüfen",
       "groupStory": "Geschichte verbessern",
       "groupPeople": "Figuren",
@@ -1042,6 +1044,52 @@
       "groupHelp": "Fragen",
       "nextSuggested": "Vorgeschlagener nächster Schritt",
       "dismissNext": "Jetzt nicht"
+    },
+    "examples": {
+      "names": {
+        "1": "Mein Sohn Leo, 5, und unser Hund Max",
+        "2": "Hugo der Igel und Momo der Maulwurf",
+        "3": "Meine Zwillinge Mia und Noah, 4",
+        "4": "Oma Rosa, 70, und ihre Katze",
+        "5": "Ein kleines Mädchen namens Zoe, 3",
+        "tip": "Figuren können Kinder, Großeltern, Haustiere, Kuscheltiere oder erfundene Wesen sein."
+      },
+      "ages": {
+        "1": "Mia ist 4",
+        "2": "Max ist ein Hund und Fluffy ein Teddybär",
+        "3": "Leo ist 18 Monate, Mia ist 4",
+        "tip": "Bei einem Haustier oder Kuscheltier sag mir, was es ist, zum Beispiel ein Hund oder ein Teddybär."
+      },
+      "idea": {
+        "1": "Ein Regentag-Abenteuer im Zoo",
+        "2": "Leos erster Schultag",
+        "3": "Eine Gutenachtgeschichte über einen müden Bären",
+        "4": "Omas Geburtstagsüberraschung"
+      },
+      "language": {
+        "1": "Mach es auf Englisch",
+        "2": "Schreib das Buch auf Spanisch"
+      },
+      "storyBrief": {
+        "1": "Leo liebt Bagger und Pfannkuchen",
+        "2": "Opa pfeift immer beim Kochen",
+        "3": "Lass Monster und die Dunkelheit weg",
+        "4": "Es ist für Omas 70. Geburtstag",
+        "5": "Es spielt in unserer Hütte am See",
+        "tip": "Schreib einfach, was du magst, oder lass die Geschichte gleich schreiben."
+      },
+      "coverWords": {
+        "1": "Ändere den Titel in Der Mondscheingarten",
+        "2": "Untertitel: Ein Gutenacht-Abenteuer",
+        "3": "Geschrieben von Oma & Opa",
+        "tip": "Wähl eine Idee auf der Karte oder schreib einen eigenen Titel, Untertitel oder Autor."
+      },
+      "castLooks": {
+        "1": "{name} hat braune Locken und eine Brille",
+        "2": "{name} trägt immer einen gelben Regenmantel",
+        "3": "Ich habe ein Foto von {name}",
+        "tip": "Lass die Geschichte entscheiden, lade ein Foto oder eine Zeichnung hoch oder beschreib {name} kurz."
+      }
     },
     "looks": {
       "switchLabel": "Aussehen von",
@@ -1060,8 +1108,7 @@
       "drawing": "Bild von {name}",
       "drawingHintStyle": "Jede Zeichnung, Skizze oder Malerei, gern von deinem Kind. Das ganze Buch \u00fcbernimmt ihren Look.",
       "drawingHint": "Jede Zeichnung, Skizze oder Malerei, gern von deinem Kind. Ich behalte das Design von {name} bei.",
-      "describe": "{name} beschreiben",
-      "describeHint": "Haare, Kleidung, etwas Besonderes.",
+      "describeBelowHint": "Möchtest du {name} mit eigenen Worten beschreiben? Schreib Haare, Kleidung oder Brille einfach unten in den Chat.",
       "startsNow": "Deine Wahl startet gleich das Porträt von {names}",
       "startsNowMany": "Deine Wahl startet gleich die Porträts von {names}",
       "upTo": "bis zu {sparks} Sparks",
@@ -1076,9 +1123,6 @@
       "drawingNoteReplaces": "Dieses Bild wird auch der Stil des ganzen Buches und ersetzt den bisherigen Stil. Schon gezeichnete Bilder müssen neu gezeichnet werden. Ein Bild pro Figur. Für einen echten Menschen oder ein Haustier nimm lieber ein Foto.",
       "drawingNoteFollows": "Das Bild von {first} bestimmt schon den Stil des Buches, deshalb wird {name} in diesem Stil gezeichnet. Ein Bild pro Figur. Für einen echten Menschen oder ein Haustier nimm lieber ein Foto.",
       "drawingNoteFollowsAny": "Ein früheres Bild bestimmt schon den Stil des Buches, deshalb wird {name} in diesem Stil gezeichnet. Ein Bild pro Figur. Für einen echten Menschen oder ein Haustier nimm lieber ein Foto.",
-      "describeLabel": "Wie sieht {name} aus?",
-      "describePlaceholder": "Rote Locken, runde Brille, immer in Gummistiefeln",
-      "save": "Speichern",
       "uploading": "Wird hochgeladen …",
       "readingDrawing": "Ich lese den Stil der Zeichnung …",
       "uploadFailed": "Das hat nicht geklappt. Versuch ein anderes Bild.",
@@ -1087,6 +1131,7 @@
       "addPhotoAgain": "Foto noch einmal hinzufügen",
       "portraitFailed": "Das letzte Porträt von {name} hat nicht geklappt.",
       "portraitFailedPhoto": "Das Foto war nicht mehr da.",
+      "portraitFailedNotVisible": "Dieser Teil ist im Porträt von {name} nicht zu sehen, deshalb wurde nichts geändert oder berechnet.",
       "photoSlot": "Foto {n}",
       "removePhoto": "Foto {n} entfernen",
       "addPhotoSlot": "Foto {n} hinzuf\u00fcgen",
@@ -1111,11 +1156,10 @@
       "title": "Geschichte gestalten",
       "status": "Optional",
       "hint": "Alles hier ist freiwillig. Wähl, was dir wichtig ist, oder leg direkt los.",
-      "ownWords": "In meinen Worten …",
       "remove": "{label} entfernen",
-      "add": "Hinzufügen",
       "cancel": "Abbrechen",
-      "ownWordsHint": "Mit Enter fügst du es der Geschichte hinzu.",
+      "bedtimeHint": "Ruhiges Tempo, das sanft zum Einschlafen führt.",
+      "typeBelowHint": "Lieblingsdinge, ein Familiendetail oder etwas, das wegbleiben soll? Schreib es einfach unten in den Chat.",
       "fields": {
         "about": "Was passiert",
         "bedtime": "Gute-Nacht-Geschichte",
@@ -1132,20 +1176,6 @@
         "learning": "Nebenbei lernen",
         "voice": "Wer erzählt",
         "length": "Länge"
-      },
-      "examples": {
-        "about": "Ein verlorener Teddy findet nach Hause",
-        "moment": "Omas 70. Geburtstag",
-        "place": "Unsere Hütte am See",
-        "mood": "Gemütlich, mit viel Gekicher",
-        "telling": "In kurzen Reimen, mit einem Satz, der wiederkehrt",
-        "include": "Opa pfeift immer beim Kochen",
-        "interests": "Bagger, Dinos und Pfannkuchen",
-        "avoid": "Monster und Dunkelheit",
-        "lesson": "Angst haben ist okay",
-        "ending": "Alle tanzen zusammen in der Küche",
-        "time": "An einem verschneiten Wintermorgen",
-        "learning": "Bis zehn zählen"
       },
       "options": {
         "moment": {

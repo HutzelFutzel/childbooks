@@ -31,8 +31,8 @@ import type {
 import { LIKENESS_PHOTOS_MAX, SOURCE_ART_MAX } from "../types";
 import { describesSomeoneElse } from "../book/anchorDescription";
 import { normalizeAnchorName } from "../book/anchorRefs";
-import { identityChanged, isBareRestart, visualChange } from "./redrawMode";
-import { ageOfSignature, ageShiftMatters } from "./visualAge";
+import { ageShifted, beingChanged, drawnAgeParts, isBareRestart, visualChange } from "./redrawMode";
+import { ageOfSignature, ageShiftMatters, type AgeParts } from "./visualAge";
 import { addVersion, createVersionTree, getCursor } from "../versioning";
 import { authoringOf, withAuthoring } from "./projectState";
 import { restoreArtwork, retireArtwork, styleIsFromArtwork } from "./artworkStyle";
@@ -84,7 +84,8 @@ export function portraitReferencePlan(project: Project, member: StoryCastMember)
     subject.length === 0 &&
     portrait &&
     !portraitIsCurrent(project, portrait) &&
-    !identityChanged(project, member.id)
+    // A different kind of being is drawn anew; an older or younger one keeps the look of this picture.
+    !beingChanged(project, member.id)
       ? [{
           blobId: portrait.blobId,
           mimeType: portrait.mimeType,
@@ -443,6 +444,15 @@ function ageText(member: StoryCastMember): string {
   return "";
 }
 
+/** The same sentence for an age read back from a drawn portrait. */
+function ageTextOfParts(parts: AgeParts | null): string {
+  if (!parts) return "";
+  if (typeof parts.months === "number" && parts.months < 24) return `${parts.months} months old`;
+  if (typeof parts.age === "number") return `${parts.age} years old`;
+  if (typeof parts.visualYears === "number") return `approximately ${parts.visualYears} years old`;
+  return "";
+}
+
 /** The portrait prompt for one character. Rendered on the worker from the job's snapshot. */
 export function portraitPrompt(
   project: Project,
@@ -456,10 +466,13 @@ export function portraitPrompt(
   const bodyPlan = member.bodyPlan && member.bodyPlan !== "bipedal" ? member.bodyPlan : "";
   const kind = castKindOf(member);
   const together = portraitRelationNote(briefOf(project.config), member.id);
+  // The same person, older or younger: the attached portrait is the look to keep, and age is what changes.
+  const agedFromPortrait = options.currentPortraitIdentity === true && Boolean(age) && ageShifted(project, member.id);
   return renderSinglePrompt(prompts, "portrait/default", {
     vars: {
       name: member.name.trim(),
       age,
+      previousAge: ageTextOfParts(drawnAgeParts(project, member.id)) || "an earlier age",
       role: member.role?.trim() ?? "",
       appearance,
       bodyPlan,
@@ -481,10 +494,18 @@ export function portraitPrompt(
       fromPhoto: source === "photo",
       fromDrawing: source === "drawing",
       fromCurrentPortrait: options.currentPortraitIdentity === true,
+      agedFromPortrait,
       invent: source === "invent" && !appearance && !options.currentPortraitIdentity,
     },
   });
 }
+
+/**
+ * The task error for a change to a part the portrait doesn't show (boots in a
+ * chest-up portrait). The worker throws it and the chat recognises it by this
+ * exact text, so the two never drift apart.
+ */
+export const PORTRAIT_EDIT_NOT_VISIBLE = "That part isn't visible in the portrait, so nothing was changed.";
 
 /**
  * The prompt for a change to a portrait that is already drawn. The current

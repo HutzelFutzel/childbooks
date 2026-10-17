@@ -225,6 +225,8 @@ function AuditLogCard() {
       }
       case "pii_reveal":
         return `${who} revealed ${whom}'s contact details`;
+      case "studio_words_view":
+        return `${who} read what ${whom} typed in the guided studio`;
       default:
         return `${who} → ${e.action} → ${whom}`;
     }

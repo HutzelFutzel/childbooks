@@ -1361,6 +1361,12 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     ],
   });
 
+  // The checkout is real from here: stamp the book so abandonment can be read per
+  // studio flow. Best-effort and first-write-wins, like every milestone.
+  if (args.merchantReference) {
+    await stampMilestone(uid, args.merchantReference, "checkoutStarted").catch(() => {});
+  }
+
   return { ok: true, url: session.url, paymentId };
 }
 
@@ -1990,6 +1996,7 @@ export function registerStripeUserRoutes(app: Express): void {
         ...checkoutDevice(req),
         items: [{ label: `${title} — digital edition (PDF)`, amount: price, quantity: 1 }],
       });
+      await stampMilestone(uid, body.projectId, "checkoutStarted").catch(() => {});
 
       res.json({ url: session.url, paymentId });
     } catch (err) {

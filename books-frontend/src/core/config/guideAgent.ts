@@ -144,7 +144,7 @@ export interface GuideAgentConfig {
   language: { followMessage: boolean; minConfidence: number; minWords: number };
   /** Admin edits to shipped help articles, and admin-added articles. */
   help: { articles: GuideHelpArticleSetting[] };
-  ideas: { enabled: boolean; max: number; inPlaceholder: boolean; disabled: string[] };
+  ideas: { enabled: boolean; max: number; inPlaceholder: boolean; questionExamples: boolean; disabled: string[] };
   palette: GuidePalette;
 }
 
@@ -215,7 +215,7 @@ export function createDefaultGuideAgentConfig(): GuideAgentConfig {
     answers: { enabled: true },
     language: { followMessage: true, minConfidence: 0.8, minWords: 3 },
     help: { articles: [] },
-    ideas: { enabled: true, max: 3, inPlaceholder: true, disabled: [] },
+    ideas: { enabled: true, max: 3, inPlaceholder: true, questionExamples: true, disabled: [] },
     palette: { colors: [], hidden: [] },
   };
 }
@@ -361,6 +361,7 @@ export function normalizeGuideAgentConfig(input: unknown): GuideAgentConfig {
       enabled: bool(ideas.enabled, def.ideas.enabled),
       max: num(ideas.max, TURN_LIMITS.ideasMax, def.ideas.max),
       inPlaceholder: bool(ideas.inPlaceholder, def.ideas.inPlaceholder),
+      questionExamples: bool(ideas.questionExamples, def.ideas.questionExamples),
       disabled: list(ideas.disabled, 100, 60),
     },
     palette: normalizePalette(raw.palette),
@@ -537,8 +538,8 @@ export const GUIDE_AGENT_META: Record<string, AdminFieldMeta> = {
   },
   "persona.name": {
     label: "Name",
-    effect: "The name the guide uses when it introduces itself. Empty: it never introduces itself by name.",
-    appearsIn: "Only when self reference is allowed",
+    effect: "Shown next to the guide's avatar in the chat, and used when the guide introduces itself. Empty: shows “Guide” in the chat and never introduces itself by name.",
+    appearsIn: "Chat header, guide messages, and self reference",
     example: "Hugo",
   },
   "persona.identity": {
@@ -642,6 +643,12 @@ export const GUIDE_AGENT_META: Record<string, AdminFieldMeta> = {
     label: "Suggestion in the placeholder",
     effect: "When the guide isn't asking anything, the empty composer shows one suggestion as its placeholder.",
     appearsIn: "Idle composer",
+  },
+  "ideas.questionExamples": {
+    label: "Example answers to the guide's question",
+    effect: "While the guide waits for an answer (who is in the book, their ages, what should happen, the story details), example answers show as chips and at the top of the lightbulb menu, with a line on what can be answered. A tap fills the composer; nothing is sent until the parent does.",
+    appearsIn: "Composer chips and lightbulb menu while a question is open",
+    example: "Asked who the book is about: “Hugo the hedgehog and Momo the mole”.",
   },
   "palette.colors": {
     label: "Extra color names",

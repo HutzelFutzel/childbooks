@@ -238,6 +238,12 @@ export function storyStatus(project: Project): StoryStatus {
   return "none";
 }
 
+/** Whether the story is being written right now or has already been written. */
+export function storyBegun(project: Project): boolean {
+  const status = storyStatus(project);
+  return status === "running" || status === "ready";
+}
+
 /** Optional facts the guide asked and the reader has not yet answered or skipped. */
 export function openAskedFacts(project: Project): GuideFactId[] {
   const state = authoringOf(project);

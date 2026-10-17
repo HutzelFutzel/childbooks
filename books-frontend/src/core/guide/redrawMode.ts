@@ -139,18 +139,50 @@ function drawnPerson(image: PortraitImage): { being: Being; age: AgeParts } | nu
  * keep the old face (a six-year-old edited to look three is still six), so the
  * only honest picture is a new one. An age that looks the same (a year on an
  * adult) is not a change of person.
+ *
+ * "New" means redrawn, not redesigned: for an age alone the old portrait is
+ * sent along as the look to keep (`portraitReferencePlan`), and only a change
+ * of what they are (`beingChanged`) starts from the description.
  */
 export function identityChanged(project: Project, castId: string): boolean {
+  return beingChanged(project, castId) || ageShifted(project, castId);
+}
+
+/** The drawn portrait and the person it is of, when both are in the book and the portrait can be read. */
+function drawnOf(project: Project, castId: string): { member: StoryCastMember; drawn: NonNullable<ReturnType<typeof drawnPerson>> } | null {
   const tree = authoringOf(project).portraits?.[castId];
   const member = briefOf(project.config).cast?.find((candidate) => candidate.id === castId);
-  if (!tree || !member) return false;
+  if (!tree || !member) return null;
   const image = getCursor(tree).content;
-  if (!image) return false;
-  const drawn = drawnPerson(image);
-  if (!drawn) return false;
-  const now = beingOfMember(member);
-  if ((Object.keys(now) as (keyof Being)[]).some((key) => now[key] !== drawn.being[key])) return true;
-  return ageShiftMatters(drawn.age, ageOfMember(member));
+  const drawn = image ? drawnPerson(image) : null;
+  return drawn ? { member, drawn } : null;
+}
+
+/**
+ * The person is now another kind of being than their portrait shows (a girl who
+ * became a dog). Nothing of the old picture is worth keeping: it is drawn anew
+ * from the description, not from that picture.
+ */
+export function beingChanged(project: Project, castId: string): boolean {
+  const found = drawnOf(project, castId);
+  if (!found) return false;
+  const now = beingOfMember(found.member);
+  return (Object.keys(now) as (keyof Being)[]).some((key) => now[key] !== found.drawn.being[key]);
+}
+
+/**
+ * Their age now looks different from the age drawn (`ageShiftMatters`). It is
+ * still the same person: the portrait is the starting point for the new one,
+ * so the look is kept and only what age changes is different.
+ */
+export function ageShifted(project: Project, castId: string): boolean {
+  const found = drawnOf(project, castId);
+  return found ? ageShiftMatters(found.drawn.age, ageOfMember(found.member)) : false;
+}
+
+/** The age the portrait was drawn at, for telling the picture model what changes. Null when it can't be read. */
+export function drawnAgeParts(project: Project, castId: string): AgeParts | null {
+  return drawnOf(project, castId)?.drawn.age ?? null;
 }
 
 /** Whether the picture a change is about has been drawn yet. */

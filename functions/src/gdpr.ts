@@ -185,6 +185,8 @@ export interface EraseResult {
   subscriptionsAnonymized: number;
   analyticsEventsScrubbed: number;
   surveyResponsesDeleted: number;
+  projectMirrorsDeleted: number;
+  actionRunsDeidentified: number;
   errors: string[];
 }
 
@@ -206,6 +208,8 @@ export async function eraseUser(uid: string, byUid: string | undefined): Promise
     subscriptionsAnonymized: 0,
     analyticsEventsScrubbed: 0,
     surveyResponsesDeleted: 0,
+    projectMirrorsDeleted: 0,
+    actionRunsDeidentified: 0,
     errors: [],
   };
 
@@ -295,6 +299,50 @@ export async function eraseUser(uid: string, byUid: string | undefined): Promise
     result.surveyResponsesDeleted = await deleteResponsesForUser(uid);
   } catch (err) {
     result.errors.push(`surveyResponses: ${errMsg(err)}`);
+  }
+
+  // 2c) The admin project mirrors and the per-action cost records.
+  //
+  // Both live OUTSIDE `users/{uid}`, so the tree delete below never reaches them,
+  // and both are keyed by the uid. The mirror carries the book's title, setup and
+  // the studio-flow history, so it is deleted. An action run is only costs, Sparks
+  // and outcomes — the books are not retained, but what a render cost us and what
+  // we charged is bookkeeping — so it is de-identified rather than deleted.
+  try {
+    const snap = await db.collection("projects").where("uid", "==", uid).get();
+    for (const chunk of chunkDocs(snap.docs, 400)) {
+      const batch = db.batch();
+      for (const d of chunk) {
+        batch.delete(d.ref);
+        result.projectMirrorsDeleted++;
+      }
+      await batch.commit();
+    }
+  } catch (err) {
+    result.errors.push(`projects: ${errMsg(err)}`);
+  }
+  try {
+    const snap = await db.collection("actionRuns").where("uid", "==", uid).get();
+    for (const chunk of chunkDocs(snap.docs, 400)) {
+      const batch = db.batch();
+      for (const d of chunk) {
+        batch.set(
+          d.ref,
+          {
+            uid: "erased",
+            projectId: FieldValue.delete(),
+            targetId: FieldValue.delete(),
+            jobId: FieldValue.delete(),
+            erasedAt: Date.now(),
+          },
+          { merge: true },
+        );
+        result.actionRunsDeidentified++;
+      }
+      await batch.commit();
+    }
+  } catch (err) {
+    result.errors.push(`actionRuns: ${errMsg(err)}`);
   }
 
   // 3) Delete the whole user tree (profile doc + all subcollections).

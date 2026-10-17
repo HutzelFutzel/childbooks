@@ -736,6 +736,12 @@ export interface ProjectBehaviourStats {
  * turns to count. @see functions/src/flowComparison.ts
  */
 export interface FlowTurnStats {
+  /**
+   * What these numbers cover. Turns are counted only for books in the guided arm
+   * that is being compared — never for mixed or unknown books, and never for
+   * excluded (staff) accounts — so this card cannot contradict the arm table.
+   */
+  scope: { books: number; excludedBooks: number };
   turns: number;
   books: number;
   perBook: StatSummary;
@@ -743,6 +749,43 @@ export interface FlowTurnStats {
   /** Share of turns the interpreter was unsure about. */
   ambiguityRate: number;
   skipRate: number;
+  /**
+   * What the browser reported doing with each proposal. Shares are of the turns
+   * that HAVE an outcome ({@link withOutcome}) — a reader who closed the tab leaves
+   * a row with none, and counting that as "nothing was applied" would flatter
+   * neither flow and mislead both.
+   */
+  withOutcome: number;
+  /** Turns that changed the book. */
+  appliedRate: number;
+  /** Turns where the validator refused at least one proposed slot. */
+  rejectedRate: number;
+  /** Turns where the reader was told we had not understood. */
+  admittedFailureRate: number;
+  /** Turns the model refused a claim on (any reason), from the proposal itself. */
+  refusedClaimRate: number;
+  /** Turns that asked for at least one chat skill. */
+  commandRate: number;
+  /** Turns that needed at least one repair round-trip. */
+  repairRate: number;
+  /**
+   * Everything that is not a typed message: taps, undos, prices shown, the order
+   * screen opened. Without it a book answered by tapping looks like it never
+   * happened, and every per-conversation figure above describes only the people
+   * who type.
+   */
+  taps: {
+    events: number;
+    /** Books with at least one event. */
+    books: number;
+    perBook: StatSummary;
+    byKind: Record<string, number>;
+    /** Books with events and no typed turn at all — invisible to the turn stats. */
+    tapOnlyBooks: number;
+    /** Books with at least one typed turn, for reading the line above against. */
+    typedBooks: number;
+    truncated: boolean;
+  };
   byIntent: Record<string, number>;
   /** Books whose conversation was last heard from on each component. */
   lastComponent: Record<string, number>;
@@ -756,7 +799,12 @@ export interface FlowArmReport {
   comparable: boolean;
   books: number;
   stats: ProjectBehaviourStats;
+  /** The book became finished — says nothing about whether it was looked at. */
+  finishedRate: number;
+  /** The reader opened the order screen. */
   previewRate: number;
+  /** A checkout was started (print or ebook), paid or not. */
+  checkoutRate: number;
   orderRate: number;
 }
 
@@ -770,6 +818,92 @@ export interface FlowComparison {
   turns: FlowTurnStats;
   /** What would make a reader of this page draw the wrong conclusion. */
   caveats: string[];
-  excluded: { mixed: number; unknown: number };
+  /** `staff` is books of accounts on the admin exclusion list, removed before any arm. */
+  excluded: { mixed: number; unknown: number; staff: number };
+  truncated: boolean;
+}
+
+// ---- One person, end to end ---------------------------------------------------
+
+/** What kind of thing a timeline line is. */
+export type StudioTimelineKind = "signup" | "login" | "milestone" | "turn" | "event" | "run";
+
+/**
+ * One line on a person's timeline. `text` is the reader's own words and is only
+ * present when the caller may see them (see {@link UserStudioReport.wordsRevealed}).
+ */
+export interface StudioTimelineEntry {
+  at: number;
+  kind: StudioTimelineKind;
+  projectId: string | null;
+  /** Short, system-written description: "Tapped", "Story written", "Asked for a skill". */
+  label: string;
+  /** Extra system-written facts, e.g. `confidence 0.42 · 0 applied`. */
+  detail?: string;
+  /** The reader's message, when revealed. */
+  text?: string;
+  /** Marks lines worth a second look: refused claims, failures, "didn't understand". */
+  flag?: "warn" | "bad";
+}
+
+export interface UserStudioBook {
+  key: string;
+  projectId: string;
+  title: string | null;
+  arm: FlowArm;
+  createdAt: number;
+  lastActionAt: number;
+  milestones: Record<string, number>;
+  pages: number;
+  cast: number;
+  images: number;
+  runs: number;
+  failures: number;
+  sparksCharged: number;
+  costUsd: number;
+  turns: number;
+  events: number;
+  /** The last guide component the reader answered on, when they typed anything. */
+  lastComponent: string | null;
+  /** Furthest milestone reached, for a one-glance "where this book stopped". */
+  stoppedAfter: string | null;
+}
+
+/**
+ * Everything the studio knows about one account: its books, what it did in the
+ * guided studio, and a merged timeline. The per-user counterpart to the Studio
+ * flows page, built from the same sources so the two cannot disagree.
+ */
+export interface UserStudioReport {
+  uid: string;
+  generatedAt: number;
+  /** On the admin exclusion list — still viewable, but flagged so nobody reads it as a customer. */
+  excluded: boolean;
+  arm: FlowArm;
+  flows: string[];
+  /**
+   * True when the reader's messages are included. They are personal data, so they
+   * need the same permission as an email reveal and the access is audit-logged.
+   */
+  wordsRevealed: boolean;
+  totals: {
+    books: number;
+    turns: number;
+    events: number;
+    runs: number;
+    /** Turns where the reader was told we hadn't understood. */
+    admittedFailures: number;
+    /** Turns with at least one refused claim or rejected slot. */
+    refusals: number;
+    firstSeenAt: number | null;
+    lastActiveAt: number | null;
+    /** Whole days since anything was recorded; null when nothing was. */
+    daysIdle: number | null;
+  };
+  byKind: Record<string, number>;
+  books: UserStudioBook[];
+  /** Newest first, capped. */
+  timeline: StudioTimelineEntry[];
+  /** True when a source hit its read cap, so the lists are a lower bound. */
   truncated: boolean;
 }

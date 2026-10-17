@@ -33,6 +33,7 @@ import { GUIDE_COMMANDS } from "./registry";
 import { firstUnmet } from "./requirements";
 import { castOf } from "./resolve";
 import { whenStory } from "./commands/relevance";
+import { QUESTION_EXAMPLES, questionExampleId, type GuideQuestionId } from "../questions";
 import { GUIDE_IDEA_GROUPS, type CommandArea, type CommandIdea, type GuideIdeaGroup } from "./types";
 
 export { GUIDE_IDEA_GROUPS };
@@ -215,6 +216,41 @@ function eligibleIdeas(
     });
   }
   return out;
+}
+
+export interface QuestionExample {
+  /** What a tap is counted under. */
+  id: string;
+  /** The text's key under `guide.examples`. */
+  key: string;
+}
+
+export interface QuestionIdeas {
+  question: GuideQuestionId;
+  /** The question's one-line tip is in `guide.examples.<question>.tip`. */
+  tip: boolean;
+  /** Every example for this question, the ones the reader has tried least first. */
+  examples: QuestionExample[];
+}
+
+/**
+ * Example answers to the question the guide has open, or null when there are
+ * none to show. They need no book and no skill (the reader is answering, not
+ * changing anything), so they ignore the tab and the skills' requirements; the
+ * admin's switch for suggestions turns them off with the rest.
+ */
+export function questionIdeasFor(
+  question: GuideQuestionId | null,
+  config: GuideAgentConfig,
+  used: Readonly<Record<string, number>> = {},
+): QuestionIdeas | null {
+  if (!question || !config.enabled || !config.ideas.enabled || !config.ideas.questionExamples) return null;
+  const { examples: count, tip } = QUESTION_EXAMPLES[question];
+  const examples = Array.from({ length: count }, (_, index) => ({
+    id: questionExampleId(question, index + 1),
+    key: `${question}.${index + 1}`,
+  })).sort((a, b) => (used[a.id] ?? 0) - (used[b.id] ?? 0));
+  return examples.length > 0 || tip ? { question, tip, examples } : null;
 }
 
 /** The key that records an offer was set aside for this state of this book. */

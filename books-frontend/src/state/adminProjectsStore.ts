@@ -82,10 +82,15 @@ export interface ProjectPnl {
 
 export type ProjectMilestone =
   | "created"
+  | "setupLocked"
   | "storyDrafted"
+  | "pagesPlanned"
   | "castStarted"
   | "pagesStarted"
   | "coverDone"
+  | "finished"
+  | "previewed"
+  | "checkoutStarted"
   | "ordered";
 
 export interface ProjectRow {
@@ -98,6 +103,8 @@ export interface ProjectRow {
   lastActionAt: number;
   derived: ProjectDerived;
   reported?: { stage: string; updatedAt: number };
+  /** Which studio(s) the book was seen in; absent on books from before attribution. */
+  authoring?: { first: "guide" | "legacy"; seen: Partial<Record<"guide" | "legacy", number>> };
   milestones: Partial<Record<ProjectMilestone, number>>;
   counters: ProjectCounters;
   models: { imageModels: string[] };
@@ -176,6 +183,13 @@ export interface UserBehaviourRow {
   lastActionAt: number;
   ordered: number;
   stalled: number;
+  /** Which studio this person's books were made in; `mixed` = they used both. */
+  arm: "guide" | "legacy" | "mixed" | "unknown";
+  flows: ("guide" | "legacy")[];
+  booksByArm: Record<string, number>;
+  finished: number;
+  previewed: number;
+  checkoutStarted: number;
   pages: number;
   cast: number;
   images: number;
@@ -232,6 +246,8 @@ export type ProjectSort = "recent" | "cost" | "net" | "runs" | "seq" | "images" 
  * whole set can be driven straight from <select> values.
  */
 export interface ProjectFilters {
+  /** Studio flow the book was made in: guide / legacy / mixed / unknown. */
+  arm: string;
   milestoneReached: string;
   milestoneMissing: string;
   imageModel: string;
@@ -248,6 +264,7 @@ export interface ProjectFilters {
 }
 
 export const EMPTY_PROJECT_FILTERS: ProjectFilters = {
+  arm: "",
   milestoneReached: "",
   milestoneMissing: "",
   imageModel: "",

@@ -93,8 +93,9 @@ import { downloadBlob, downloadPublicBase64, ensureAdmin, uploadBlob } from "./s
 import { applyCustomStyleToProject } from "./customStyles";
 import { captureStyleCover } from "./styleShowcase";
 import { deleteLikenessPhotoForSubject, hasLikenessPhotoForSubject, loadLikenessPhotosForSubject } from "./likeness";
-import { locateEditPart, partOnSubject } from "../../books-frontend/src/core/pipeline/localize";
-import { likenessPhotosOf, portraitEditPrompt, portraitPrompt, portraitReferencePlan } from "../../books-frontend/src/core/guide/portrait";
+import { locateEditPartOutcome, planPartEdit } from "../../books-frontend/src/core/pipeline/localize";
+import { PORTRAIT_SIZE } from "../../books-frontend/src/core/guide/portraitFrame";
+import { likenessPhotosOf, PORTRAIT_EDIT_NOT_VISIBLE, portraitEditPrompt, portraitPrompt, portraitReferencePlan } from "../../books-frontend/src/core/guide/portrait";
 import { briefOf, namedCast } from "../../books-frontend/src/core/story/brief";
 import { firstUnmet, personNeedsStatedAge } from "../../books-frontend/src/core/guide/agent/requirements";
 import type { RequirementId } from "../../books-frontend/src/core/guide/agent/types";
@@ -1184,17 +1185,25 @@ async function enqueueReadyDependents(
 /**
  * For a change to a drawn portrait ("make her hair yellow"): find the part it
  * is about and mask just that, so the rest of the picture stays as it is.
- * Returns null when the model can't take a mask, the part can't be told, or it
- * is most of the picture; the caller then edits the whole portrait.
+ *
+ * `region` is null only when the whole picture is meant to change (the model
+ * can't take a mask, or the change is about most of the picture). A part that
+ * can't be located is never quietly turned into a whole-picture redraw: the
+ * task is retried, and a part the portrait doesn't show fails with a clear
+ * message and draws nothing.
  */
 async function portraitEditMask(args: {
   uid: string;
   name: string;
   instruction: string;
   blobId: string;
+  canMask: boolean;
+  finalAttempt: boolean;
   models: ResolvedModels;
   prompts: Awaited<ReturnType<typeof loadPromptContext>>;
   signal: AbortSignal;
+  jobId: string;
+  taskId: string;
 }): Promise<{
   region: { maskBlobId: string; part: string } | null;
   /** The vision call's usage, for the caller to meter with the render it serves. */
@@ -1202,45 +1211,56 @@ async function portraitEditMask(args: {
   stats: CallStats;
 }> {
   const { uid, name, instruction, blobId, models, prompts, signal } = args;
-  let events: UsageEvent[] = [];
-  let stats: CallStats = { calls: 0, failures: 0 };
-  try {
-    const model = models.bindingModel ?? models.textModel;
-    const original = await downloadBlob(uid, blobId);
-    const small = await downscaleReference(original, 1024, 0.85);
-    // This is a paid vision call; it used to run outside any usage scope, so its
-    // cost never reached the portrait's run or the book's P&L.
-    const located = await withUsage(() =>
-      withStep("locate", () =>
-        locateEditPart({
-          pageBase64: bufToBase64(small?.buf ?? original),
-          pageMime: small?.mimeType ?? "image/png",
-          name,
-          instruction,
-          creds: { apiKey: apiKeyFor(model.provider) },
-          model: model.id,
-          providerId: model.provider,
-          prompts,
-          signal,
-        }),
-      ),
-    );
-    events = located.events;
-    stats = located.stats;
-    const found = located.value;
-    if (!found || !found.part) return { region: null, events, stats };
-    const whole = { x: 0, y: 0, width: 1, height: 1 };
-    if (!partOnSubject(whole, found.box)) return { region: null, events, stats };
-    if (found.box.width * found.box.height >= 0.6) return { region: null, events, stats };
-    const mask = await buildHoleMask({ page: original, box: found.box, paddingFrac: 0.1 });
-    return {
-      region: { maskBlobId: await uploadBlob(uid, mask, "image/png", { variants: false }), part: found.part },
-      events,
-      stats,
-    };
-  } catch (error) {
-    if (signal.aborted) throw error;
-    return { region: null, events, stats };
+  const logContext = { jobId: args.jobId, taskId: args.taskId, instruction };
+  if (!args.canMask) {
+    logger.info("[portrait-edit] whole-picture edit", { ...logContext, reason: "cannot_mask" });
+    return { region: null, events: [], stats: { calls: 0, failures: 0 } };
+  }
+  const model = models.bindingModel ?? models.textModel;
+  const original = await downloadBlob(uid, blobId);
+  const small = await downscaleReference(original, 1024, 85);
+  // This is a paid vision call; it used to run outside any usage scope, so its
+  // cost never reached the portrait's run or the book's P&L.
+  const located = await withUsage(() =>
+    withStep("locate", () =>
+      locateEditPartOutcome({
+        pageBase64: bufToBase64(small?.buf ?? original),
+        pageMime: small?.mimeType ?? "image/png",
+        name,
+        instruction,
+        creds: { apiKey: apiKeyFor(model.provider) },
+        model: model.id,
+        providerId: model.provider,
+        prompts,
+        signal,
+      }),
+    ),
+  );
+  const { events, stats } = located;
+  const plan = planPartEdit(located.value, { finalAttempt: args.finalAttempt });
+  switch (plan.path) {
+    case "notVisible":
+      logger.info("[portrait-edit] part not in the portrait", logContext);
+      throw new Error(PORTRAIT_EDIT_NOT_VISIBLE);
+    case "retry":
+      logger.warn("[portrait-edit] could not locate the part; retrying", { ...logContext, detail: plan.detail });
+      throw new ProviderError("Couldn't tell which part of the portrait to change.", {
+        kind: "transient",
+        retryable: true,
+      });
+    case "whole":
+      logger.info("[portrait-edit] whole-picture edit", {
+        ...logContext,
+        reason: plan.reason,
+        ...(plan.detail ? { detail: plan.detail } : {}),
+      });
+      return { region: null, events, stats };
+    case "masked": {
+      const mask = await buildHoleMask({ page: original, box: plan.box, paddingFrac: 0.1 });
+      const maskBlobId = await uploadBlob(uid, mask, "image/png", { variants: false });
+      logger.info("[portrait-edit] masked edit", { ...logContext, part: plan.part, box: plan.box });
+      return { region: { maskBlobId, part: plan.part || "part" }, events, stats };
+    }
   }
 }
 
@@ -1708,6 +1728,9 @@ async function renderTask(
       }
     }
     const portraitCapabilities = capabilitiesFor(models.imageModel, capabilities);
+    // The earlier portrait only keeps the look of someone whose age or style changed. A model that
+    // can't take a picture to draw from draws them from the description instead of failing the task.
+    if (!portraitCapabilities.operations.referenceEditing) existingReferences = [];
     const portraitTuning = generationTuningFor(generationTuning, "portrait");
     const configuredPortraitReferenceLimit = Math.min(
       portraitCapabilities.inputs.maxReferenceImages,
@@ -1778,18 +1801,21 @@ async function renderTask(
           prompts.artStyles,
           { currentPortraitIdentity: existingReferences.length > 0 },
         );
-    const editLocate =
-      editing && capabilitiesFor(models.imageModel, capabilities).operations.maskEditing
-        ? await portraitEditMask({
-            uid,
-            name: member.name,
-            instruction: editing.instruction,
-            blobId: editing.blobId,
-            models,
-            prompts,
-            signal,
-          })
-        : null;
+    const editLocate = editing
+      ? await portraitEditMask({
+          uid,
+          name: member.name,
+          instruction: editing.instruction,
+          blobId: editing.blobId,
+          canMask: capabilitiesFor(models.imageModel, capabilities).operations.maskEditing,
+          finalAttempt: (task.attempts ?? 1) >= TASK_MAX_ATTEMPTS,
+          models,
+          prompts,
+          signal,
+          jobId,
+          taskId: task.id,
+        })
+      : null;
     const editRegion = editLocate?.region ?? null;
     const referenceGuide = (() => {
       if (editing) {
@@ -1824,7 +1850,7 @@ async function renderTask(
       ]
         .filter(Boolean)
         .join("\n\n"),
-      size: "1024x1536",
+      size: PORTRAIT_SIZE,
       ...(editing && editRegion
         ? {
             maskBlobId: editRegion.maskBlobId,

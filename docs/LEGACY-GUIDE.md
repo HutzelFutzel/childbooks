@@ -215,8 +215,8 @@ With one studio left, nothing needs to choose between them or record which one w
 
 **Before**
 
-- Move `usePreviewReached` out of `books-frontend/src/ui/studio/useFlowAttribution.ts`
-  into its own file. The preview milestone stays; only the flow half goes.
+- Nothing to move for the milestones: `usePreviewReached` and `useMilestoneReached` already live in
+  `books-frontend/src/ui/studio/useMilestoneReached.ts`, so `useFlowAttribution.ts` is only the flow half.
 - Move `useGuidePlaylist` out of `books-frontend/src/ui/guide/useGuideMode.ts`
   only if something other than the Chat gate still reads it. Otherwise, delete it with the file.
 
@@ -238,7 +238,7 @@ With one studio left, nothing needs to choose between them or record which one w
 - `books-frontend/src/ui/dashboard/Dashboard.tsx`: Create always opens `/studio/{id}`; drop `guideModeNow`.
 - `books-frontend/src/ui/admin/tabs/GuideTab.tsx`: drop the Step flow panel and its segment.
 - `scripts/guide-dual-flow-invariants.ts`: drop the `useGuideMode` playlist exemption and the `if (guided)` seam check.
-- `functions/src/projects.ts`: drop the mirror's `authoring` flow field, and the `flow` parameter on `touchProject` and `/ai/project-touch`. Also drop `flow` from `touchProjectRemote` in `books-frontend/src/platform/aiClient.ts`. Keep `milestones.previewed`.
+- `functions/src/projects.ts`: drop the mirror's `authoring` flow field, and the `flow` parameter on `touchProject` and `/ai/project-touch`. Also drop `flow` from `touchProjectRemote` in `books-frontend/src/platform/aiClient.ts`. Keep the milestones (`previewed`, `finished`, `setupLocked`, `checkoutStarted`) and `reached` on `touchProject`/`/ai/project-touch`.
 
 **Verify**: `cd books-frontend && npx tsc --noEmit && cd ../functions && npx tsc --noEmit -p . && cd .. && yarn check:guide`
 

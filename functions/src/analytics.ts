@@ -51,6 +51,7 @@ import {
   type RunOutcome,
 } from "./actionRun";
 import { flowComparison } from "./flowComparison";
+import { buildUserStudioReport } from "./userStudio";
 import { mergeTally, percentile } from "./stats";
 import { toUsd } from "./finance";
 import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
@@ -148,6 +149,8 @@ interface ScannedUser {
 interface ScanResult {
   users: ScannedUser[];
   excludedCount: number;
+  /** Uids of the accounts the exclusion list removed — for callers keyed by uid. */
+  excludedUids: Set<string>;
   capped: boolean;
 }
 
@@ -216,6 +219,7 @@ async function scanUsers(settings: AdminSettings): Promise<ScanResult> {
     ensureAdmin();
     const isExcluded = makeExcluder(settings);
     const users: ScannedUser[] = [];
+    const excludedUids = new Set<string>();
     let excludedCount = 0;
     let scanned = 0;
     let capped = false;
@@ -226,6 +230,7 @@ async function scanUsers(settings: AdminSettings): Promise<ScanResult> {
         scanned += 1;
         if (isExcluded(u.email ?? null)) {
           excludedCount += 1;
+          excludedUids.add(u.uid);
           continue;
         }
         const created = parseTime(u.metadata.creationTime);
@@ -251,7 +256,7 @@ async function scanUsers(settings: AdminSettings): Promise<ScanResult> {
       }
     } while (pageToken);
 
-    return { users, excludedCount, capped };
+    return { users, excludedCount, excludedUids, capped };
   })().catch((err) => {
     scanCache = null;
     throw err;
@@ -2272,12 +2277,16 @@ export function registerAnalyticsRoutes(app: Express): void {
   app.get("/admin/analytics/flows", async (req: Request, res: Response) => {
     try {
       const { from, to } = parseRange(req);
+      // The exclusion list is keyed by email, books by uid: resolve it through the
+      // same cached account scan every other dashboard figure uses.
+      const { excludedUids } = await scanUsers(await getAdminSettings());
       res.json(
         await flowComparison({
           fromMs: from,
           toMs: to,
           limit: Number(req.query.limit) || 1000,
           allocateSubscriptions: req.query.allocateSubscriptions === "true",
+          excludeUids: excludedUids,
         }),
       );
     } catch (err) {
@@ -2360,6 +2369,38 @@ export function registerAnalyticsRoutes(app: Express): void {
     }
   });
 
+  // One account's studio history: books, guided-studio activity and a merged
+  // timeline. The typed messages are the one personal part, so they are opt-in
+  // (`?words=true`), need the same permission as an email reveal, and leave an
+  // audit entry — see `functions/src/userStudio.ts`.
+  app.get("/admin/analytics/users/:uid/studio", async (req: Request, res: Response) => {
+    try {
+      const uid = String(req.params.uid ?? "").trim();
+      if (!uid || uid.length > 128) {
+        res.status(400).json({ error: { message: "Pick an account." } });
+        return;
+      }
+      const admin = (req as PermissionedRequest).admin;
+      const wantsWords = req.query.words === "true";
+      const mayReadWords = Boolean(admin && hasPermission(admin, "analysis.users.pii", "read"));
+      if (wantsWords && !mayReadWords) {
+        res.status(403).json({ error: { message: "Reading what someone typed needs the personal-data permission." } });
+        return;
+      }
+      const { excludedUids } = await scanUsers(await getAdminSettings());
+      const report = await buildUserStudioReport({
+        uid,
+        revealWords: wantsWords,
+        excluded: excludedUids.has(uid),
+      });
+      const actorUid = (req as PermissionedRequest).uid;
+      if (wantsWords && actorUid) await logAudit(actorUid, "studio_words_view", uid, {});
+      res.json(report);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   // ---- Finance dashboard -----------------------------------------------------
 
   // The "total win" over a custom window: revenue − every cost, filterable by
@@ -2435,6 +2476,8 @@ export function registerAnalyticsRoutes(app: Express): void {
       maxCast: int("maxCast"),
       minImages: int("minImages"),
       maxImages: int("maxImages"),
+      // Validated against the closed set: an unknown value is dropped, not matched.
+      arm: (["guide", "legacy", "mixed", "unknown"] as const).find((a) => a === str("arm")),
     };
   };
 

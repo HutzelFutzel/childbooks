@@ -28,8 +28,10 @@ import { getSparksConfig } from "./appConfig";
 import { spreadsById } from "../../books-frontend/src/core/book/units";
 import type { ProjectBehaviourStats } from "../../books-frontend/src/core/analytics/types";
 import {
+  flowArm,
   isStudioFlow,
   nextAuthoring,
+  type FlowArm,
   type ProjectAuthoring,
   type StudioFlow,
 } from "../../books-frontend/src/core/guide/flow";
@@ -75,13 +77,28 @@ function db() {
 /** Server-observed lifecycle milestones, in the order a book passes them. */
 export type ProjectMilestone =
   | "created"
+  /**
+   * The guided studio's setup was locked in (the book's facts are settled and the
+   * pictures are drawn from them). Client-reported and guide-only: the wizard has
+   * no such moment, so its books never carry it and the report shows "n/a".
+   */
+  | "setupLocked"
   | "storyDrafted"
   | "pagesPlanned"
   | "castStarted"
   | "pagesStarted"
   | "coverDone"
   /**
-   * The reader reached the finished book — the flip-through, not a purchase.
+   * The book became finished — every page and the cover are drawn and the studio
+   * considers it ready. Says nothing about whether the reader looked at it; that
+   * is `previewed`. Kept apart so "the book got finished" and "the reader saw
+   * it" are never read as one number.
+   */
+  | "finished"
+  /**
+   * The reader opened the order screen — the finished book in front of them, the
+   * price and the buy button on it. In the wizard that is its order step; in the
+   * guided studio it is the order panel, which has no route of its own.
    *
    * Client-reported, because no AI call happens when someone opens the preview
    * and there is nothing for the backend to observe. It is the only honest
@@ -89,7 +106,21 @@ export type ProjectMilestone =
    * pay, which is a different question and much rarer.
    */
   | "previewed"
+  /** A checkout session was created for a print or ebook order. Server-observed. */
+  | "checkoutStarted"
   | "ordered";
+
+/**
+ * The milestones a browser may report. A closed list: this is the one place a
+ * client names a stamp, so an unknown value is dropped rather than minted into a
+ * new funnel stage by a typo (or by someone poking the route).
+ */
+export const CLIENT_MILESTONES = ["previewed", "finished", "setupLocked"] as const;
+export type ClientMilestone = (typeof CLIENT_MILESTONES)[number];
+
+export function isClientMilestone(value: unknown): value is ClientMilestone {
+  return typeof value === "string" && (CLIENT_MILESTONES as readonly string[]).includes(value);
+}
 
 export type { ProjectAuthoring, ProjectBehaviourStats, StudioFlow };
 
@@ -477,6 +508,8 @@ export async function touchProject(args: {
   flow?: StudioFlow;
   /** True when the reader is on the finished-book preview. */
   previewed?: boolean;
+  /** Another milestone the browser observed. First report wins. */
+  reached?: ClientMilestone;
 }): Promise<void> {
   const { uid, projectId } = args;
   if (!uid || !projectId) return;
@@ -497,6 +530,7 @@ export async function touchProject(args: {
   // rather than riding the merge above.
   if (args.flow) await stampFlow(uid, projectId, args.flow);
   if (args.previewed) await stampMilestone(uid, projectId, "previewed");
+  if (args.reached) await stampMilestone(uid, projectId, args.reached);
 }
 
 /**
@@ -848,6 +882,13 @@ export interface ProjectQuery {
   maxCast?: number;
   minImages?: number;
   maxImages?: number;
+  /** Only books attributed to this studio flow (`mixed` / `unknown` included). */
+  arm?: FlowArm;
+  /**
+   * Accounts to leave out — the admin exclusion list (staff, test accounts),
+   * resolved to uids by the caller since it is keyed by email.
+   */
+  excludeUids?: ReadonlySet<string>;
 }
 
 /** Fill in fields added after a mirror was first written. */
@@ -869,6 +910,8 @@ function matchesQuery(m: ProjectMirror, q: ProjectQuery): boolean {
   const d = m.derived;
   const inRange = (v: number, min?: number, max?: number) =>
     (min === undefined || v >= min) && (max === undefined || v <= max);
+  if (q.excludeUids?.has(m.uid)) return false;
+  if (q.arm && flowArm(m.authoring) !== q.arm) return false;
   if (q.milestoneReached && !m.milestones?.[q.milestoneReached]) return false;
   if (q.milestoneMissing && m.milestones?.[q.milestoneMissing]) return false;
   if (q.imageModel && !(c.imagesByModel[q.imageModel] || m.models?.imageModels?.includes(q.imageModel)))
@@ -1062,6 +1105,18 @@ export interface UserBehaviourRow {
   ordered: number;
   /** Books that never produced a single image. */
   stalled: number;
+  /**
+   * Which studio this person's books were made in. `mixed` here means the PERSON
+   * used both across their books or within one; {@link flows} is the exact set.
+   */
+  arm: FlowArm;
+  flows: StudioFlow[];
+  /** Books per attribution, so a mixed person is still legible. */
+  booksByArm: Record<string, number>;
+  /** Books that got as far as the finished-book screen / the order screen. */
+  finished: number;
+  previewed: number;
+  checkoutStarted: number;
   pages: number;
   cast: number;
   images: number;
@@ -1120,8 +1175,32 @@ export function summarizeUsers(
     const images = sum((m) => m.counters.imagesGenerated);
     const n = mirrors.length;
     const r2 = (v: number) => Math.round(v * 100) / 100;
+
+    // The person's flow is the union of what their books saw. Per-book arms stay
+    // in `booksByArm`: someone with one wizard book and one guided book is a
+    // "both" person, but each of those books is still a clean data point.
+    const seen: Partial<Record<StudioFlow, number>> = {};
+    const booksByArm: Record<string, number> = {};
+    for (const m of mirrors) {
+      const arm = flowArm(m.authoring);
+      booksByArm[arm] = (booksByArm[arm] ?? 0) + 1;
+      for (const [flow, at] of Object.entries(m.authoring?.seen ?? {})) {
+        if (isStudioFlow(flow) && typeof at === "number" && at > 0) {
+          seen[flow] = Math.min(seen[flow] ?? at, at);
+        }
+      }
+    }
+    const reached = (milestone: ProjectMilestone) =>
+      mirrors.filter((m) => m.milestones?.[milestone]).length;
+
     out.push({
       uid,
+      arm: flowArm({ seen }),
+      flows: (Object.keys(seen) as StudioFlow[]).sort(),
+      booksByArm,
+      finished: reached("finished"),
+      previewed: reached("previewed"),
+      checkoutStarted: reached("checkoutStarted"),
       projects: n,
       firstSeenAt: extremum(
         mirrors.map((m) => m.createdAt || m.firstActionAt),

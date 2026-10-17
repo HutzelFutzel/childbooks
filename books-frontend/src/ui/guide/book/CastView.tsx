@@ -12,6 +12,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, MessageCircle, Plus, X, ZoomIn } from "lucide-react";
 import { normalizeAnchorName } from "../../../core/book/anchorRefs";
 import { currentPortrait, lookSourceOf, portraitStatus } from "../../../core/guide/portrait";
+import { PORTRAIT_ASPECT } from "../../../core/guide/portraitFrame";
 import { briefOf } from "../../../core/story/brief";
 import { isPerson } from "../../../core/story/castKinds";
 import type { Anchor, Project, StoryCastMember } from "../../../core/types";
@@ -220,8 +221,9 @@ function Plate({
         aria-pressed={selected}
         onClick={select}
         className={cn(
-          "relative block aspect-4/5 w-full overflow-hidden rounded-xl bg-ink-50 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink-500",
+          "relative block w-full overflow-hidden rounded-xl bg-ink-50 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink-500",
         )}
+        style={{ aspectRatio: PORTRAIT_ASPECT }}
         aria-label={name}
       >
         <AnimatePresence mode="popLayout">
@@ -235,7 +237,7 @@ function Plate({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={crossfade}
-              className="size-full object-cover"
+              className="size-full object-cover object-top"
             />
           ) : (
             <motion.span

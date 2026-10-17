@@ -2,7 +2,7 @@
 import { getBookLanguage, isBookLanguageId } from "../../../config/bookLanguages";
 import type { HardcoverDecision, Project } from "../../../types";
 import { coverCardLines, coverWordsSettled } from "../../coverWords";
-import { journeyEntry } from "../../journey";
+import { journeyEntry, storyBegun } from "../../journey";
 import { authoringOf, withAuthoring } from "../../projectState";
 import { resolveOption } from "../resolve";
 import type { CommandDef } from "../types";
@@ -25,11 +25,11 @@ export const BOOK_COMMANDS: CommandDef[] = [
     args: [{ name: "entry", kind: "entry", required: true, hint: "guided or own", options: ["guided", "own"] }],
     examples: ["Guide me", "I want to write it myself", "Can you help me write it?"],
     help: "Chooses whether the guide writes the story with you, or you use your own words. You can switch before a story exists.",
-    requires: ["notLocked"],
+    requires: ["notLocked", "storyIdle"],
     run: (project, args) => {
       const entry = arg(args, "entry");
       if (entry !== "guided" && entry !== "own") return { kind: "invalid", reason: "entry must be guided or own" };
-      if (project.config.storyText.trim()) return { kind: "noop", beat: beat("alreadyThat") };
+      if (storyBegun(project)) return { kind: "noop", beat: beat("alreadyThat") };
       if (journeyEntry(project) === entry) return { kind: "noop", beat: beat("alreadyThat") };
       return { kind: "effect", effect: { kind: "entry", entry } };
     },
@@ -148,7 +148,7 @@ export const BOOK_COMMANDS: CommandDef[] = [
     args: [{ name: "language", kind: "language", required: true, hint: "language name or code, like 'German' or 'de-DE'" }],
     examples: ["Write the book in Spanish", "The story should be in German"],
     help: "Sets the language the story is written in. It can only change before the story exists.",
-    requires: ["notLocked"],
+    requires: ["notLocked", "storyIdle"],
     run: (project, args, ctx) => {
       const wanted = arg(args, "language");
       const direct = isBookLanguageId(wanted) ? wanted : null;
@@ -160,7 +160,7 @@ export const BOOK_COMMANDS: CommandDef[] = [
       const id = match.value.id;
       if (!isBookLanguageId(id)) return { kind: "invalid", reason: `"${wanted}" is not a book language.`, say: true };
       const name = getBookLanguage(id).endonym;
-      if (project.config.storyText.trim()) {
+      if (storyBegun(project)) {
         if (project.config.contentLocale === id) return { kind: "noop", beat: beat("alreadyThat") };
         return { kind: "noop", beat: beat("languageLocked", { language: getBookLanguage(project.config.contentLocale).endonym }) };
       }

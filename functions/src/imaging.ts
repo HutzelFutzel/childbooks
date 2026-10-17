@@ -7,6 +7,7 @@
  * region that may be repainted ("the hole").
  */
 import sharp from "sharp";
+import { jpegQuality } from "./jpegQuality";
 
 async function rawRGBA(
   buf: Buffer,
@@ -57,7 +58,7 @@ export async function downscaleReference(
   try {
     const out = await sharp(buf)
       .resize(maxDim, maxDim, { fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality, mozjpeg: true })
+      .jpeg({ quality: jpegQuality(quality), mozjpeg: true })
       .toBuffer();
     return { buf: out, mimeType: "image/jpeg" };
   } catch {

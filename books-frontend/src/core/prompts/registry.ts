@@ -489,7 +489,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("references", "\nREFERENCE GUIDE:\n{{referenceGuide}}"),
       blk(
         "criteria",
-        '\nReturn these booleans:\n- "singleCharacter": exactly one character, not a grid, contact sheet, group or collage.\n- "portraitComposition": a coherent head-to-mid-body portrait on a simple background, with no accidental panels, borders or copied reference layout.\n- "requestedAttributes": the visible species, skin tone, hair, clothing and other explicitly requested appearance traits materially match the target.\n- "ageAndLifeStage": apparent age/life stage and body proportions materially match the target when specified.\n- "noTextOrWatermark": no unintended text, lettering, signature or watermark.\n- "identityMatch": when an identity reference is supplied, recognizable identity and stable physical traits match it while pose/background/incidental clothing may differ; otherwise true.\n- "styleMatch": when a style reference is supplied, rendering technique, feature simplification, linework, shading, palette and texture materially match it without copying its people or layout; otherwise true.\n- "childSafe": suitable for a young children\'s picture book.\nAlso return "notes" as a short array naming only clear failures. Be lenient about harmless artistic variation; mark false only when a retry is warranted.',
+        '\nReturn these booleans:\n- "singleCharacter": exactly one character, not a grid, contact sheet, group or collage.\n- "portraitComposition": a coherent head-and-upper-body portrait cropped at about the waist, on a simple background, with no accidental panels, borders or copied reference layout. Mark false when the legs or feet are visible (a full-body figure) or the head is cut off.\n- "requestedAttributes": the visible species, skin tone, hair, clothing and other explicitly requested appearance traits materially match the target.\n- "ageAndLifeStage": apparent age/life stage and body proportions materially match the target when specified.\n- "noTextOrWatermark": no unintended text, lettering, signature or watermark.\n- "identityMatch": when an identity reference is supplied, recognizable identity and stable physical traits match it while pose/background/incidental clothing may differ; otherwise true.\n- "styleMatch": when a style reference is supplied, rendering technique, feature simplification, linework, shading, palette and texture materially match it without copying its people or layout; otherwise true.\n- "childSafe": suitable for a young children\'s picture book.\nAlso return "notes" as a short array naming only clear failures. Be lenient about harmless artistic variation; mark false only when a retry is warranted.',
       ),
     ],
   },
@@ -640,7 +640,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "selection",
-        'The parent may have a picture or person selected on the book pane, shown under "The picture the parent has selected". While something is selected, "her", "him", "this" and "that" in a request about a portrait or a person mean that selection. It does not decide what they asked — only who they mean. A stated age or a redraw with "her" or "this" while a portrait is selected applies to that person.',
+        'The parent may have a picture or person selected on the book pane, shown under "The picture the parent has selected". While something is selected, "her", "him", "this" and "that" in a request about a portrait or a person mean that selection. It does not decide what they asked — only who they mean. A stated age or a redraw with "her" or "this" while a portrait is selected applies to that person. When the request is about the selected person, put their name from the selection in the "person" arg of the skill, never a pronoun, in whatever language the parent writes; name someone else only when the message names someone else. Judge what is being changed by its meaning, not by particular words: how old someone is or should be (a number of years or months, a baby, older, younger, "make him 2") is the age skill "setPersonAge" with the age as a number, never "editPersonLook"; what someone is (a person, a dog, a toy) is "setPersonKind"; their role is "setPersonRole"; only how they look to the eye (hair, clothes, glasses, colors, a redraw) is "editPersonLook" or "describePerson". One message can need two skills (an age and a look): return both, the age first. Example, "Nile\'s portrait" selected, the parent writes "make him 2 years old": one command, setPersonAge with person "Nile" and age "2", evidence "make him 2 years old". Example, "Nile\'s portrait" selected, the parent writes "make the boots red": one command, editPersonLook with person "Nile" and change "make the boots red".',
       ),
       blk(
         "language",
@@ -754,7 +754,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     single: [
       blk(
         "subject",
-        'One picture-book portrait of "{{name}}": a single character, head to mid-body, facing the viewer at a slight three-quarter angle, with a calm, friendly expression. One subject only, centred, on a simple soft background in the book\'s palette. No text, lettering, frame, border or watermark.',
+        'One picture-book portrait of "{{name}}": a single character shown from the head down to the waist (head and upper body), facing the viewer at a slight three-quarter angle, with a calm, friendly expression. One subject only, centred, on a simple soft background in the book\'s palette. No text, lettering, frame, border or watermark.',
       ),
       blk(
         "ageSpecies",
@@ -788,6 +788,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "Body layout: {{bodyPlan}}. Draw that kind of body. Do not draw a human child.",
         "hasBodyPlan",
       ),
+      blk(
+        "framing",
+        "Framing: this is a head-and-upper-body portrait, cropped at the waist. Whatever the description says about legs, feet, shoes or the lower body, do not draw them here; they are drawn in a later step. Never draw a full-body figure.",
+      ),
       blk("note", "The family asked for this change to the portrait: {{note}}. Change only that; keep who they are.", "hasNote"),
       blk(
         "photo",
@@ -803,6 +807,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "currentPortrait",
         "The attached portrait is the approved existing identity for this character. Preserve their recognizable face, hair, body design, colours and clothing, but redraw the whole portrait in the art style below and apply the requested age or appearance changes. Do not preserve the attached portrait's old rendering style when it differs from the book style.",
         "fromCurrentPortrait",
+      ),
+      blk(
+        "agedFromPortrait",
+        "The attached portrait shows {{name}} at {{previousAge}}; {{name}} is now {{age}}. Draw the same person at the new age: keep the hair color and style, skin tone, eye color, facial features, expression, clothing and color palette exactly as in the attached portrait, and change only what a different age changes (face shape and roundness, proportions, size and the details that belong to that age). Do not redesign them or invent a different-looking character.",
+        "agedFromPortrait",
       ),
       blk(
         "invent",
@@ -2097,6 +2106,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         variables: [
           V("name", "The person's name, exactly as typed.", "Maya"),
           V("age", "Stated age.", "5 years old"),
+          V("previousAge", "The age the attached portrait was drawn at, when the person is older or younger now.", "4 years old"),
           V("role", "Who they are in the story.", "the birthday girl"),
           V("appearance", "How they look: the family's words, or the description taken from the story.", "a small green frog with golden eyes"),
           V("bodyPlan", "Gross body layout when it is not a person standing upright.", "aquatic"),
@@ -2113,6 +2123,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           invent: false,
           fromPhoto: true,
           fromDrawing: false,
+          agedFromPortrait: false,
           hasNote: false,
           isAnimal: false,
           isToy: false,

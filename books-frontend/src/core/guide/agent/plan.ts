@@ -12,6 +12,7 @@ import type { GuideAgentConfig } from "../../config/guideAgent";
 import { isSkillEnabled } from "../../config/guideAgent";
 import type { BookViewId } from "../journey";
 import type { Project } from "../../types";
+import { aimAtSelection } from "./aim";
 import { GUIDE_COMMANDS } from "./registry";
 import { firstUnmet } from "./requirements";
 import { canUndo } from "./restore";
@@ -141,7 +142,8 @@ export function planTurn(input: PlanInput): Plan {
       plan.blocked.push({ call: original, remedy });
       continue;
     }
-    const call: CommandCall = { ...original, args: def.prepare ? def.prepare(original.args) : original.args };
+    const prepared = def.prepare ? def.prepare(original.args) : original.args;
+    const call: CommandCall = { ...original, args: aimAtSelection(original.id, prepared, working, ctx) };
     const impact = def.impact ? def.impact(working, call.args, ctx) : NO_IMPACT;
     // A destructive change that Undo takes back whole runs at once; one with a
     // question in it (rewrite the story or keep it?) still asks.

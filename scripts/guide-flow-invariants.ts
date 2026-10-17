@@ -309,10 +309,11 @@ const MILESTONE_FOR_ACTION: Record<string, string> = {
  */
 const FUNNEL = (() => {
   const source = readFileSync(
-    join(ROOT, "books-frontend", "src", "ui", "admin", "analysis", "FlowsAnalysis.tsx"),
+    join(ROOT, "books-frontend", "src", "ui", "admin", "analysis", "milestones.ts"),
     "utf8",
   );
-  const block = source.split("const FUNNEL")[1]?.split("];")[0] ?? "";
+  // The tab derives its funnel from this one list, so the list is what is read.
+  const block = source.split("export const MILESTONES")[1]?.split("\n];")[0] ?? "";
   return [...block.matchAll(/key:\s*"([^"]+)"/g)].map((m) => m[1]!);
 })();
 
@@ -331,10 +332,10 @@ cases += 1;
       fail(`"${action}" stamps "${milestone}", which is not a stage of the funnel.`);
     }
   }
-  // `created` and `previewed` are the two stages no AI action can stamp: one is
-  // set when the mirror is made, the other is reported by the client. If either
-  // ever appears in the action map, something has started guessing.
-  for (const clientOnly of ["created", "previewed"]) {
+  // These stages are stamped by something other than an AI action: the mirror
+  // being made, the client reporting what the reader did, or checkout. If any ever
+  // appears in the action map, something has started guessing.
+  for (const clientOnly of ["created", "setupLocked", "finished", "previewed", "checkoutStarted"]) {
     cases += 1;
     if (mapped.includes(clientOnly)) {
       fail(`"${clientOnly}" is stamped by an AI action, but no AI call happens at that stage.`);
@@ -356,7 +357,11 @@ cases += 1;
  */
 {
   const backend = readFileSync(join(ROOT, "functions", "src", "projects.ts"), "utf8");
-  const declared = backend.split("export type ProjectMilestone =")[1]?.split(";")[0] ?? "";
+  // Comments are stripped before the declaration is cut at its `;`, because the
+  // doc comments on the milestones contain semicolons of their own.
+  const declared = (
+    backend.split("export type ProjectMilestone =")[1]?.replace(/\/\*[\s\S]*?\*\//g, "") ?? ""
+  ).split(";")[0]!;
   const milestones = [...declared.matchAll(/"([a-zA-Z]+)"/g)].map((m) => m[1]!);
 
   cases += 1;

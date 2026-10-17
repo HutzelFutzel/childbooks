@@ -61,34 +61,18 @@ export function useFlowAttribution(
     if (sent.current.has(key)) return;
 
     const timer = setTimeout(() => {
-      sent.current.add(key);
-      touchProjectRemote({ projectId, flow });
+      // Marked as sent only once the server has it. Marking first meant a single
+      // failed request (offline for a moment, a cold backend) disqualified the
+      // book for the whole session, and an unattributed book is dropped from both
+      // arms. A failure now leaves it eligible: the next time this effect runs
+      // (re-opening the book, switching flow) it is sent again, and the server
+      // ignores repeats. Not a retry loop — a dead backend shouldn't be hammered.
+      void touchProjectRemote({ projectId, flow }).then((taken) => {
+        if (taken) sent.current.add(key);
+      });
     }, SETTLE_MS);
     // Cleanup cancels the pending report, which is what makes this a settle
     // rather than a delay: a flow that changes within the window is never sent.
     return () => clearTimeout(timer);
   }, [projectId, flow]);
-}
-
-/**
- * Record that the reader reached the finished book.
- *
- * Separate from the flow beacon because it answers a different question and has a
- * different shape: it is a milestone, stamped once ever rather than once per
- * session, and the backend keeps the first timestamp. It exists at all because no
- * AI call happens when someone opens the preview, so the backend has nothing to
- * observe — and `ordered` is not a substitute, since it measures willingness to
- * pay rather than whether the flow got them to the end.
- *
- * Unlike the flow, this needs no settle window: reaching the preview is a
- * navigation the reader performed, not a value that resolves asynchronously.
- */
-export function usePreviewReached(projectId: string | null, previewing: boolean): void {
-  const sent = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!projectId || !previewing || sent.current === projectId) return;
-    sent.current = projectId;
-    touchProjectRemote({ projectId, previewed: true });
-  }, [projectId, previewing]);
 }

@@ -100,7 +100,7 @@ export function portraitQualityCorrections(
     corrections.push("Draw exactly one character; never produce a group, grid, contact sheet or collage.");
   }
   if (!assessment.portraitComposition) {
-    corrections.push("Use one coherent head-to-mid-body portrait on a simple background with no panels or copied layout.");
+    corrections.push("Use one coherent head-and-upper-body portrait cropped at the waist, with no legs or feet, on a simple background with no panels or copied layout.");
   }
   if (!assessment.requestedAttributes) {
     corrections.push("Follow every explicitly requested visible character trait, including species, skin, hair and clothing.");

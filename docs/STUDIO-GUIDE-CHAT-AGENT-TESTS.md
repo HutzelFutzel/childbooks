@@ -103,18 +103,23 @@ Tips:
 
 ## 1. Starting a book (the entry choice)
 
-- [ ] **1.1 Guided start by typing.** On a fresh book, type
-      `Help me make a story for my daughter Amanda, she's 4`.
-      *Expected:* the book starts in guided mode, Amanda (4) is on the book
-      (the cover), and the guide asks the next thing it needs. There's no
-      Cast tab yet: it arrives with the first portrait (section 4A).
-- [ ] **1.2 Own-words start by typing.** On another fresh book, type
-      `I already wrote the story myself, I'll paste it`.
-      *Expected:* the book switches to own-words mode and the guide asks for the
-      story.
-- [ ] **1.3 Entry buttons still work.** On a fresh book, tap **Guide me** or
-      **My own words**. *Expected:* same result as typing, and the tapped
-      button's label appears as your message.
+- [ ] **1.1 Focused entry choice.** Open a fresh book.
+      *Expected:* the guide greets you ("Hi! Let's make a storybook together.
+      Should I help you write the story, or did you already write one?"), the
+      message field is hidden, and only the two choice tiles—**Guide me**
+      ("Answer a few questions—I'll write it") and **I'll use my own words**
+      ("Type or paste a story you wrote")—are shown.
+- [ ] **1.2 Guided start.** On a fresh book, tap **Guide me**, then type
+      `It's for my daughter Amanda, she's 4`.
+      *Expected:* tapping **Guide me** posts "Guide me", reveals the message
+      field, and asks who should be in the story and what should happen. After
+      typing Amanda (4), the guide asks the next thing it needs. There's no Cast
+      tab yet: it arrives with the first portrait (section 4A).
+- [ ] **1.3 Own-words start.** On another fresh book, tap **I'll use my own
+      words**.
+      *Expected:* "I'll use my own words" appears as your message, the book
+      switches to own-words mode with the Story tab open, and the guide invites
+      you to write or paste your story on the page.
 - [ ] **1.4 Greeting first.** On a fresh book with Sparks, *expected:* the
       greeting comes first and the Sparks note follows it as a small line with
       an icon.
@@ -247,31 +252,40 @@ on a fresh guided book.
       *Expected:* no story is written yet. The guide asks "Anything else I
       should know first, like a nickname or something funny from home? Tell
       me, pick something below, or just say go and I'll start writing." The
-      well shows a **Shape the story** card marked **Optional**. It has chips
-      (What happens, Bedtime story, Occasion, Where, Mood, How it's told,
-      Anything else, Favorite things, Leave out) and a dark
+      well shows a **Shape the story** card marked **Optional**. It has choice
+      pills with a chevron (What happens, Occasion, Where, Mood, How it's told),
+      a dedicated **Bedtime story** switch row ("Calm pacing that winds down to
+      sleep."), a quiet hint row pointing to the chat below for free-text
+      details (favorite things, family details, things to leave out), and a dark
       **Write the story** button. No style picker yet: it waits until the story
       is written and everyone's look is settled, and while the guide asks for
       names or ages, no well shows at all.
 - [ ] **3A.2 Tap a choice.** Tap **Mood**, then **Calm and soothing**.
-      *Expected:* the options row opens under the chips. After the tap, a pill
-      **Mood: Calm and soothing** appears at the top of the card. Tap the pill
-      and pick **Funny and silly**: the pill changes. Tap **×** on the pill: it
-      disappears.
-- [ ] **3A.3 Bedtime toggle.** Tap **Bedtime story**.
-      *Expected:* a **Bedtime story** pill appears right away (there are no
-      options to choose from).
-- [ ] **3A.4 Own words from the card.** Tap **Leave out**.
-      *Expected:* a small field opens inside the card, labeled **Leave out**,
-      with an example ("Monsters and the dark") and the cursor in it. The
-      message field below is untouched. Type `spiders` and press Enter.
-      *Expected:* "Leave out: spiders" appears as your message, a **Leave out:
-      spiders** pill appears, and the guide asks "Anything else, or should I
-      start writing?". Tap the pill: the field opens again with "spiders".
-- [ ] **3A.4a Own words for a choice.** Tap **Occasion**, then **In my own
-      words…** at the end of the options. *Expected:* the options row turns
-      into the same field ("Grandma's 70th birthday" as the example). Enter
-      adds it; Escape or **×** closes it without changes.
+      *Expected:* the options row opens under the chips, and picking **Calm and
+      soothing** closes the options row automatically and shows a **Mood: Calm
+      and soothing** pill at the top of the card. Tap the pill and pick **Funny
+      and silly**: the pill changes. Tap **×** on the pill: it disappears.
+- [ ] **3A.3 Bedtime toggle.** Tap the **Bedtime story** switch row.
+      *Expected:* the switch flips on (tapping it again flips it off), separated
+      from the dropdown choice pills above it.
+- [ ] **3A.4 Free-text details via the chat composer.** Tap the hint row on the
+      card ("Have a favorite thing, a family detail, or something to leave out?
+      Just type it in the chat below.") or focus the chat field directly, type
+      `no spiders` and press Enter.
+      *Expected:* a **Leave out: spiders** pill appears on the card, and the
+      guide asks "Anything else, or should I start writing?". The pill holds
+      the text and has only a **×**; there is no input inside the card.
+- [ ] **3A.4a The card is tap-only.** Tap **Occasion**.
+      *Expected:* the options row lists the choices and nothing else: no
+      "In my own words…" button and no text field anywhere on the card. The
+      chat field below is the one place to type.
+- [ ] **3A.4b Example answers for the card.** With the card open.
+      *Expected:* up to three example chips above the field ("Leo loves diggers
+      and pancakes", "Leave out monsters and the dark", …) in place of the
+      usual suggestions. A tap fills the field and sends nothing. The
+      lightbulb menu starts with **Ideas for this question**, a one-line tip
+      ("Type anything you like, or just go ahead and write the story.") and
+      all five examples.
 - [ ] **3A.5 Typed details.** Type
       `It's for his birthday, he loves diggers, and please make it rhyme`.
       *Expected:* pills for Occasion (Birthday), Favorite things (diggers) and
@@ -292,8 +306,6 @@ on a fresh guided book.
       surprise, with no details.
 - [ ] **3A.8 Enter key.** With the card open and the message field empty,
       press Enter. *Expected:* it starts the story (the card's default action).
-      Enter inside the card's own-words field only adds the detail; it never
-      starts the story.
 - [ ] **3A.9 Details after the story exists.** On the book from 3A.6, type
       `Actually, make it take place at the beach`.
       *Expected:* a receipt for the new place and a **Please confirm** card:
@@ -475,13 +487,13 @@ just written and no style chosen.
       names need fixing shows it right away.
 - [ ] **4A.2 The looks card.** *Expected:* "How should Maya look in the
       book?" with a **How Maya looks** card. First, highlighted, **Surprise me
-      for everyone** (just **Surprise me** when only one look is open) with a
-      **Recommended** badge and "Nothing to do. …", and a small **Only Maya for
-      now** link under it. Then, quieter, "Or use your own:" with **A photo of
-      Maya**, **A drawing of Maya** and **Describe Maya**, each with a short
-      hint: the photo is "a real picture", the drawing is "drawn by hand".
-      Pressing Enter in the empty composer picks **Surprise me**. No style
-      picker yet.
+      for Maya** with a **Recommended** badge and "Nothing to do. …", and a
+      small **Surprise me for all 2** link under it. Then, quieter, "Or use
+      your own:" with **A photo of Maya** and **Artwork of Maya** side by side,
+      plus a quiet hint row pointing to the chat below for a written
+      description. Above the composer, example chips ("Maya has curly brown
+      hair and glasses", …) show for Maya. Pressing Enter in the empty composer
+      picks **Surprise me**. No style picker yet.
 - [ ] **4A.2a Age on the card.** Remove Maya's age (or let it be estimated
       from a drawing). *Expected:* an age field sits at the top of the card
       ("Maya's age"), with an **Estimated** tag when guessed.
@@ -510,10 +522,13 @@ just written and no style chosen.
 - [ ] **4A.5 A drawing after a style.** On a book whose style is already
       chosen, add a drawing for someone. *Expected:* the card says the person
       is drawn like the drawing *in the book's style*, and the style stays.
-- [ ] **4A.6 Describe.** Tap **Describe Maya**. *Expected:* a field with the
-      cursor in it. Type `curly red hair, yellow raincoat` and press Enter.
+- [ ] **4A.6 Describe via the chat composer.** Tap the hint row on the card
+      ("Want to describe Maya in your own words? Just type hair, clothes, or
+      glasses in the chat below.") or tap an example chip, type
+      `Maya has curly red hair and a yellow raincoat` in the chat composer and
+      press Enter.
       *Expected:* your words appear as your message and "Got it—I'll draw Maya
-      that way."
+      that way." There is no separate text field inside the card.
 - [ ] **4A.7 Surprise me.** Tap **Only Maya for now** (or **Surprise me for
       everyone**). *Expected:* "Okay, I'll imagine Maya from the story." (or
       "…everyone…"), then the next person or the style picker.
@@ -525,9 +540,9 @@ just written and no style chosen.
       asked about again; undoing a drawing that set the style also brings back
       the style picker.
 - [ ] **4A.10 German.** In German, the card reads **So sieht Maya aus**, with
-      **Überrasch mich** (**Empfohlen**), "Oder nimm etwas Eigenes:", **Ein
-      Foto von Maya**, **Eine Zeichnung von Maya** and **Maya beschreiben**,
-      all in casual "du". Name lists read "Maya und Leo".
+      **Überrasch mich bei Maya** (**Empfohlen**), "Oder nimm etwas Eigenes:",
+      **Ein Foto von Maya**, **Bild von Maya** and the hint pointing to the
+      chat below, all in casual "du". Name lists read "Maya und Leo".
 - [ ] **4A.11 Portraits start from the style tap.** With every look settled
       and enough Sparks, *expected:* above the style picker, "Tap a look and
       I'll start drawing Maya and Leo right away." with the exact Sparks price.
@@ -549,9 +564,10 @@ just written and no style chosen.
 
 Start a new guided book.
 
-- [ ] **4B.1 The first question.** *Expected:* the opening asks who should be
-      in the book. If you only give an idea, the follow-up is "Who should be in
-      the story?", not "Who is the book for?".
+- [ ] **4B.1 The first question.** *Expected:* after tapping **Guide me**, the
+      guide asks who should be in the story and what should happen. If you only
+      give an idea, the follow-up is "Who should be in the story?", not "Who is
+      the book for?".
 - [ ] **4B.2 A dog.** Type `It's for Maya, 5, and her dog Bello`.
       *Expected:* the receipt shows both, and "What they are: Bello: dog". The
       guide never asks Bello's age. The reading-age question names Maya.
@@ -723,10 +739,11 @@ Use an American English book unless the test says otherwise.
 - [ ] **7.14 The cover card arrives.** Choose the size and the page layout.
       *Expected:* "Here's what the cover will say. Want a subtitle or an
       author's name on it too?" with a cover preview showing only the title.
-      Under it: two or three subtitle ideas, **None** and **Write my own**,
-      then author ideas (**Mom & Dad**, **Grandma & Grandpa**), **None** and
-      **Write my own**. **Looks good** is the main button. The header says
-      *Optional*. The hint below says the words are painted into the cover.
+      Under it: two or three subtitle ideas and **None**, then author ideas
+      (**Mom & Dad**, **Grandma & Grandpa**) and **None**, plus a quiet hint
+      row pointing to the chat below for custom words. **Looks good** is the
+      main button. The header says *Optional*. The hint beside the button says
+      the words are painted into the cover.
 - [ ] **7.15 Looks good right away.** Tap **Looks good** without picking
       anything. *Expected:* "Lovely, that's what the cover will say." The
       card gives way to **Create illustrated book**. The card above it shows
@@ -735,10 +752,13 @@ Use an American English book unless the test says otherwise.
       **Mom & Dad**. *Expected:* the preview updates each time and the card
       stays; the guide says nothing new until **Looks good**. Tap **None**
       under the subtitle: it leaves the preview.
-- [ ] **7.17 Own words and the title.** Tap **Write my own** under the
-      author, type `Uncle David`, save. Tap **Edit title** and change it.
-      *Expected:* both show in the preview. After **Looks good** the Story
-      tab's title, subtitle and author fields show the same words.
+- [ ] **7.17 Own words and the title.** With the cover card open, tap the hint
+      row or an example chip ("Change the title to The Moonlit Garden",
+      "Written by Grandma & Grandpa") and send a custom author (`Written by
+      Uncle David`) and title change in the chat composer.
+      *Expected:* both show in the preview, and there are no text fields inside
+      the card itself. After **Looks good** the Story tab's title, subtitle and
+      author fields show the same words.
 - [ ] **7.18 A relative in the story.** In a story with a cast member whose
       role is "uncle" named David. *Expected:* **Uncle David** is the first
       author idea. In a German book with a "Tante" Anna: **Tante Anna**,
@@ -960,7 +980,8 @@ English book unless the test says otherwise.
 - [ ] **10.3 Chips never lead to a dead end.** Try every chip you see.
       *Expected:* none of them answers "That needs something first".
 - [ ] **10.4 Chips hide while busy.** While typing, while a well is open, or
-      while the guide is working. *Expected:* no chips.
+      while the guide is working. *Expected:* no chips, except the example
+      answers for the question the guide has open (10.8).
 - [ ] **10.5 Placeholder idea.** When there's one more idea than the chips
       show. *Expected:* the empty field's placeholder reads
       `Try "…"`. When the guide has asked a question, the placeholder shows that
@@ -975,6 +996,31 @@ English book unless the test says otherwise.
       only on the Story tab. Tapping a story change or the age check **runs
       it**: your line appears in the thread with the chip's words and the guide
       answers it like a typed sentence.
+- [ ] **10.8 Example answers to the open question.** On a fresh guided book,
+      after tapping **Guide me** ("Who should be in the story, and what should happen?").
+      *Expected:* three chips from "My son Leo, 5, and our dog Max", "Hugo the
+      hedgehog and Momo the mole", "My twins Mia and Noah, 4", "Grandma Rose,
+      70, and her cat", "A little girl named Zoe, 3". Tap one: it fills the
+      field and sends nothing. Open the lightbulb: the first group, **Ideas for
+      this question**, has the tip "Characters can be children, grandparents,
+      pets, toys or made-up creatures." and all five examples, above the usual
+      "I'd rather write it myself".
+- [ ] **10.9 They follow the question.** Answer with `Leo, 5`, then with a
+      dog's name when asked about ages.
+      *Expected:* the chips and menu change with each question: ages ("Mia is
+      4", "Max is a dog and Fluffy is a teddy bear"), then the story card
+      (3A.4b). While a tap answers the question (the reading-age card), the
+      usual suggestions show instead. Once the story is written there are no
+      example answers.
+- [ ] **10.10 Examples a reader has tried give way.** Tap the same example
+      twice across two books. *Expected:* the chips show the ones not yet tried
+      first.
+- [ ] **10.11 The admin can turn them off.** In Guided studio → Suggestion chips,
+      switch off **Example answers to the guide's question**. *Expected:* no
+      example chips and no **Ideas for this question** group; the rest is
+      unchanged. Turning off suggestions altogether hides them too.
+- [ ] **10.12 German.** With a German browser. *Expected:* the examples and tip
+      are German and informal ("Hugo der Igel und Momo der Maulwurf").
 
 ---
 
@@ -1206,6 +1252,48 @@ English book unless the test says otherwise.
       one ("make it night") is still a whole-picture change and redraws the page.
       A model with no mask support redraws the page keeping its composition, as
       before.
+- [ ] **10F.13 A portrait edit changes only the named part.** With a drawn
+      portrait, type "make the boots red", then "give her blue eyes".
+      *Expected:* the shirt, trousers, face, hair and background are identical to
+      the earlier version, and only the named part differs, including small parts
+      like the eyes. The version's prompt names "the transparent area of the mask".
+      A change about the whole person ("make her older") may redraw the whole
+      picture. The worker log shows `[portrait-edit] masked edit` or
+      `whole-picture edit` with a reason, never a silent fall-through.
+- [ ] **10F.14 A part the portrait doesn't show.** Portraits show the head and
+      upper body, cropped at the waist. Type "make the boots red".
+      *Expected:* nothing is drawn or charged, the person's card says "That part
+      isn't shown in {name}'s portrait, so nothing was changed or charged." and
+      the old portrait stays. A locate that fails is retried, not turned into a
+      whole-picture redraw.
+- [ ] **10F.15 Portraits are framed alike.** Draw portraits for several people,
+      including one whose description names boots or a full outfit.
+      *Expected:* every portrait is head and upper body cropped at the waist, with
+      no legs or feet, and the cast sheet shows each one uncropped on a 2:3 plate.
+      Older portraits still show, cropped from the top.
+- [ ] **10F.16 A selected person's sentence is read, in any language.** Before
+      the pages are drawn, select a drawn portrait of a 4-year-old and type
+      "make him 2 years old" (then try "hazlo de 2 años", "mach ihn 2 Jahre alt").
+      *Expected:* the age on the person becomes 2 and the portrait is drawn anew
+      (never an edit of the old face); the sentence is not kept as a note on the
+      person. The same with a name instead of "him", or with a different person's
+      name while this one is selected (that person's age changes).
+- [ ] **10F.17 A look with an age.** With a portrait selected, type "make him 2
+      and give him red boots".
+      *Expected:* the age is 2, one new portrait is drawn with red boots, and
+      nothing is asked.
+- [ ] **10F.18 A sentence the guide can't place.** With a portrait selected, type
+      something no skill covers ("what a lovely day").
+      *Expected:* nothing is drawn, charged or written to the person; the guide
+      replies or asks "What should change?". With skills switched off in admin, a
+      typed change to a selected portrait still redraws it, as before.
+
+- [ ] **10F.19 An age change keeps the look.** Draw a person from a description
+      (hair, clothes, colors), select the portrait and type "make her 2 years
+      older" (or younger).
+      *Expected:* the new portrait is recognizably the same person (same hair,
+      skin, eyes, clothes and palette) at the new age, not a new design. Changing
+      what they are ("she's a dog") or asking to "start over" gives a new design.
 
 ## 10C. Waiting on the guide
 
@@ -1306,10 +1394,12 @@ changes**, reload the studio, and check the effect.
 
 - [ ] **11.10 Persona off.** Turn **Persona composer** off. *Expected:* the guide
       shows the configured English wording exactly as written (English only).
-- [ ] **11.11 Name and self-reference.** Set a name ("Hugo"), set **Self
-      reference** to **Sometimes**. *Expected:* the preview at the bottom
-      ("What the composer is told") mentions the name; replies may occasionally
-      use it.
+- [ ] **11.11 Profile photo, name and self-reference.** Upload a profile photo,
+      set a name ("Hugo"), and set **Self reference** to **Sometimes**.
+      *Expected:* the uploaded photo and "Hugo" appear next to the guide's
+      messages and on the opening screen (when neither is set, the hedgehog
+      placeholder and "Guide" are shown); the preview at the bottom ("What the
+      composer is told") mentions the name; replies may occasionally use it.
 - [ ] **11.12 Avoid list.** Add `awesome` to **Never say**. *Expected:* replies
       never contain "awesome". A reply that would is replaced by the configured
       wording.
@@ -1598,6 +1688,11 @@ price card before anything is drawn (and then once with it on).
       with Amanda*. *Expected:* the page never shows its own "Redraw page" card
       while the guide starts the redraw; with auto-spend 0 you see exactly one
       priced card (in the chat), not two.
+- [ ] **14.37b No second redraw button for a person.** Select a drawn person and
+      type "give her blue eyes". *Expected:* while the guide redraws, her card in
+      the chat shows no "Redraw {name}" button and no "out of date" line. With
+      auto-spend 0 you see exactly one priced card (the chat's), not two. When a
+      redraw failed or was never started, the card's button is back.
 - [ ] **14.38 Between people.** Select page 3 and type *Make Arthur the same size
       as Amanda* (also once with "on page 3"). *Expected:* the page is redrawn
       with both of them and the rest of the scene kept; no "left the page as it

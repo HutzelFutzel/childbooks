@@ -35,10 +35,10 @@ import {
   whenEarlierPage,
   whenEarlierPortrait,
   whenNamedPerson,
+  whenPlace,
   whenPortraitDrawn,
   whenPortraitsToDraw,
   whenSeveralPeople,
-  whenStory,
   whenUndescribed,
 } from "./relevance";
 import {
@@ -742,7 +742,7 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
   {
     id: "describeAnchor",
     area: "places",
-    suggest: [{ id: "describePlace", relevant: whenStory }],
+    suggest: [{ id: "describePlace", relevant: whenPlace }],
     summary: "Describe how a place or object in the story should look ('the house is blue with a red door').",
     args: [
       { name: "anchor", kind: "anchor", required: true, hint: "the place or object's name" },

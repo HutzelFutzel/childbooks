@@ -10,6 +10,7 @@ import {
 } from "../../../state/adminProjectsStore";
 import { IMAGE_ACTIONS, TEXT_ACTIONS } from "../../../core/ai/actions";
 import { MILESTONES } from "./milestones";
+import { describeFlowArm, flowArm, type FlowArm } from "../../../core/guide/flow";
 import { fmtDateTime, fmtDuration, fmtNumber, fmtSparks, fmtUsd } from "./format";
 
 const NO_PNL: ProjectPnl = {
@@ -81,7 +82,20 @@ export function ProjectHistoryModal() {
             <Tile label="Net" value={fmtUsd(pnl.netUsd)} tone={pnl.netUsd >= 0 ? "revenue" : "cost"} />
           </div>
 
-          <Timeline milestones={p.milestones} />
+          <div className="flex items-center gap-2 text-xs text-ink-500">
+            <span className="rounded-full bg-ink-50 px-2 py-0.5 font-medium text-ink-700 ring-1 ring-inset ring-ink-100">
+              {describeFlowArm(flowArm(p.authoring))}
+            </span>
+            <span>
+              {flowArm(p.authoring) === "mixed"
+                ? "Worked on in both studios, so it counts toward neither side of the comparison."
+                : flowArm(p.authoring) === "unknown"
+                  ? "No studio recorded for this book."
+                  : "The studio this book was made in."}
+            </span>
+          </div>
+
+          <Timeline milestones={p.milestones} arm={flowArm(p.authoring)} />
 
           <div className="grid gap-4 sm:grid-cols-4">
             <Facts
@@ -140,10 +154,11 @@ export function ProjectHistoryModal() {
   );
 }
 
-function Timeline({ milestones }: { milestones: Record<string, number | undefined> }) {
+function Timeline({ milestones, arm }: { milestones: Record<string, number | undefined>; arm: FlowArm }) {
   return (
     <div className="flex flex-wrap gap-2">
-      {MILESTONES.map((m) => {
+      {/* A wizard book can never carry a guided-studio stage; showing it as "not reached" would read as a failure. */}
+      {MILESTONES.filter((m) => !(m.guideOnly && arm === "legacy" && !milestones?.[m.key])).map((m) => {
         const at = milestones?.[m.key];
         return (
           <div

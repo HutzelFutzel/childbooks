@@ -218,7 +218,7 @@ export type GuideCopyKey = GuideLineKey | GuideLabelKey;
 
 export const DEFAULT_GUIDE_COPY: Record<GuideCopyKey, string> = {
   sparksNotice: "Image generation uses Sparks. You'll see the exact price before anything is drawn.",
-  opening: "Tell me who should be in this book and what you have in mind—or paste a story you've already written.",
+  opening: "Hi! Let's make a storybook together. Should I help you write the story, or did you already write one?",
   broadQuestion: "Who should be in the story, and what should happen?",
   drawThem: "Next, I'll draw {names} in this look. Tap the button when you're ready.",
   storyStarting: "That's everything I need—I'm drafting the story now.",
@@ -427,8 +427,8 @@ export const DEFAULT_GUIDE_COPY: Record<GuideCopyKey, string> = {
 /** Keys whose text the admin may override, with a short description for the editor. */
 export const GUIDE_COPY_HELP: Partial<Record<GuideCopyKey, string>> = {
   sparksNotice: "Shown once, before the opening line of a new book. Information, not approval.",
-  opening: "The single opening invitation. It must support both guided ideas and pasted stories.",
-  broadQuestion: "Fallback broad question for older conversations whose opening did not ask for the book.",
+  opening: "The opening invitation before the parent chooses between guided and their own words.",
+  broadQuestion: "The first question after the parent chooses Guide me.",
   drawThem:
     "Said right before the portrait button, which only appears when portraits couldn't start on their own (a new price, too few Sparks, a failed portrait, or a style chosen by typing). {names} are the people it draws.",
   storyStarting: "Said when the last fact lands and the draft is queued.",
@@ -587,12 +587,16 @@ export const guideCopySchema = z
   .record(z.string(), z.string().max(400))
   .transform((value) => normalizeGuideCopy(value));
 
+const LEGACY_OPENING_WORDING =
+  "Tell me who should be in this book and what you have in mind—or paste a story you've already written.";
+
 export function normalizeGuideCopy(input: unknown): GuideCopyOverrides {
   if (!input || typeof input !== "object" || Array.isArray(input)) return {};
   const out: GuideCopyOverrides = {};
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
     if (!(key in DEFAULT_GUIDE_COPY) || typeof value !== "string") continue;
     const text = value.trim().slice(0, 400);
+    if (key === "opening" && text === LEGACY_OPENING_WORDING) continue;
     if (text && text !== DEFAULT_GUIDE_COPY[key as GuideCopyKey]) out[key as GuideCopyKey] = text;
   }
   return out;

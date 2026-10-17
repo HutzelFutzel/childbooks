@@ -126,8 +126,9 @@ export function composerForChoice(input: {
   handedOver?: boolean;
   wellKind?: string | null;
 }): boolean {
+  if (input.entry === null) return false;
   if (input.wellKind && OWN_FIELD_WELLS.has(input.wellKind)) return false;
   // Own words: the page is where they write, so the field waits until the
   // story is handed over, unless they asked the guide something first.
-  return input.entry === null || input.entry === "guided" || input.ownComposer === true || input.handedOver === true;
+  return input.entry === "guided" || input.ownComposer === true || input.handedOver === true;
 }

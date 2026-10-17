@@ -33,8 +33,16 @@ import {
   GUIDE_IDEA_GROUPS,
   GUIDE_IDEA_IDS,
   ideaMenuFor,
+  questionIdeasFor,
   suggestionsFor,
 } from "../books-frontend/src/core/guide/agent/ideas";
+import { GUIDE_FACT_IDS, createDefaultGuideFactPolicies } from "../books-frontend/src/core/guide/factPolicy";
+import {
+  GUIDE_QUESTION_IDS,
+  QUESTION_EXAMPLES,
+  activeQuestion,
+  questionExampleId,
+} from "../books-frontend/src/core/guide/questions";
 import { guideMessage, type GuideMessage } from "../books-frontend/src/core/guide/session";
 import { storyTextHash } from "../books-frontend/src/core/story/revision";
 import { GUIDE_COMMAND_IDS } from "../books-frontend/src/core/guide/agent/ids";
@@ -67,7 +75,7 @@ import type { Anchor } from "../books-frontend/src/core/types";
 import { updateNodeContent } from "../books-frontend/src/core/versioning";
 import { DEFAULT_GUIDE_COPY } from "../books-frontend/src/core/guide/copy";
 import { authoringOf, withAuthoring } from "../books-frontend/src/core/guide/projectState";
-import { availableViews, BOOK_VIEWS } from "../books-frontend/src/core/guide/journey";
+import { availableViews, BOOK_VIEWS, deriveJourney } from "../books-frontend/src/core/guide/journey";
 import { briefOf, createDefaultStoryBrief } from "../books-frontend/src/core/story/brief";
 import { createDefaultConfig, type Project, type StoryCastMember } from "../books-frontend/src/core/types";
 
@@ -755,6 +763,7 @@ const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "chang
     "menuElsewhere",
     "nextSuggested",
     "dismissNext",
+    "groupQuestion",
     ...GUIDE_IDEA_GROUPS.map((g) => `group${g[0]!.toUpperCase()}${g.slice(1)}`),
   ];
   for (const key of menuKeys) {
@@ -784,9 +793,15 @@ const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "chang
     check(lookup(styled, view).every((i) => !i.elsewhere), `The ${view} tab's chips include another tab's idea.`);
   }
   const castIds = lookup(styled, "cast").map((i) => i.id);
-  for (const id of ["renamePerson", "addPerson", "setAge", "relatePeople", "describePlace"]) {
+  for (const id of ["renamePerson", "addPerson", "setAge", "relatePeople"]) {
     check(castIds.includes(id), `The Characters tab misses "${id}": ${castIds.join(", ")}.`);
   }
+  check(!castIds.includes("describePlace"), "Describing a place is offered when the book has no places yet.");
+  const withPlace: Project = {
+    ...styled,
+    anchors: [{ id: "a-house", type: "place", name: "Beach House", description: "", include: true, mode: "auto", sourceArt: [] } as Anchor],
+  };
+  check(lookup(withPlace, "cast").some((i) => i.id === "describePlace"), 'The Characters tab misses "describePlace" once a place exists.');
   check(lookup(unstyled, "style").some((i) => i.id === "chooseLook"), "The Look tab does not offer to pick a look.");
   check(lookup(styled, "style").some((i) => i.id === "changeLook") && !lookup(styled, "style").some((i) => i.id === "chooseLook"), "The Look tab offers to pick a look that is already picked.");
   for (const id of ["changeSubtitle", "changeAuthor", "changeCoverWords"]) {
@@ -812,6 +827,83 @@ const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "chang
   check(suggestionsFor(blank, wide, { guest: false, view: null }).length === 0, "Chips show before the reader has chosen how to begin.");
   check(!suggestionsFor(withAuthoring(blank, { entry: "own" }), wide, { guest: false, view: null }).some((i) => i.id === "writeMyself"), "Writing it yourself is offered to someone who already does.");
   check(!suggestionsFor(twins, wide, { guest: false, view: "story" }).some((i) => i.id === "writeMyself"), "Writing it yourself is offered once a story exists.");
+  const writingStory = withAuthoring(fresh, { storyRun: { signature: "s", startedAt: 1, status: "running" } });
+  check(!suggestionsFor(writingStory, wide, { guest: false, view: "story" }).some((i) => i.id === "writeMyself"), "Writing it yourself is offered while the story is being written.");
+  check(!suggestionsFor(writingStory, wide, { guest: false, view: "story" }).some((i) => i.id === "changeLanguage"), "Changing the language is offered while the story is being written.");
+  check(!ideaMenuFor(writingStory, defaults, { guest: false, view: "story" }).some((g) => g.ideas.some((i) => i.id === "writeMyself" || i.id === "changeLanguage")), "The ideas menu offers to switch mode or language while the story is being written.");
+  check(!ideaMenuFor(twins, defaults, { guest: false, view: "story" }).some((g) => g.ideas.some((i) => i.id === "writeMyself" || i.id === "changeLanguage")), "The ideas menu offers to switch mode or language after the story is written.");
+  const langCtx: CommandContext = { ...ctx, languages: [{ id: "de-DE", label: "German" }] };
+  check(
+    planTurn({ project: writingStory, calls: [call("chooseEntry", { entry: "own" })], ctx: langCtx, config: defaults }).blocked[0]?.remedy.requirement === "storyIdle",
+    "Switching to own words ran while the story was being written.",
+  );
+  check(
+    planTurn({ project: writingStory, calls: [call("setBookLanguage", { language: "German" })], ctx: langCtx, config: defaults }).blocked[0]?.remedy.requirement === "storyIdle",
+    "Switching the book language ran while the story was being written.",
+  );
+  check(
+    GUIDE_COMMANDS.setBookLanguage.run(twins, { language: "German" }, langCtx).kind === "noop",
+    "Switching the book language succeeded after the story was written.",
+  );
+
+  // Example answers: one entry per question the guide asks, read from the journey, never from the skills.
+  {
+    const enEx = (en.guide as unknown as { examples?: Record<string, Record<string, string>> }).examples ?? {};
+    const deEx = (de.guide as unknown as { examples?: Record<string, Record<string, string>> }).examples ?? {};
+    for (const fact of GUIDE_FACT_IDS) {
+      check((GUIDE_QUESTION_IDS as string[]).includes(fact), `The guide can ask for "${fact}" but has no example answers for it (or none on purpose).`);
+    }
+    for (const question of GUIDE_QUESTION_IDS) {
+      const { examples, tip } = QUESTION_EXAMPLES[question];
+      const wanted = [...Array.from({ length: examples }, (_, i) => String(i + 1)), ...(tip ? ["tip"] : [])].sort();
+      for (const [name, catalog] of [["English", enEx], ["German", deEx]] as const) {
+        const have = Object.keys(catalog[question] ?? {}).sort();
+        check(have.join() === wanted.join(), `${name} example answers for "${question}" are ${have.join(", ") || "missing"}; expected ${wanted.join(", ") || "none"}.`);
+        for (const key of have) {
+          const text = catalog[question]?.[key] ?? "";
+          check(text.trim().length > 0, `${name} example "${question}.${key}" is empty.`);
+          // Chips are short; the tip is a sentence the menu shows.
+          if (key !== "tip") check(text.length <= 60, `${name} example "${question}.${key}" is too long for a chip (${text.length}).`);
+          if (name === "German") check(!/\b(Sie|Ihnen|Ihr|Ihre|Ihren)\b/.test(text), `German example "${question}.${key}" addresses the parent formally.`);
+          if (name === "English") check(britishSpellingsIn(text).length === 0, `English example "${question}.${key}" uses British spelling.`);
+          check(!text.endsWith("…"), `Example "${question}.${key}" ends in "…", which means "finish this sentence" to the chips.`);
+        }
+      }
+    }
+    for (const catalog of [enEx, deEx]) {
+      for (const key of Object.keys(catalog)) check((GUIDE_QUESTION_IDS as string[]).includes(key), `guide.examples.${key} is text for a question the guide no longer asks.`);
+    }
+    // The first question is where people learn that pets, toys and made-up creatures count.
+    check(QUESTION_EXAMPLES.names.examples >= 3 && QUESTION_EXAMPLES.names.tip, "Who is in the book has too few example answers, or no tip.");
+    check(/pet/i.test(enEx.names?.tip ?? "") && /toy/i.test(enEx.names?.tip ?? ""), "The characters tip doesn't say pets and toys count.");
+    check(Object.values(enEx.names ?? {}).some((text) => /hedgehog/i.test(text)), "No example shows an animal character.");
+
+    // What shows, and what turns it off.
+    const shown = questionIdeasFor("names", defaults);
+    check(shown?.examples.length === QUESTION_EXAMPLES.names.examples && shown.tip, "Example answers for the open question don't show.");
+    check(questionIdeasFor(null, defaults) === null, "Examples show with no question open.");
+    check(questionIdeasFor("readingAge", defaults) === null, "A question a tap answers shows example answers.");
+    check(questionIdeasFor("names", { ...defaults, ideas: { ...defaults.ideas, questionExamples: false } }) === null, "The admin's switch doesn't turn example answers off.");
+    check(questionIdeasFor("names", { ...defaults, ideas: { ...defaults.ideas, enabled: false } }) === null, "Turning suggestions off leaves example answers.");
+    check(questionIdeasFor("names", { ...defaults, enabled: false }) === null, "Turning the guide off leaves example answers.");
+    const tried = questionIdeasFor("names", defaults, { [questionExampleId("names", 1)]: 2 });
+    check(tried?.examples.at(-1)?.id === questionExampleId("names", 1), "An example the reader already tried doesn't give way to one they haven't.");
+    check(new Set(shown?.examples.map((e) => e.id)).size === shown?.examples.length, "Two example answers share an id.");
+    check(normalizeGuideAgentConfig({ ideas: { questionExamples: "yes" } }).ideas.questionExamples === defaults.ideas.questionExamples, "A bad value for the example-answers switch was kept.");
+
+    // The question comes from the journey: the first fact still missing, or the card that is up.
+    const policies = createDefaultGuideFactPolicies();
+    const journeyOf = (project: Project) => deriveJourney(project, policies);
+    check(activeQuestion(journeyOf(blank), null) === null, "A question is open before the reader chose how to begin.");
+    check(activeQuestion(journeyOf(fresh), null) === "names", `A guided book with nobody in it is not asking who: ${activeQuestion(journeyOf(fresh), null)}.`);
+    check(activeQuestion(journeyOf(withAuthoring(blank, { entry: "own" })), null) === null, "Someone writing their own story is asked a guided question.");
+    check(activeQuestion(journeyOf(fresh), { kind: "storyBrief" }) === "storyBrief", "The story card isn't the open question.");
+    check(activeQuestion(journeyOf(fresh), { kind: "coverWords" }) === "coverWords", "The cover card isn't the cover question.");
+    check(activeQuestion(journeyOf(fresh), { kind: "castLooks" }) === "castLooks", "The looks card isn't the looks question.");
+    check(activeQuestion(journeyOf(fresh), { kind: "castAges" }) === "ages", "The ages card isn't the ages question.");
+    check(activeQuestion(journeyOf(fresh), { kind: "audienceConfirm" }) === "readingAge", "The reading-age card isn't the reading-age question.");
+    check(activeQuestion(journeyOf(fresh), { kind: "drawBook" }) === null, "A card that asks nothing in words has example answers.");
+  }
 
   // The next step follows what the book is waiting on, and only leads on its own tab.
   const lead = (project: Project, view: "story" | "cast" | "style" | "pages", extra: Record<string, unknown> = {}) =>

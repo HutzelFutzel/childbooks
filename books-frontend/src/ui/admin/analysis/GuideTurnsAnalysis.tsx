@@ -6,7 +6,7 @@ import { backendFetch } from "../../../platform/backend";
 import { Button } from "../../components/Button";
 import { Select } from "../../components/Select";
 
-type Population = "all" | "low-confidence" | "rejected" | "unhandled" | "self-repeat";
+type Population = "all" | "low-confidence" | "rejected" | "admitted-failure" | "self-repeat";
 
 interface GuideTurnRow {
   id: string;
@@ -18,38 +18,42 @@ interface GuideTurnRow {
   createdAt: number;
   claims?: Array<{ slot: string; op?: string; value?: unknown; confidence: number }>;
   refused?: Array<{ slot: string; refusal: string; reason: string }>;
-  unhandled?: Array<{ text: string; want: string }>;
+  outcome?: { applied?: string[]; unchanged?: string[]; rejected?: { key: string; reason: string }[]; admittedFailure?: boolean };
 }
 
-export function GuideTurnsAnalysis() {
+export function GuideTurnsAnalysis({ uid }: { uid?: string } = {}) {
   const [population, setPopulation] = useState<Population>("all");
   const [rows, setRows] = useState<GuideTurnRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [scan, setScan] = useState<{ scanned: number; scanLimit: number } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const response = await backendFetch(
-        `/admin/analytics/guide-turns?population=${population}`,
+        `/admin/analytics/guide-turns?population=${population}${uid ? `&uid=${encodeURIComponent(uid)}` : ""}`,
       );
       if (!response.ok) throw new Error("Could not load Guide turns.");
-      const payload = await response.json() as { rows: GuideTurnRow[] };
+      const payload = await response.json() as { rows: GuideTurnRow[]; scanned?: number; scanLimit?: number };
       setRows(payload.rows);
+      setScan(payload.scanned !== undefined && payload.scanLimit !== undefined
+        ? { scanned: payload.scanned, scanLimit: payload.scanLimit }
+        : null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not load Guide turns.");
     } finally {
       setLoading(false);
     }
-  }, [population]);
+  }, [population, uid]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const addExample = async (row: GuideTurnRow) => {
-    const claims = (row.claims ?? []).filter((claim) => claim.value !== undefined);
+    const claims = (row.claims ?? []).filter((claim) => claim.value !== undefined && claim.value !== null);
     if (claims.length === 0) {
-      toast.error("This turn has no captured claim values to review.");
+      toast.error("This turn has no captured claim values to review (turns logged before values were recorded have none).");
       return;
     }
     const response = await backendFetch("/admin/analytics/guide-examples", {
@@ -92,10 +96,9 @@ export function GuideTurnsAnalysis() {
     const result = await response.json() as {
       claims?: unknown[];
       refused?: unknown[];
-      unhandled?: unknown[];
     };
     toast.success(
-      `Dry run: ${result.claims?.length ?? 0} accepted, ${result.refused?.length ?? 0} refused, ${result.unhandled?.length ?? 0} unhandled.`,
+      `Dry run: ${result.claims?.length ?? 0} accepted, ${result.refused?.length ?? 0} refused.`,
     );
   };
 
@@ -113,11 +116,17 @@ export function GuideTurnsAnalysis() {
             { value: "all", label: "All recent turns" },
             { value: "low-confidence", label: "Low confidence" },
             { value: "rejected", label: "Rejected" },
-            { value: "unhandled", label: "Unhandled" },
+            { value: "admitted-failure", label: "Didn't land" },
             { value: "self-repeat", label: "Self repeats" },
           ]}
         />
       </div>
+      {scan && population !== "all" && (
+        <p className="text-xs text-ink-400">
+          Filtered from the newest {scan.scanned} turn{scan.scanned === 1 ? "" : "s"}
+          {scan.scanned >= scan.scanLimit ? " (the most it reads — older ones are not included)" : ""}.
+        </p>
+      )}
       {loading ? (
         <p className="text-sm text-ink-400">Loading Guide turns…</p>
       ) : rows.length === 0 ? (
@@ -133,8 +142,8 @@ export function GuideTurnsAnalysis() {
               {(row.refused?.length ?? 0) > 0 && (
                 <p className="mt-1 text-xs text-red-600">{row.refused!.map((item) => `${item.slot}: ${item.reason}`).join(" · ")}</p>
               )}
-              {(row.unhandled?.length ?? 0) > 0 && (
-                <p className="mt-1 text-xs text-amber-700">{row.unhandled!.map((item) => item.text).join(" · ")}</p>
+              {row.outcome?.admittedFailure && (
+                <p className="mt-1 text-xs text-amber-700">Read as an answer or a revision, but nothing was written.</p>
               )}
               <div className="mt-2 flex gap-2">
                 <Button size="sm" variant="secondary" onClick={() => void dryRun(row)}>

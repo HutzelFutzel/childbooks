@@ -155,8 +155,8 @@ export function Composer({
         )}
         <div
           className={cn(
-            "relative flex items-end gap-2 rounded-[1.1rem] bg-white py-2 pr-2 pl-3 ring-1 shadow-soft transition-shadow focus-within:shadow-lifted",
-            quiet ? "ring-ink-900/40 focus-within:ring-ink-900/85" : "ring-ink-900/85",
+            "relative flex items-end gap-2 rounded-[1.2rem] bg-white py-2 pr-2 pl-3.5 shadow-[0_8px_24px_-8px_rgba(20,22,58,0.12),0_1px_2px_rgba(20,22,58,0.06)] ring-1 transition-all focus-within:shadow-[0_14px_32px_-10px_rgba(20,22,58,0.18),0_1px_3px_rgba(20,22,58,0.08)]",
+            quiet ? "ring-ink-900/25 focus-within:ring-ink-900/80" : "ring-ink-900/75",
           )}
         >
           <div className="flex shrink-0 items-center gap-1 self-center">

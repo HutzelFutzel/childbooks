@@ -8,8 +8,9 @@
  * watch out for. The code's floors are shown, not editable: a skill that always
  * confirms shows its confirmation locked on, and a person's age stays required.
  */
-import { Fragment, useMemo, useState } from "react";
-import { Plus, RotateCcw, Trash2 } from "lucide-react";
+import { Fragment, useMemo, useRef, useState } from "react";
+import { Plus, RotateCcw, Trash2, Upload } from "lucide-react";
+import { toast } from "sonner";
 import {
   GUIDE_AGENT_META,
   PERSONA_ADDRESS,
@@ -42,6 +43,8 @@ import { Select } from "../../../components/Select";
 import { Toggle } from "../../../components/Toggle";
 import { cn } from "../../../lib/cn";
 import { ImpactNote, Section } from "../products/parts";
+import { useAppConfigStore } from "../../../../state/appConfigStore";
+import { GuideAvatar } from "../../../guide/chat/GuideAvatar";
 
 type Change = (next: GuideAgentConfig) => void;
 
@@ -713,20 +716,123 @@ export function GuidePersonaPanel({ agent, onChange, readOnly }: PanelProps) {
   const set = (patch: Partial<GuidePersona>) => onChange({ ...agent, persona: { ...persona, ...patch } });
   const [overrideLang, setOverrideLang] = useState("");
   const [previewLocale, setPreviewLocale] = useState("de");
+  const guideAvatar = useAppConfigStore((s) => s.branding.guideAvatar);
+  const uploadAvatar = useAppConfigStore((s) => s.uploadBrandingAsset);
+  const removeAvatar = useAppConfigStore((s) => s.removeBrandingAsset);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  const onPickAvatar = async (file: File | undefined) => {
+    if (!file) return;
+    setUploadingAvatar(true);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result);
+          const comma = result.indexOf(",");
+          resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      await uploadAvatar("guideAvatar", base64, file.type || "image/png", persona.name.trim() || "Guide");
+      toast.success("Guide profile picture updated.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not upload picture.");
+    } finally {
+      setUploadingAvatar(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const onRemoveAvatar = async () => {
+    setUploadingAvatar(true);
+    try {
+      await removeAvatar("guideAvatar");
+      toast.success("Guide profile picture removed (using placeholder).");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not remove picture.");
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
 
   return (
     <div className="space-y-8">
       <Section
         title="Who the guide is"
-        hint="The composer phrases every guide message in this voice and in the parent's language. It never changes what a message says — names, numbers and questions are checked after writing."
+        hint="The character parents chat with in the studio, and the voice the composer writes from. It never changes what a message says — names, numbers and questions are checked after writing."
         action={
           <ResetButton readOnly={readOnly} onClick={() => onChange({ ...agent, persona: createDefaultGuidePersona() })} />
         }
       >
+        <div className="flex flex-col gap-4 rounded-xl bg-white p-4 ring-1 ring-ink-100 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3.5">
+            <GuideAvatar size="lg" url={guideAvatar?.imageUrl ?? null} name={persona.name.trim() || "Guide"} />
+            <div className="min-w-0 space-y-0.5">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold text-ink-900">
+                  {persona.name.trim() || "Guide"}
+                </p>
+                {!persona.name.trim() && (
+                  <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-medium text-ink-500">
+                    Placeholder name
+                  </span>
+                )}
+                {!guideAvatar?.imageUrl && (
+                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                    Placeholder avatar
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-ink-500">
+                Shown beside the guide&apos;s messages and on the opening screen. Square PNG, WebP or SVG recommended.
+              </p>
+            </div>
+          </div>
+          {!readOnly && (
+            <div className="flex shrink-0 items-center gap-2">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/webp,image/jpeg,image/svg+xml"
+                className="hidden"
+                onChange={(e) => void onPickAvatar(e.target.files?.[0])}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={uploadingAvatar}
+                leftIcon={<Upload className="size-3.5" />}
+                onClick={() => fileRef.current?.click()}
+              >
+                {guideAvatar?.imageUrl ? "Replace photo" : "Upload photo"}
+              </Button>
+              {guideAvatar?.imageUrl && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={uploadingAvatar}
+                  leftIcon={<Trash2 className="size-3.5" />}
+                  onClick={() => void onRemoveAvatar()}
+                >
+                  Use placeholder
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
         <ToggleSetting path="persona.enabled" checked={persona.enabled} onChange={(enabled) => set({ enabled })} readOnly={readOnly} />
         <div className="grid gap-5 sm:grid-cols-2">
           <Setting path="persona.name">
-            <Input value={persona.name} disabled={readOnly} maxLength={40} onChange={(e) => set({ name: e.target.value })} />
+            <Input
+              value={persona.name}
+              placeholder="Guide (default placeholder)"
+              disabled={readOnly}
+              maxLength={40}
+              onChange={(e) => set({ name: e.target.value })}
+            />
           </Setting>
           <ChoiceSetting
             path="persona.selfReference"
@@ -1164,6 +1270,12 @@ export function GuideIdeasPanel({ agent, onChange, readOnly }: PanelProps) {
           path="ideas.inPlaceholder"
           checked={ideas.inPlaceholder}
           onChange={(inPlaceholder) => set({ inPlaceholder })}
+          readOnly={readOnly}
+        />
+        <ToggleSetting
+          path="ideas.questionExamples"
+          checked={ideas.questionExamples}
+          onChange={(questionExamples) => set({ questionExamples })}
           readOnly={readOnly}
         />
       </div>

@@ -35,6 +35,7 @@ import {
   openAskedFacts,
   pagesStarted,
   readyToDraft,
+  storyBegun,
   storyBriefWell,
   type BookViewId,
   type PrintIssue,
@@ -73,7 +74,14 @@ import { GUIDE_SLOTS, type GuideSlotId } from "../core/guide/slots";
 import { acceptGuideQuestion, assumesAnotherChild, arbitrateGuideLines, needsGuideSpeech, type GuideLineCandidate } from "../core/guide/speech";
 import { asksForEarlierPicture, pictureSubject } from "../core/guide/history";
 import { asksForNewPicture, isBareRestart, type RedrawMode } from "../core/guide/redrawMode";
-import { chipForView, resolveGuideTarget, targetHomeView, type GuideTarget, type TargetPerson } from "../core/guide/target";
+import {
+  chipForView,
+  describeSelectedPerson,
+  resolveGuideTarget,
+  targetHomeView,
+  type GuideTarget,
+  type TargetPerson,
+} from "../core/guide/target";
 import { currentPortrait } from "../core/guide/portrait";
 import { statedAgeCalls } from "../core/guide/statedAges";
 import { CAST_KIND_SPECS, castKindOf, missingDetails } from "../core/story/castKinds";
@@ -87,7 +95,14 @@ import {
   createDefaultStoryBrief,
 } from "../core/story/brief";
 import type { GuideEntry, Project } from "../core/types";
-import { guideAskNextRemote, guideSpeakRemote, reportGuideTurnOutcomeRemote, storyDraftRemote } from "../platform/aiClient";
+import {
+  guideAskNextRemote,
+  guideSpeakRemote,
+  reportGuideEventRemote,
+  reportGuideTurnOutcomeRemote,
+  storyDraftRemote,
+} from "../platform/aiClient";
+import type { GuideEventDetail, GuideEventKind } from "../core/guide/events";
 import { peopleNeedingStatedAge } from "../core/guide/agent/requirements";
 import { updateCastMember } from "../ui/guide/bookActions";
 import { unitTarget } from "../ui/guide/book/units";
@@ -383,6 +398,23 @@ function live(): Project | null {
   return useProjectsStore.getState().current();
 }
 
+/**
+ * Whether a turn that was meant to state or change a fact left the book untouched.
+ *
+ * The old guide composed "I didn't quite catch that" itself and could test for
+ * it; this studio's reply comes from the model, so there is no sentence to match.
+ * What is observable, and what the sentence stood for, is the result: a message
+ * the interpreter read as an answer or a revision, that wrote nothing and
+ * restated nothing. Questions, chat and skips are not failures to land a fact.
+ */
+function landedNothing(
+  intent: string,
+  applied: readonly string[],
+  unchanged: readonly string[],
+): boolean {
+  return (intent === "answer" || intent === "revise") && applied.length === 0 && unchanged.length === 0;
+}
+
 function patchBook(mutator: (project: Project) => Project): Promise<void> {
   return useProjectsStore.getState().patchCurrent(mutator);
 }
@@ -639,6 +671,20 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     else run();
   };
 
+  /**
+   * Log something the reader did that is not a typed message.
+   *
+   * The turn log only ever sees sentences, so a book answered by tapping looked
+   * like it never happened. Never given free text or a name: a tap's label can be
+   * a child's name or a pasted note, so callers pass ids, counts and kinds only.
+   * Fire-and-forget — the reader's action does not wait on its own bookkeeping.
+   */
+  const track = (kind: GuideEventKind, detail?: GuideEventDetail): void => {
+    const projectId = get().projectId;
+    if (!projectId) return;
+    reportGuideEventRemote({ projectId, kind, ...(detail ? { detail } : {}) });
+  };
+
   const localize = (messageId: string, meaning: string, names: string[]): void => {
     const project = live();
     if (!project) return;
@@ -828,6 +874,10 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
 
     tap: (label, run, options = {}) =>
       withFloor(async () => {
+        // The label is deliberately not recorded: it can be a child's name or a
+        // note the reader pasted. What is safe, and still countable, is that a tap
+        // happened and what kind it was.
+        track("tap", { undoable: Boolean(options.undoable), marked: Boolean(options.mark) });
         const before = options.undoable ? live() : null;
         const restore = before ? snapshot(before) : null;
         const message = guideMessage("reader", label, {
@@ -873,6 +923,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       withFloor(async () => {
         const well = get().agentWell;
         if (well?.kind !== "agentConfirm" || get().sending) return;
+        track("agentConfirm");
         set({ agentWell: null, sending: true, error: null });
         try {
           const turn = await confirmAgentCalls(well.confirm, choice, speakLater);
@@ -882,6 +933,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           }
           await finishAgentTurn(turn, undefined);
         } catch (err) {
+          track("error", { where: "agentConfirm" });
           set({ error: describeError(err) });
         } finally {
           set({ sending: false });
@@ -893,6 +945,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         set({ agentWell: null });
         return;
       }
+      track("agentCancel");
       set({ agentWell: null });
       void withFloor(() => speak([{ key: "confirmCancelled", priority: "result" }]));
     },
@@ -901,11 +954,14 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       withFloor(async () => {
         const well = get().agentWell;
         if (well?.kind !== "agentAsk" || get().sending) return;
+        // The option's id (a catalog value), never its label.
+        track("askAnswer", { skill: well.call.id, arg: well.arg, option: String(option.id).slice(0, 60) });
         append(guideMessage("reader", option.label, { keys: ["tap"] }));
         set({ agentWell: null, sending: true, error: null });
         try {
           await runAgentCalls([{ ...well.call, args: { ...well.call.args, [well.arg]: option.id }, source: "tap" }], [], undefined);
         } catch (err) {
+          track("error", { where: "askAnswer" });
           set({ error: describeError(err) });
         } finally {
           set({ sending: false });
@@ -915,6 +971,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     runSkill: (call, options = {}) =>
       withFloor(async () => {
         if (get().sending) return;
+        track("skill", { skill: call.id });
         set({ agentWell: null, sending: true, error: null });
         try {
           await runAgentCalls(
@@ -925,6 +982,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
             options.mark ?? null,
           );
         } catch (err) {
+          track("error", { where: "skill", skill: call.id });
           set({ error: describeError(err) });
         } finally {
           set({ sending: false });
@@ -1043,13 +1101,12 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         if (state.storyRun?.status === "running") void draftStory();
 
         if (!journeyEntry(project) && !get().said("opening")) {
-          get().say([{ key: "opening", priority: "question" }], { marks: ["broadQuestion"] });
+          get().say([{ key: "opening", priority: "question" }]);
           if (!state.sparksNoticeAt) {
             append(guideMessage("guide", guideCopy(wording(), "sparksNotice"), { keys: ["sparksNotice"] }));
             await patchBook((b) => withAuthoring(b, { sparksNoticeAt: Date.now() }));
           }
           const openingSession = get().session;
-          await patchBook((b) => withFactMarks(b, "askedFacts", broadFacts(policies())));
           // The opening is navigation, not a draft. Save it before another mount
           // can load the old empty transcript and say it again.
           if (saveTimer) clearTimeout(saveTimer);
@@ -1084,7 +1141,8 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
 
     chooseEntry: (entry) => withFloor(async () => {
       const project = live();
-      if (!project || authoringOf(project).lockedAt) return;
+      if (!project || authoringOf(project).lockedAt || storyBegun(project)) return;
+      track("entry", { entry });
       const previous = journeyEntry(project);
       await patchBook((b) => {
         const brief = b.config.storyBrief ?? createDefaultStoryBrief(entry === "own" ? "own" : "guided");
@@ -1138,11 +1196,13 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         const typed = typedConfirmation(message);
         const reversible = openWell.confirm.impact.level !== "irreversible" && !openWell.confirm.choices;
         if (typed === "no") {
+          track("typed", { route: "confirmNo" });
           set({ sending: false });
           await speak([{ key: "confirmCancelled", priority: "result" }]);
           return;
         }
         if (typed === "yes" && reversible && agentConfig().turn.typedYes) {
+          track("typed", { route: "confirmYes" });
           set({ agentWell: openWell, sending: false });
           await get().confirmAgent(null);
           return;
@@ -1154,6 +1214,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         TYPED_START.test(message) &&
         storyBriefWell(project, policies(), { clarificationOpen: Boolean(get().pendingTarget), brief: briefConfig() })
       ) {
+        track("typed", { route: "startStory" });
         set({ sending: false });
         await get().startStory();
         return;
@@ -1161,15 +1222,18 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       if (!locked && !project.config.storyText.trim()) {
         const kind = classifyOpeningText(message);
         if (kind === "manuscript") {
+          track("typed", { route: "manuscript", chars: message.length });
           await get().keepManuscript(message);
           return;
         }
         if (kind === "ambiguous") {
+          track("typed", { route: "manuscriptAsk", chars: message.length });
           set({ sending: false, pendingManuscript: message });
           get().say([{ key: "manuscriptAsk", priority: "question" }]);
           return;
         }
         if (kind === "ownIntent" && !journeyEntry(project)) {
+          track("typed", { route: "ownIntent" });
           await patchBook((book) => {
             const brief = book.config.storyBrief ?? createDefaultStoryBrief("own");
             return withAuthoring(
@@ -1211,11 +1275,19 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         !/^\s*(undo|redo)\b/i.test(message) &&
         pagesNamedIn(message, project).ids.every((id) => id === spot.unitId)
       ) {
+        track("typed", { route: "pictureSpot" });
         await routePictureChange(message, project, cast);
         set({ sending: false });
         return;
       }
-      if (chip && !locked) {
+      // A selected person is the aim, not the request: "make him 2 years old" is
+      // a change of age, "make the boots red" a change of look, and only the
+      // interpreter, which reads every language, can tell them apart. So a
+      // person's sentence is read first (`interpretMessage`, told who is
+      // selected), and goes straight to a redraw only when skills are off.
+      const readsFirst = chip?.kind === "person" && agentConfig().enabled;
+      if (chip && !locked && !readsFirst) {
+        track("typed", { route: "pictureChip" });
         await routePictureChange(message, project, cast);
         set({ sending: false });
         return;
@@ -1223,10 +1295,12 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
 
       // A clear edit starts while the interpreter is still reading the message.
       // If that reading says it was not an edit, the queued revision is dropped.
+      // Not while a person is selected: the sentence is about them.
       const selection = mark ? selectionForMark(mark, project.config.storyText) : null;
       const eager =
         !locked &&
         !openWell &&
+        !readsFirst &&
         project.config.storyText.trim().length >= 20 &&
         (!mark || selection) &&
         isEagerStoryEdit(message, Boolean(mark));
@@ -1234,6 +1308,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       try {
         await interpretMessage(message, history, project, { cast, mark });
       } catch (err) {
+        track("error", { where: "turn" });
         set((state) => ({
           sending: false,
           error: describeError(err),
@@ -1262,17 +1337,20 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         return;
       }
       failedMarks.delete(last.id);
+      track("retry");
       set((state) => ({ session: { ...state.session, messages: state.session.messages.slice(0, -1) }, error: null }));
       await get().send(last.text, { mark: mark ?? null });
     },
 
     undo: async (messageId, options) => {
       if (get().sending) return;
+      track("undo", { mode: options?.mode ?? "default" });
       await undoMessage(messageId, options);
     },
 
     redo: async (messageId) => {
       if (get().sending) return;
+      track("redo");
       const project = live();
       const target = get().session.messages.find((m) => m.id === messageId);
       if (!project || !target?.changeId) return;
@@ -1306,6 +1384,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     }),
 
     skipFact: (fact) => withFloor(async () => {
+      track("skip", { fact });
       await patchBook((b) => withFactMarks(b, "skippedFacts", [fact]));
       await afterTurn(null);
     }),
@@ -1319,6 +1398,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     },
 
     startStory: () => withFloor(async () => {
+      track("storyStart");
       await get().markStoryStart();
       set({ agentPending: null });
       await afterTurn(null);
@@ -1342,6 +1422,9 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       const before = live();
       if (!before) return;
       const kept = suggestedAudience(before, audienceConfig()).id === ageRangeId;
+      // Whether the reader took the suggestion is the useful part: it says how
+      // often the guide's own proposal is right.
+      track("audience", { band: ageRangeId.slice(0, 60), keptSuggestion: kept });
       const profile = resolveAudienceProfile(ageRangeId, audienceConfig());
       await patchBook((b) => withFactMarks(withChosenAudience(b, profile), "answeredFacts", audienceAnswerMarks(before)));
       set({ agentPending: null });
@@ -1528,7 +1611,11 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         const quote = await quoteFor(project, purpose, units);
         keepQuote(project.id, key, quote);
         set((state) => ({ quotes: { ...state.quotes, [key]: { key, status: "ready", quote } } }));
+        // A price put in front of the reader. Paired with `paidConfirm` below, the
+        // difference is every price that was looked at and not paid.
+        track("quoteShown", { purpose, maxSparks: quote.maximumSparks, units: units.length });
       } catch (err) {
+        track("error", { where: "quote", purpose });
         set((state) => ({ quotes: { ...state.quotes, [key]: { key, status: "error", error: describeError(err) } } }));
       }
     },
@@ -1552,6 +1639,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           quote = fresh;
         }
         const started = await start(quote);
+        if (started !== false) track("paidConfirm", { purpose: quote.purpose, maxSparks: quote.maximumSparks });
         if (started === false) {
           set({ error: "This book changed since the price was shown. Check it and try again." });
           keepQuote(quote.projectId, key, null);
@@ -1569,6 +1657,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           return { quotes, redraw: key.startsWith("redraw:") ? null : state.redraw };
         });
       } catch (err) {
+        track("error", { where: "confirm" });
         set({ error: describeError(err) });
       } finally {
         set({ starting: null });
@@ -1579,9 +1668,9 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       const project = live();
       if (!project) return;
       const state = authoringOf(project);
-      // Before the story, the story is written in the chat language unless the
-      // reader asked for another one.
-      const followBook = !project.config.storyText.trim() && !state.languageSaid && !state.lockedAt;
+      // Before the story starts, the story is written in the chat language unless
+      // the reader asked for another one.
+      const followBook = !storyBegun(project) && !state.languageSaid && !state.lockedAt;
       await patchBook((b) =>
         withAuthoring(
           followBook && getBookLanguage(locale).id === locale
@@ -1619,7 +1708,14 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     const firstTurn = !journeyEntry(project);
     let inferredEntry: GuideEntry | null = null;
     const pendingBefore = get().agentPending;
-    const outcome = await sendGuideTurn(message, history, undefined, pendingBefore?.expects, options.mark?.text);
+    const outcome = await sendGuideTurn(
+      message,
+      history,
+      undefined,
+      pendingBefore?.expects,
+      options.mark?.text,
+      describeSelectedPerson(get().chip),
+    );
     set({ agentPending: null });
     const agent = agentConfig();
     if (agent.enabled) {
@@ -1733,7 +1829,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         applied,
         unchanged: outcome.unchanged,
         rejected: outcome.rejected.map((r) => ({ key: r.key, reason: r.reason })),
-        admittedFailure: false,
+        admittedFailure: landedNothing(outcome.intent, applied, outcome.unchanged),
       });
     };
 
@@ -1777,6 +1873,22 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     // A selected picture is the target of a change no skill took ("make the sky
     // darker"); chatter ("thanks") never redraws it.
     const selected = get().chip;
+    // A change to a selected person that no skill took is never drawn from the
+    // raw sentence: it could be an age, a role or a question the picture can't
+    // answer, and a paid redraw (with the sentence kept on the person for good)
+    // is the wrong way to find out. Ask instead; nothing is spent or written.
+    if (
+      agent.enabled &&
+      selected?.kind === "person" &&
+      outcome.intent === "revise" &&
+      outcome.applied.length === 0 &&
+      outcome.unchanged.length === 0
+    ) {
+      await speak([{ key: "askWhatChange", priority: "question" }]);
+      set({ sending: false });
+      report(outcome.applied);
+      return;
+    }
     if (
       outcome.applied.length === 0 &&
       (selected
@@ -1788,6 +1900,9 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     ) {
       await routePictureChange(message, after, drawn);
       set({ sending: false });
+      // Closed like every other branch: a picture change is the turn most likely
+      // to be read as "it didn't do anything", so it is the one to record.
+      report(["pictureChange"]);
       return;
     }
 
@@ -1848,7 +1963,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         applied: outcome.applied,
         unchanged: outcome.unchanged,
         rejected: outcome.rejected.map((r) => ({ key: r.key, reason: r.reason })),
-        admittedFailure: false,
+        admittedFailure: landedNothing(outcome.intent, outcome.applied, outcome.unchanged),
       });
     }
   }

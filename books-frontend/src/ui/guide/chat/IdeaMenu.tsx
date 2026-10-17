@@ -11,7 +11,8 @@
  */
 import { useMemo } from "react";
 import { Lightbulb } from "lucide-react";
-import { ideaMenuFor, type GuideIdea } from "../../../core/guide/agent/ideas";
+import { ideaMenuFor, questionIdeasFor, type GuideIdea } from "../../../core/guide/agent/ideas";
+import type { GuideQuestionId } from "../../../core/guide/questions";
 import type { BookViewId } from "../../../core/guide/journey";
 import type { Project } from "../../../core/types";
 import { useAppConfigStore } from "../../../state/appConfigStore";
@@ -32,22 +33,32 @@ const GROUP_KEYS = {
 export function IdeaMenu({
   project,
   view,
+  question = null,
+  questionName,
   onPick,
   onRun,
 }: {
   project: Project;
   view: BookViewId | null;
+  /** The question the guide has open: what an answer looks like leads the menu. */
+  question?: GuideQuestionId | null;
+  /** The person a question is about, when it asks about one person. */
+  questionName?: string;
   onPick: (text: string) => void;
   onRun: (idea: GuideIdea, text: string) => void;
 }) {
   const t = useGuideT("ideas");
   const config = useAppConfigStore((s) => s.guide.agent);
   const guest = useAuthStore((s) => s.accessLevel === "guest");
+  const tExamples = useGuideT("examples");
+  const used = useIdeaUse((s) => s.used);
   const groups = useMemo(
     () => ideaMenuFor(project, config, { guest, view }),
     [project, config, guest, view],
   );
-  if (groups.length === 0) return null;
+  const answers = useMemo(() => questionIdeasFor(question, config, used), [question, config, used]);
+  if (groups.length === 0 && !answers) return null;
+  const exampleVars = { name: questionName || "Maya" };
   return (
     <Popover
       side="top"
@@ -70,6 +81,36 @@ export function IdeaMenu({
           <p className="px-4 pt-1 pb-2 text-xs font-semibold tracking-wide text-ink-500 uppercase">
             {t("menuTitle")}
           </p>
+          {answers && (
+            <section aria-label={t("groupQuestion")} className="pb-1">
+              <h3 className="px-4 pt-2 pb-1 text-[11px] font-semibold text-ink-400">{t("groupQuestion")}</h3>
+              {answers.tip && (
+                <p className="mx-3 mb-1 rounded-xl bg-magic-50 px-3 py-2 text-xs leading-5 text-magic-800">
+                  {tExamples(`${answers.question}.tip`, exampleVars)}
+                </p>
+              )}
+              <ul>
+                {answers.examples.map((example) => {
+                  const text = tExamples(example.key, exampleVars);
+                  return (
+                    <li key={example.id}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          useIdeaUse.getState().use(example.id);
+                          close();
+                          onPick(text);
+                        }}
+                        className="w-full px-4 py-1.5 text-left text-sm text-ink-700 transition hover:bg-ink-50 hover:text-ink-900 focus-visible:bg-ink-50 focus-visible:outline-none"
+                      >
+                        {text}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
           {groups.map(({ group, ideas, elsewhere }, index) => (
             <section key={`${elsewhere}:${group}`} aria-label={t(GROUP_KEYS[group])} className="pb-1">
               {elsewhere && !groups[index - 1]?.elsewhere && (

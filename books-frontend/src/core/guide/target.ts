@@ -45,6 +45,17 @@ export interface TargetPerson {
   name: string;
 }
 
+/**
+ * Who the reader has selected, in a sentence the interpreter can use. It says
+ * whom "him", "her" or "this" mean in any language, and nothing else: it never
+ * decides what the message asks. Empty when no person is selected.
+ */
+export function describeSelectedPerson(chip: GuideTarget | null): string | undefined {
+  if (chip?.kind !== "person") return undefined;
+  const name = chip.name.trim().slice(0, 60);
+  return name ? `${name}'s portrait` : undefined;
+}
+
 export type TargetResolution =
   | { kind: "target"; target: GuideTarget }
   /** The sentence names several people: the change is for all of them, not a question of which. */
