@@ -15,6 +15,7 @@
  * injects for upstream calls.
  */
 import { appCheckToken, getFirebaseAuth } from "../lib/firebase";
+import { clientLog, getClientSessionId, recordBreadcrumb } from "./clientLogger";
 
 const PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "childbook-60f89";
 const EMULATOR_DEFAULT = `http://127.0.0.1:5001/${PROJECT_ID}/us-central1/api`;
@@ -280,6 +281,9 @@ export async function withAuthHeaders(headers?: HeadersInit): Promise<Headers> {
   const [token, attestation] = await Promise.all([currentIdToken(), appCheckToken()]);
   if (token) merged.set(AUTH_TOKEN_HEADER, token);
   if (attestation) merged.set(APP_CHECK_HEADER, attestation);
+  if (typeof window !== "undefined") {
+    merged.set("X-Client-Session", getClientSessionId());
+  }
   return merged;
 }
 
@@ -308,10 +312,33 @@ interface Attempt {
  */
 export async function backendFetch(path: string, init?: BackendFetchInit): Promise<Response> {
   const { background = false, ...rest } = init ?? {};
+  const method = (rest.method ?? "GET").toUpperCase();
+  const isLogEndpoint = path.startsWith("/logs");
   const send = async (): Promise<Attempt> => {
     const headers = await withAuthHeaders(rest.headers);
-    const res = await fetch(backendUrl(path), { ...rest, headers });
-    return { res, token: headers.get(AUTH_TOKEN_HEADER) };
+    try {
+      const res = await fetch(backendUrl(path), { ...rest, headers });
+      if (!isLogEndpoint && res.status >= 400) {
+        recordBreadcrumb("api", `${method} ${path} → ${res.status}`);
+      }
+      return { res, token: headers.get(AUTH_TOKEN_HEADER) };
+    } catch (err) {
+      if (
+        !isLogEndpoint &&
+        !background &&
+        !(err instanceof DOMException && err.name === "AbortError")
+      ) {
+        recordBreadcrumb("api", `${method} ${path} network_error`);
+        clientLog.warn({
+          domain: "system",
+          event: "api.network_failed",
+          message: `Network request failed: ${method} ${path}`,
+          error: err,
+          context: { method, path },
+        });
+      }
+      throw err;
+    }
   };
 
   const first = await send();

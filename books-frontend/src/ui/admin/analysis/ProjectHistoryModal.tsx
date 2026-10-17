@@ -1,13 +1,17 @@
 "use client";
 
 import { useMemo } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Terminal } from "lucide-react";
 import { Modal } from "../../components/Modal";
+import { Button } from "../../components/Button";
 import {
   useAdminProjects,
   type ActionRunRow,
   type ProjectPnl,
 } from "../../../state/adminProjectsStore";
+import { useAdminAccess } from "../../../state/adminAccessStore";
+import { useAdminLogs } from "../../../state/adminLogsStore";
+import { useAdminTab } from "../adminTabStore";
 import { IMAGE_ACTIONS, TEXT_ACTIONS } from "../../../core/ai/actions";
 import { MILESTONES } from "./milestones";
 import { describeFlowArm, flowArm, type FlowArm } from "../../../core/guide/flow";
@@ -53,6 +57,9 @@ export function ProjectHistoryModal() {
   const detailKey = useAdminProjects((s) => s.detailKey);
   const loading = useAdminProjects((s) => s.detailLoading);
   const close = useAdminProjects((s) => s.closeDetail);
+  const canReadLogs = useAdminAccess((s) => s.canRead("analysis.logs"));
+  const focusLogs = useAdminLogs((s) => s.focusEntity);
+  const openAnalysis = useAdminTab((s) => s.openAnalysis);
 
   const p = detail?.project;
   // The book's whole life, so these are lifetime figures (unlike the books table).
@@ -82,7 +89,7 @@ export function ProjectHistoryModal() {
             <Tile label="Net" value={fmtUsd(pnl.netUsd)} tone={pnl.netUsd >= 0 ? "revenue" : "cost"} />
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-ink-500">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-ink-500">
             <span className="rounded-full bg-ink-50 px-2 py-0.5 font-medium text-ink-700 ring-1 ring-inset ring-ink-100">
               {describeFlowArm(flowArm(p.authoring))}
             </span>
@@ -93,6 +100,21 @@ export function ProjectHistoryModal() {
                   ? "No studio recorded for this book."
                   : "The studio this book was made in."}
             </span>
+            {canReadLogs && (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="ml-auto"
+                leftIcon={<Terminal className="size-3.5" />}
+                onClick={() => {
+                  focusLogs({ uid: p.uid, projectId: p.projectId });
+                  close();
+                  openAnalysis("logs");
+                }}
+              >
+                Inspect book logs &amp; AI Analyzer
+              </Button>
+            )}
           </div>
 
           <Timeline milestones={p.milestones} arm={flowArm(p.authoring)} />

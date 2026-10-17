@@ -1489,6 +1489,36 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
     ],
   },
+
+  // functions/src/logs.ts → analyzeLogs (Admin Logs & Diagnostics)
+  logAnalysis: {
+    system: [
+      blk(
+        "role",
+        "You are a principal full-stack engineer and incident responder for Childbooks, an AI-illustrated children's picture-book platform (Next.js App Router frontend in `books-frontend/src/**` and Firebase Functions v2 backend in `functions/src/**`). You analyze structured diagnostic logs from both the browser (`frontend`) and the server (`backend`, `worker`, `webhook`, `cron`) to explain exactly what happened, why it failed, and how to fix or resolve it.",
+      ),
+      blk(
+        "architecture",
+        "ARCHITECTURE & MODULE MAP:\n- `books-frontend/src/ui/studio/**` & `books-frontend/src/state/**`: Book Studio, Cast workspace, page editor, and generation client state.\n- `books-frontend/src/ui/guide/**` & `books-frontend/src/core/guide/**`: Guided Chat studio, turn interpretation, and slot patches.\n- `books-frontend/src/core/pipeline/**`: Story drafting, screenplay pagination, anchor extraction, illustration rendering, cover lettering, and subject localization.\n- `books-frontend/src/platform/backend.ts`: Authenticated `backendFetch` client and session recovery ladder.\n- `functions/src/jobs.ts`: Background illustration and story generation task worker (`users/{uid}/jobs/{jobId}`).\n- `functions/src/renderJobs.ts`: Headless Chrome PDF/raster book rendering (`renderJobs`).\n- `functions/src/stripe.ts` & `functions/src/orders.ts` & `functions/src/printOrders.ts`: Stripe checkout, webhooks, and Lulu print fulfillment.\n- `functions/src/actionRun.ts` & `functions/src/sparks.ts`: AI usage metering and Spark ledger settlement.",
+      ),
+      blk(
+        "rules",
+        "RULES:\n1. Base your diagnosis strictly on the provided log entries, error codes, stack traces, and context breadcrumbs. Never invent events that are not in the logs.\n2. Correlate events across `frontend`, `backend`, `worker`, and `webhook` using shared `uid`, `projectId`, `sessionId`, `requestId`, `jobId`, or `orderId` anchors.\n3. Distinguish between user-visible failures (e.g., a broken generation, failed checkout, or UI crash) and transient/recovered warnings (e.g., a retried provider 429 or repaired cover lettering).\n4. Point to concrete file paths in `suspectedFiles` when stack traces, event keys, or domain context identify the responsible module.\n5. Provide actionable, specific steps in `recommendedActions` (both immediate operational remediation for the user/order and code-level fixes if a bug is evident).",
+      ),
+    ],
+    user: [
+      blk("scope", "FILTER SCOPE:\n{{filterSummary}}"),
+      blk(
+        "question",
+        "\nADMIN QUESTION / FOCUS:\n{{question}}",
+        "hasQuestion",
+      ),
+      blk(
+        "logs",
+        "\nCHRONOLOGICAL DIAGNOSTIC LOGS ({{entryCount}} entries, oldest to newest):\n{{logsPayload}}",
+      ),
+    ],
+  },
 };
 
 /** Shared, reusable sub-prompts referenced via `{{> id}}`. (None ship by default;
@@ -2545,6 +2575,40 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           ),
         ],
         sampleFlags: { hasDiff: true, isTruncated: false },
+      },
+    ],
+  },
+  {
+    actionId: "logAnalysis",
+    label: "Log & incident analysis (Admin)",
+    description:
+      "Analyzes a filtered slice of diagnostic logs in the Admin Logs & Diagnostics tab to identify root causes, user impact, suspected files, and concrete next steps.",
+    kind: "text",
+    templates: [
+      {
+        key: "logAnalysis",
+        label: "Diagnostic log analyzer",
+        description:
+          "System and user prompt for diagnosing a filtered set of frontend/backend logs or reconstructing a user's session.",
+        variables: [
+          V(
+            "filterSummary",
+            "Human-readable summary of the active log filters (time window, user, project, severities).",
+            "Window: last 24h · User: u_123 · Severities: warn, error, fatal",
+          ),
+          V(
+            "question",
+            "Optional question or focus area typed by the admin.",
+            "Why did this user's cover illustration fail twice before succeeding?",
+          ),
+          V("entryCount", "Number of log entries included in the payload.", "14"),
+          V(
+            "logsPayload",
+            "Formatted chronological log entries with timestamps, severities, sources, errors, and context.",
+            "[2026-10-16T18:10:02.100Z] [WARN] [worker/ai] ai.cover.lettering_retry ...",
+          ),
+        ],
+        sampleFlags: { hasQuestion: true },
       },
     ],
   },

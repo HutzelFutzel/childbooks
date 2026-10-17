@@ -171,6 +171,7 @@ export const DEFAULT_TEXT_PARAMS: Partial<Record<TextActionId, TextCallParams>> 
   anchorDescription: { reasoning: "medium" },
   guideExtractCast: { reasoning: "medium" },
   releaseNotes: { reasoning: "medium" },
+  logAnalysis: { reasoning: "medium" },
   guideInterpret: { reasoning: "low" },
   editIntent: { reasoning: "low" },
   localize: { reasoning: "low" },
@@ -322,6 +323,8 @@ export function createDefaultModelConfig(): ModelConfig {
       // Release notes read a whole diff in one call and are written for humans
       // to read verbatim, so they default to the quality slot rather than fast.
       releaseNotes: { provider: "google", speed: "slow" },
+      // Admin diagnostic log analysis benefits from deeper reasoning over stack traces and timelines.
+      logAnalysis: { provider: "google", speed: "slow" },
     },
     imageBindings: {
       anchorImage: defaultImageTiers(),

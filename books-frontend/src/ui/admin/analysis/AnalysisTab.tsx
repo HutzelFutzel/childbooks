@@ -58,6 +58,7 @@ const CampaignsAnalysis = dynamic(() => import("./CampaignsAnalysis").then((m) =
 const CouponsAnalysis = dynamic(() => import("./CouponsAnalysis").then((m) => m.CouponsAnalysis), { loading: SubTabLoader });
 const QrCodesAnalysis = dynamic(() => import("./QrCodesAnalysis").then((m) => m.QrCodesAnalysis), { loading: SubTabLoader });
 const SurveysAnalysis = dynamic(() => import("./SurveysAnalysis").then((m) => m.SurveysAnalysis), { loading: SubTabLoader });
+const LogsAnalysis = dynamic(() => import("./LogsAnalysis").then((m) => m.LogsAnalysis), { loading: SubTabLoader });
 
 type Section = AnalysisTabId;
 
@@ -169,7 +170,7 @@ export function AnalysisTab() {
 
   return (
     <div className="space-y-5">
-      {section !== "qrCodes" && (
+      {section !== "qrCodes" && section !== "logs" && (
         <div className="flex justify-end">
           <MarketPicker
             value={country}
@@ -180,7 +181,7 @@ export function AnalysisTab() {
         </div>
       )}
 
-      {country && section !== "qrCodes" && (
+      {country && section !== "qrCodes" && section !== "logs" && (
         <div className="flex items-center gap-2 rounded-xl bg-brand-50 px-3.5 py-2 text-sm text-brand-800 ring-1 ring-brand-100">
           <span>
             Showing <strong>{countryFlag(country)} {countryLabel(country)}</strong> only — every
@@ -210,6 +211,7 @@ export function AnalysisTab() {
       {section === "qrCodes" && <QrCodesAnalysis />}
       {section === "surveys" && <SurveysAnalysis />}
       {section === "devices" && <DevicesAnalysis />}
+      {section === "logs" && <LogsAnalysis />}
       {section === "flows" && (
         <div className="space-y-8">
           <FlowsAnalysis />

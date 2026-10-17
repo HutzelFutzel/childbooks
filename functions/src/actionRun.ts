@@ -34,6 +34,7 @@ import {
 import { estimateForUser, settleActionCost } from "./sparks";
 import { ensureProjectMirror, recordProjectRun } from "./projects";
 import { recordTaskLatency } from "./latency";
+import { log } from "./logs";
 import {
   completeGenerationEstimateProfile,
   generationRenderKindOf,
@@ -320,6 +321,55 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
     };
     await db().collection("actionRuns").doc(runId).set(run);
 
+    // Emit a diagnostic log entry when an AI run fails or required provider
+    // retries / quality-check repairs, so an admin investigating a user's book
+    // sees the exact model, step, cost, and error code in the Logs timeline.
+    if (outcome === "failed") {
+      void log.error({
+        source: args.source === "worker" ? "worker" : "backend",
+        domain: "ai",
+        event: `ai.${args.action}.failed`,
+        message: `AI action "${args.action}" (${args.kind}) failed${args.errorCode ? ` [${args.errorCode}]` : ""} after ${durationMs}ms.`,
+        uid: args.uid,
+        projectId: args.projectId ?? null,
+        jobId: args.jobId ?? null,
+        context: {
+          runId,
+          action: args.action,
+          kind: args.kind,
+          tier: args.tier ?? null,
+          targetId: args.targetId ?? null,
+          errorCode: args.errorCode ?? null,
+          models: run.models,
+          calls: run.calls,
+          costUsd: run.costUsd,
+          durationMs,
+        },
+      });
+    } else if ((args.stats?.failures ?? 0) > 0 || unbilled.length > 0) {
+      void log.warn({
+        source: args.source === "worker" ? "worker" : "backend",
+        domain: "ai",
+        event: `ai.${args.action}.repaired`,
+        message: `AI action "${args.action}" succeeded with ${args.stats?.failures ?? 0} provider failure(s) and ${unbilled.length} quality-repair call(s) (${durationMs}ms).`,
+        uid: args.uid,
+        projectId: args.projectId ?? null,
+        jobId: args.jobId ?? null,
+        context: {
+          runId,
+          action: args.action,
+          kind: args.kind,
+          targetId: args.targetId ?? null,
+          models: run.models,
+          calls: run.calls,
+          unbilledCalls: unbilled.length,
+          costUsd: run.costUsd,
+          sparksCharged: settled.sparks,
+          durationMs,
+        },
+      });
+    }
+
     if (args.projectId) {
       await recordProjectRun({
         uid: args.uid,
@@ -378,6 +428,21 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
       action: args.action,
       projectId: args.projectId,
       err,
+    });
+    void log.error({
+      source: args.source === "worker" ? "worker" : "backend",
+      domain: "ai",
+      event: "ai.metering.failed",
+      message: `Metering and Spark settlement failed for action "${args.action}".`,
+      uid: args.uid,
+      projectId: args.projectId ?? null,
+      jobId: args.jobId ?? null,
+      error: err,
+      context: {
+        runId,
+        action: args.action,
+        kind: args.kind,
+      },
     });
     return { runId, sparksCharged: 0, costUsd: 0, unbilledUsd: 0 };
   }

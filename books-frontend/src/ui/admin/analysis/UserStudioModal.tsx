@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Eye, Loader2 } from "lucide-react";
+import { AlertTriangle, Eye, Loader2, Terminal } from "lucide-react";
 import { toast } from "sonner";
 import { backendFetch } from "../../../platform/backend";
 import { describeFlowArm } from "../../../core/guide/flow";
@@ -11,6 +11,8 @@ import type {
   UserStudioReport,
 } from "../../../core/analytics/types";
 import { useAdminAccess } from "../../../state/adminAccessStore";
+import { useAdminLogs } from "../../../state/adminLogsStore";
+import { useAdminTab } from "../adminTabStore";
 import { Button } from "../../components/Button";
 import { Modal } from "../../components/Modal";
 import { MILESTONES } from "./milestones";
@@ -58,6 +60,9 @@ const FILTERS: { id: "all" | StudioTimelineKind | "flagged"; label: string }[] =
  */
 export function UserStudioModal({ uid, onClose }: { uid: string | null; onClose: () => void }) {
   const canReadWords = useAdminAccess((s) => s.canRead("analysis.users.pii"));
+  const canReadLogs = useAdminAccess((s) => s.canRead("analysis.logs"));
+  const focusLogs = useAdminLogs((s) => s.focusEntity);
+  const openAnalysis = useAdminTab((s) => s.openAnalysis);
   const [report, setReport] = useState<UserStudioReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +144,21 @@ export function UserStudioModal({ uid, onClose }: { uid: string | null; onClose:
                 <AlertTriangle className="size-3" />
                 Heavy account: showing the newest records, so counts are a lower bound.
               </span>
+            )}
+            {canReadLogs && (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="ml-auto"
+                leftIcon={<Terminal className="size-3.5" />}
+                onClick={() => {
+                  focusLogs({ uid: report.uid, ...(bookKey ? { projectId: bookKey } : {}) });
+                  onClose();
+                  openAnalysis("logs");
+                }}
+              >
+                Inspect in Logs &amp; AI Analyzer
+              </Button>
             )}
           </div>
 

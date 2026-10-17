@@ -633,6 +633,11 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/finance\/custom-costs(\/|$)/, gate: key("analysis.finance") },
   { test: /^\/admin\/alerts\/[^/]+\/resolve$/, gate: key("analysis.finance", "write") },
   { test: /^\/admin\/alerts$/, gate: key("analysis.finance", "read") },
+  // Diagnostic logs: reading and running the non-mutating AI root-cause analyzer
+  // ride on the `analysis.logs` read grant; marking an incident resolved requires write.
+  { test: /^\/admin\/logs\/analyze$/, gate: key("analysis.logs", "read") },
+  { test: /^\/admin\/logs\/[^/]+\/resolve$/, gate: key("analysis.logs", "write") },
+  { test: /^\/admin\/logs(\/|$)/, gate: key("analysis.logs", "read") },
   { test: /^\/admin\/fulfillment\/retry$/, gate: key("analysis.finance", "write") },
   { test: /^\/admin\/payments\/[^/]+\/refund$/, gate: key("analysis.payments", "write") },
   // The order overview. Reading and the routine actions (retry placement, resend

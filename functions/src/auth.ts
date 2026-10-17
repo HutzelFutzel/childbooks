@@ -15,6 +15,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import type { NextFunction, Request, Response } from "express";
 import { ensureAdmin } from "./storage";
 import { refreshRuntimeEnv } from "./runtimeConfig";
+import { patchLogContext } from "./logs";
 
 /**
  * Why a request has no authenticated user. Lets the client pick the right
@@ -97,6 +98,7 @@ export async function attachUser(
       const decoded = await getAuth().verifyIdToken(token);
       req.uid = decoded.uid;
       req.authToken = decoded;
+      patchLogContext({ uid: decoded.uid });
     } catch (err) {
       // Invalid/expired token → treated as unauthenticated, but remember WHY so
       // the 401 can say so. Expiry is routine (the client refreshes); anything

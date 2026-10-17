@@ -71,7 +71,9 @@ export type AnalysisTabId =
   | "campaigns"
   | "coupons"
   | "qrCodes"
-  | "surveys";
+  | "surveys"
+  // Operational & diagnostic logs.
+  | "logs";
 
 /**
  * Analysis is grouped rather than shown as one long tab strip: an admin
@@ -90,7 +92,7 @@ export const ANALYSIS_GROUPS: {
     id: "people",
     label: "People & books",
     description: "Who's using the product, what they're making, and what they're using to do it.",
-    tabs: ["users", "projects", "devices", "flows"],
+    tabs: ["users", "projects", "devices", "flows", "logs"],
   },
   {
     id: "money",

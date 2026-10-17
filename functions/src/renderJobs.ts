@@ -57,6 +57,7 @@ import {
   type RasterRole,
 } from "./renders";
 import { markFirstBookCompleted } from "./referrals";
+import { log } from "./logs";
 
 /** How long a job's page token stays usable. Renders take a minute, not an hour. */
 const TOKEN_TTL_MS = 30 * 60_000;
@@ -476,6 +477,20 @@ async function renderJob(uid: string, jobId: string): Promise<void> {
       { merge: true },
     );
     logger.info("[render] finished", { jobId, pages: captures.length, ms: Date.now() - started });
+    void log.info({
+      source: "worker",
+      domain: "studio",
+      event: "render.book.completed",
+      message: `Rendered ${captures.length} book page(s) and assembled ${job.documents.length} PDF document(s) in ${Math.round((Date.now() - started) / 1000)}s.`,
+      uid,
+      projectId: job.projectId,
+      jobId,
+      context: {
+        pages: captures.length,
+        documents: job.documents.map((d) => d.kind),
+        durationMs: Date.now() - started,
+      },
+    });
     // A rendered book is the most honest "they actually made something" signal we
     // have, so it's what the referral program's activation trigger keys on. Only
     // the first one counts (see markFirstBookCompleted); never throws.
@@ -483,6 +498,21 @@ async function renderJob(uid: string, jobId: string): Promise<void> {
   } catch (err) {
     const message = (err as Error)?.message ?? "We couldn't render your book.";
     logger.error("[render] failed", { jobId, err: message });
+    void log.error({
+      source: "worker",
+      domain: "studio",
+      event: "render.book.failed",
+      message: `Book PDF render failed: ${message}`,
+      uid,
+      projectId: job.projectId,
+      jobId,
+      error: err,
+      context: {
+        fingerprint: job.fingerprint,
+        documents: job.documents.map((d) => d.kind),
+        durationMs: Date.now() - started,
+      },
+    });
     await ref.set({ status: "error", error: message, updatedAt: Date.now() }, { merge: true });
   } finally {
     await browser?.close().catch(() => undefined);

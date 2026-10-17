@@ -54,6 +54,7 @@ import {
   Sparkles,
   Stamp,
   Tablet,
+  Terminal,
   Ticket,
   TrendingUp,
   Truck,
@@ -263,6 +264,11 @@ export const ANALYSIS_TAB_META: Record<AnalysisTabId, TabMeta> = {
     icon: <ClipboardList className="size-4" />,
     description: "Post-checkout survey responses and buyer segments.",
   },
+  logs: {
+    label: "Logs & diagnostics",
+    icon: <Terminal className="size-4" />,
+    description: "Structured frontend and backend events, user timelines, AI root-cause analysis, and Slack fatal alerts.",
+  },
 };
 
 export const MARKETING_TAB_META: Record<MarketingTabId, TabMeta> = {
@@ -439,7 +445,7 @@ function analysisLeaf(tab: AnalysisTabId, extra?: Partial<NavLeaf>): NavLeaf {
     icon: meta.icon,
     href: adminHref("analysis", tab),
     description: meta.description,
-    mode: tab === "orders" || tab === "payments" ? "ops" : "analytics",
+    mode: tab === "orders" || tab === "payments" || tab === "logs" ? "ops" : "analytics",
     key: `analysis.${tab}`,
     ...extra,
   };
@@ -661,6 +667,7 @@ export const NAV_TREE: NavNode[] = [
         id: "ops-platform",
         label: "Platform & Access",
         children: [
+          analysisLeaf("logs"),
           configLeaf("system"),
           {
             kind: "leaf",
@@ -817,6 +824,8 @@ function buildNavIndex(): NavEntry[] {
           keywords:
             node.id === "configuration:models"
               ? "model costs pricing rates llm openai gemini"
+              : node.id === "analysis:logs"
+                ? "logs diagnostics errors fatal crash debugging traces timeline ai root cause"
               : node.id.startsWith("configuration:catalog:")
                 ? "catalog print ebook packs hardcover softcover pdf"
                 : node.id === "configuration:overview"

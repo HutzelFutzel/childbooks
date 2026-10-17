@@ -13,6 +13,7 @@ import { ensureAffordAction, InsufficientSparks } from "./sparks";
 import { ensureAdmin } from "./storage";
 import { ALL_SECRETS } from "./secrets";
 import { withUsage } from "./usage";
+import { log } from "./logs";
 import {
   reviseStory,
   rewriteStory,
@@ -332,6 +333,21 @@ async function runRevision(uid: string, jobId: string): Promise<void> {
       ...(err instanceof StoryRevisionFormatError && err.details
         ? { details: err.details }
         : {}),
+    });
+    void log.error({
+      source: "worker",
+      domain: "ai",
+      event: "ai.story_revision.failed",
+      message: `Story revision failed: ${message}`,
+      uid,
+      projectId: job.projectId,
+      jobId,
+      error: err,
+      context: {
+        instructionLength: job.instruction.length,
+        hasSelection: Boolean(job.selection),
+        ...(err instanceof StoryRevisionFormatError && err.details ? { details: err.details } : {}),
+      },
     });
     const latest = await ref.get();
     if (latest.data()?.status === "discarded") return;

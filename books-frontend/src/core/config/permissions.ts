@@ -115,6 +115,7 @@ const ANALYSIS_TAB_EXHAUSTIVE: Record<AnalysisTabId, true> = {
   coupons: true,
   qrCodes: true,
   surveys: true,
+  logs: true,
 };
 const COMMUNICATION_TAB_EXHAUSTIVE: Record<CommunicationTabId, true> = {
   contact: true,

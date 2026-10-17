@@ -70,6 +70,11 @@ import { registerAffiliateApplicationRoutes } from "./affiliates/applications";
 import { registerStoryRevisionRoutes } from "./storyRevisionJobs";
 import { registerLikenessRoutes } from "./likeness";
 import { registerBlobRoutes } from "./blobRoutes";
+import {
+  registerAdminLogRoutes,
+  registerClientLogRoute,
+  requestLogMiddleware,
+} from "./logs";
 
 export function createApp(): Express {
   const app = express();
@@ -80,6 +85,8 @@ export function createApp(): Express {
 
   // Identify the caller (if a valid token is present) for every request.
   app.use(attachUser);
+  // Propagate requestId, sessionId, and uid into ambient log context, and capture 5xx responses.
+  app.use(requestLogMiddleware);
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true });
@@ -152,6 +159,11 @@ export function createApp(): Express {
   // nothing (see geo.ts).
   registerGeoRoutes(app);
 
+  // Client diagnostic log ingestion (batched warnings, errors, and UI crashes).
+  // Registered before auth guards so pre-auth / checkout crashes still land;
+  // `attachUser` already ran, so signed-in sessions are stamped with `req.uid`.
+  registerClientLogRoute(app);
+
   // Protected surfaces — registered before their route handlers so the guard
   // runs first. Fulfillment + payments require a verified, non-anonymous
   // account; `/ai` only requires *some* authenticated identity (guests and
@@ -216,6 +228,7 @@ export function createApp(): Express {
   registerRuntimeRoutes(app);
   registerAnalyticsRoutes(app);
   registerGuideAnalysisRoutes(app);
+  registerAdminLogRoutes(app);
   registerStripeUserRoutes(app);
   registerStripeAdminRoutes(app);
   registerReferralUserRoutes(app);

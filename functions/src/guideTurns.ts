@@ -36,6 +36,7 @@
 import { randomUUID } from "node:crypto";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
+import { log } from "./logs";
 import type { GuideTurnResult } from "../../books-frontend/src/core/pipeline/guideInterpret";
 import type { ModelSelection } from "../../books-frontend/src/core/types";
 import { cleanEventDetail, type GuideEventKind } from "../../books-frontend/src/core/guide/events";
@@ -158,6 +159,30 @@ export async function recordGuideTurn(args: RecordGuideTurnArgs): Promise<string
       model: { provider: args.model.provider, id: args.model.id },
       latencyMs: args.latencyMs,
     });
+
+  if (args.result.refused.length > 0 || (args.result.refusedCommands?.length ?? 0) > 0 || args.result.repairs > 0) {
+    void log.warn({
+      source: "backend",
+      domain: "studio",
+      event: "guide.turn.refused_or_repaired",
+      message: `Guide interpreter ${args.result.refused.length > 0 ? `refused ${args.result.refused.length} claim(s)` : ""}${args.result.repairs > 0 ? ` (${args.result.repairs} repair pass)` : ""} at ${args.componentId ?? "chat"} (confidence ${args.result.confidence.toFixed(2)}).`,
+      uid: args.uid,
+      projectId: args.projectId,
+      context: {
+        turnId,
+        componentId: args.componentId,
+        intent: args.result.intent,
+        confidence: args.result.confidence,
+        proposedSlots: args.proposedSlots,
+        refused: args.result.refused.slice(0, 8),
+        refusedCommands: (args.result.refusedCommands ?? []).slice(0, 8),
+        repairs: args.result.repairs,
+        model: `${args.model.provider}:${args.model.id}`,
+        latencyMs: args.latencyMs,
+      },
+    });
+  }
+
   return turnId;
 }
 
@@ -210,6 +235,24 @@ export async function recordGuideTurnOutcome(args: {
       },
       { merge: true },
     );
+
+  if (args.outcome.admittedFailure || args.outcome.rejected.length > 0) {
+    void log[args.outcome.admittedFailure ? "error" : "warn"]({
+      source: "frontend",
+      domain: "studio",
+      event: args.outcome.admittedFailure ? "guide.turn.admitted_failure" : "guide.turn.patch_rejected",
+      message: args.outcome.admittedFailure
+        ? "Guide turn did not land — the reader was told we did not understand."
+        : `Client validator rejected ${args.outcome.rejected.length} proposed slot(s): ${args.outcome.rejected.map((r) => r.key).join(", ")}.`,
+      uid: args.uid,
+      context: {
+        turnId: args.turnId,
+        applied: args.outcome.applied,
+        rejected: args.outcome.rejected.slice(0, 10),
+        admittedFailure: args.outcome.admittedFailure,
+      },
+    });
+  }
 }
 
 // ---- Everything that is not a typed message ----------------------------------
@@ -264,15 +307,32 @@ export async function recordGuideEvent(args: RecordGuideEventArgs): Promise<bool
   if (!underEventLimit(args.uid, now)) return false;
   ensureAdmin();
   const eventId = randomUUID();
+  const cleanedDetail = cleanEventDetail(args.detail);
   await getFirestore()
     .doc(`users/${args.uid}/guideEvents/${eventId}`)
     .set({
       eventId,
       projectId: args.projectId.slice(0, 200),
       kind: args.kind,
-      detail: cleanEventDetail(args.detail),
+      detail: cleanedDetail,
       createdAt: now,
       expiresAt: new Date(now + RETENTION_MS),
     });
+
+  if (args.kind === "error") {
+    void log.error({
+      source: "frontend",
+      domain: "studio",
+      event: "guide.client.error",
+      message: "Reader encountered an error in the Guided Studio.",
+      uid: args.uid,
+      projectId: args.projectId.slice(0, 200),
+      context: {
+        eventId,
+        ...(cleanedDetail && typeof cleanedDetail === "object" ? (cleanedDetail as Record<string, unknown>) : {}),
+      },
+    });
+  }
+
   return true;
 }

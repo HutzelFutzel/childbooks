@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { notifySlack } from "./notify";
+import type { LogDomain, LogSeverity } from "../../books-frontend/src/core/logging/types";
 
 const SEVERITY_EMOJI: Record<AlertSeverity, string> = {
   info: "ℹ️",
@@ -15,6 +16,26 @@ const SEVERITY_EMOJI: Record<AlertSeverity, string> = {
 };
 
 export type AlertSeverity = "info" | "warning" | "critical";
+
+function inferAlertDomain(kind: string): LogDomain {
+  const k = kind.toLowerCase();
+  if (k.startsWith("lulu") || k.startsWith("fulfillment") || k.startsWith("order") || k.startsWith("print") || k.startsWith("market")) {
+    return "print";
+  }
+  if (k.startsWith("checkout") || k.startsWith("stripe") || k.startsWith("payment") || k.startsWith("affiliate")) {
+    return "stripe";
+  }
+  if (k.startsWith("email")) return "email";
+  if (k.startsWith("startergrant") || k.startsWith("auth")) return "auth";
+  if (k.startsWith("ai") || k.startsWith("render")) return "ai";
+  return "system";
+}
+
+function mapAlertSeverity(s: AlertSeverity): LogSeverity {
+  if (s === "critical") return "fatal";
+  if (s === "warning") return "warn";
+  return "info";
+}
 
 export interface AdminAlert {
   id: string;
@@ -38,6 +59,8 @@ export async function raiseAlert(args: {
   message: string;
   meta?: Record<string, unknown>;
   ref?: string;
+  /** Internal: set by `writeLog` when it is the caller so we don't double-write `systemLogs`. */
+  skipSystemLog?: boolean;
 }): Promise<void> {
   try {
     const id = args.ref ? `${args.kind}_${args.ref}` : randomUUID();
@@ -55,6 +78,32 @@ export async function raiseAlert(args: {
     const code = (err as { code?: number }).code;
     if (code === 6) return; // ALREADY_EXISTS — idempotent (already alerted + pinged)
     console.error("[alerts] failed to raise alert", args.kind, err);
+  }
+
+  // Mirror into `systemLogs` so every operational alert (fulfillment rejection,
+  // watchdog heartbeat, checkout failure, etc.) is searchable and AI-analyzable
+  // in the unified Logs & Diagnostics dashboard.
+  if (!args.skipSystemLog) {
+    try {
+      const { writeLog } = await import("./logs");
+      const m = args.meta ?? {};
+      await writeLog({
+        severity: mapAlertSeverity(args.severity),
+        domain: inferAlertDomain(args.kind),
+        event: args.kind,
+        message: args.message,
+        uid: typeof m.uid === "string" ? m.uid : null,
+        projectId: typeof m.projectId === "string" ? m.projectId : null,
+        orderId: typeof m.orderId === "string" ? m.orderId : typeof m.key === "string" ? m.key : null,
+        paymentId: typeof m.paymentId === "string" ? m.paymentId : null,
+        jobId: typeof m.jobId === "string" ? m.jobId : null,
+        context: args.meta ?? null,
+        ref: args.ref ?? null,
+        skipAlert: true,
+      });
+    } catch {
+      // best-effort
+    }
   }
 
   // Slack (#ops) is the "act now" channel, so ONLY critical alerts are mirrored

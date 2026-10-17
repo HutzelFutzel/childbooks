@@ -17,6 +17,7 @@ import { AuthInit } from "../ui/auth/AuthInit";
 import { Toaster } from "../ui/components/Toaster";
 import { NumberInputWheelGuard } from "../ui/forms/NumberInputWheelGuard";
 import { DevEnvironmentBanner } from "../ui/layout/DevEnvironmentBanner";
+import { ClientLogInit } from "../ui/layout/ClientLogInit";
 import { getBrandingConfig } from "../server/branding";
 import { getCookieConfig } from "../server/cookieConfig";
 import { getLegalConfig } from "../server/legal";
@@ -91,6 +92,7 @@ export default async function RootLayout({
     <html lang="en" style={themeVars as React.CSSProperties}>
       <body>
         <DevEnvironmentBanner />
+        <ClientLogInit />
         <AuthInit />
         <ArrivalInit />
         <Toaster />

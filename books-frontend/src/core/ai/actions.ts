@@ -23,7 +23,8 @@ export type TextActionId =
   | "guideExtractCast" // extractManuscriptCast — names and ages from a pasted manuscript, no rewrite
   | "extractArtStyle" // extractArtStyleFromImages — vision call: style-only prompt from character artwork
   | "extractArtLook" // extractArtLookFromImages — vision call: who is in the uploaded character artwork
-  | "releaseNotes"; // summarizeRelease — turn a deploy's code diff into plain-language release notes
+  | "releaseNotes" // summarizeRelease — turn a deploy's code diff into plain-language release notes
+  | "logAnalysis"; // analyzeDiagnosticLogs — root-cause analysis over filtered diagnostic logs
 
 export type ImageActionId =
   | "anchorImage" // renderAnchor — anchor reference sheet
@@ -56,6 +57,7 @@ export const TEXT_ACTIONS: ActionInfo<TextActionId>[] = [
   { id: "extractArtStyle", label: "Art-style extraction (vision)", modality: "text", help: "Reads uploaded character artwork and writes a style-only prompt (no characters, clothes or scenes) for the rest of the book." },
   { id: "extractArtLook", label: "Character-look extraction (vision)", modality: "text", help: "Reads uploaded character artwork and writes who is in the drawing (species, body, clothes actually shown) so later steps do not invent a different character." },
   { id: "releaseNotes", label: "Release notes (CI/CD)", modality: "text", help: "Reads the code diff between the last shipped commit and the new one, and writes what changed in plain language for the sales/marketing team. Runs once per deploy, not per user — pick a model with a large context window." },
+  { id: "logAnalysis", label: "Log & incident analysis (Admin)", modality: "text", help: "Reads a filtered slice of frontend/backend diagnostic logs and user session context to explain root causes, suspected files, user impact, and recommended fixes." },
 ];
 
 export const IMAGE_ACTIONS: ActionInfo<ImageActionId>[] = [
