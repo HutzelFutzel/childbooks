@@ -28,12 +28,15 @@ import {
 } from "../books-frontend/src/core/config/products";
 import {
   allowedMarketsFor,
+  computeAtCostOrder,
   computeMargin,
   computeRetailPrice,
   convertCostAmount,
   defaultShippingMethod,
   destinationPolicyFor,
   estimateShippingCost,
+  feeFor,
+  feePercent,
   hasUsableShippingCost,
   isDestinationAllowed,
   offeredMethodsFor,
@@ -1451,6 +1454,40 @@ for (const target of [25, 45]) {
   check("a step that isn't a multiple of the binding's is rounded up to one", odd.step === 4 && odd.min % 4 === 0 && odd.max % 4 === 0);
   const empty = normalizePageConditions({ min: 10, max: 11, step: 4 }, "saddle-stitch", { min: 4, max: 48, step: 4 });
   check("limits with nothing printable between them are kept as typed, for the admin to see", empty.min === 10 && empty.max === 11 && empty.step === 4);
+}
+
+// ---- Print-at-cost order math covers Lulu + Stripe fee to the cent ----------
+
+{
+  let exactSplit = true;
+  let coversCost = true;
+  for (const cur of settings.currencies) {
+    const fee = feeFor(settings, cur);
+    const fp = feePercent(fee);
+    const rate = Math.max(0, settings.tax.perCurrency[cur]?.assumedRatePct ?? 0) / 100;
+    for (const pages of lengths) {
+      for (const copies of [1, 2, 3, 5, 10]) {
+        const m = computeMargin(
+          product,
+          { currency: cur, pages, copies, destinationCountry: "US", shippingMethod: "StandardPlus" },
+          settings,
+          SHIPPING,
+        );
+        const atCost = computeAtCostOrder(m, settings);
+        const lineSum = Math.round((atCost.unitPrice * copies + atCost.shipping) * 100) / 100;
+        if (Math.abs(lineSum - atCost.total) > 1e-9 || atCost.unitPrice < 0 || atCost.shipping < 0) {
+          exactSplit = false;
+        }
+        const stripeFee = atCost.total * (1 + rate) * fp + fee.fixed;
+        const netAfterStripe = atCost.total - stripeFee;
+        if (netAfterStripe + 1e-6 < atCost.luluCost) {
+          coversCost = false;
+        }
+      }
+    }
+  }
+  check("at-cost line items (copies × unitPrice + shipping) always sum to the exact at-cost total", exactSplit);
+  check("at-cost total covers Lulu production + shipping + Stripe fee in every currency and quantity", coversCost);
 }
 
 // ---- Report ----------------------------------------------------------------

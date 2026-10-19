@@ -434,6 +434,58 @@ export function computeMargin(
   };
 }
 
+/**
+ * The exact break-even order total (Lulu production + Lulu shipping + Stripe
+ * processing fee, ex tax) for a `printAtCost` coupon, split into a per-copy
+ * book price and a shipping charge so that `copies * unitPrice + shipping === total`
+ * to the cent.
+ */
+export interface AtCostBreakdown {
+  /** Total ex-tax amount the customer pays before tax (Lulu cost + Stripe fee). */
+  total: number;
+  /** Per-copy line-item price (`copies * unitPrice + shipping === total`). */
+  unitPrice: number;
+  /** Shipping line-item price. */
+  shipping: number;
+  /** Lulu production + shipping cost in `margin.currency`. */
+  luluCost: number;
+  /** Processor fee covered by `total`. */
+  stripeFee: number;
+}
+
+export function computeAtCostOrder(
+  margin: Pick<MarginBreakdown, "currency" | "copies" | "productionCost" | "shippingCost" | "taxRatePct">,
+  settings: PricingSettings,
+): AtCostBreakdown {
+  const copies = Math.max(1, Math.floor(margin.copies));
+  const productionCost = Math.max(0, round2(margin.productionCost));
+  const shippingCost = Math.max(0, round2(margin.shippingCost));
+  const luluCost = round2(productionCost + shippingCost);
+  if (luluCost <= 0) {
+    return { total: 0, unitPrice: 0, shipping: 0, luluCost: 0, stripeFee: 0 };
+  }
+  const fee = feeFor(settings, margin.currency);
+  const fp = feePercent(fee);
+  const rate = Math.max(0, margin.taxRatePct) / 100;
+  // Stripe's percentage fee applies to the gross (including any tax Stripe Tax
+  // collects at checkout), so `(1 + rate) * fp` covers the processor fee on the
+  // tax portion as well.
+  const effFp = (1 + rate) * fp;
+  const denom = 1 - effFp;
+  const rawTotal = denom > 0 ? (luluCost + fee.fixed) / denom : luluCost + fee.fixed;
+  // Round UP to the cent so rounding never leaves the business short a penny.
+  const total = Math.ceil((rawTotal - 1e-9) * 100) / 100;
+  const stripeFee = round2(Math.max(0, total - luluCost));
+
+  // Split `total` across `copies` book units and 1 shipping line so that
+  // `copies * unitPrice + shipping === total` holds to the exact cent.
+  const targetItems = Math.max(0, round2(total - shippingCost));
+  const unitPrice = Math.floor((targetItems / copies + 1e-9) * 100) / 100;
+  const shipping = round2(Math.max(0, total - round2(unitPrice * copies)));
+
+  return { total, unitPrice, shipping, luluCost, stripeFee };
+}
+
 // ---- Price suggestion ------------------------------------------------------
 
 /**

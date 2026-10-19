@@ -49,10 +49,13 @@ import {
   COUPON_ISSUANCE_KINDS,
   COUPON_ISSUANCE_LABELS,
   COUPON_ITEM_TYPES,
+  COUPON_MECHANIC_KINDS,
+  COUPON_MECHANIC_LABELS,
   COUPON_STATUS_LABELS,
   MAX_COUPONS,
   couponSummary,
   createCoupon,
+  createMechanic,
   describeRestrictions,
   formatCouponCode,
   issuanceUsesCodes,
@@ -62,6 +65,7 @@ import {
   type CouponCodeRow,
   type CouponGrantRow,
   type CouponIssuanceKind,
+  type CouponMechanicKind,
   type CouponStatus,
   type CouponsConfig,
 } from "../../../core/config/coupons";
@@ -86,6 +90,11 @@ const STATUS_OPTIONS = (["draft", "active", "paused", "ended"] as CouponStatus[]
 const ISSUANCE_OPTIONS = COUPON_ISSUANCE_KINDS.map((value) => ({
   value,
   label: COUPON_ISSUANCE_LABELS[value],
+}));
+
+const MECHANIC_OPTIONS = COUPON_MECHANIC_KINDS.map((value) => ({
+  value,
+  label: COUPON_MECHANIC_LABELS[value],
 }));
 
 const ITEM_OPTIONS = COUPON_ITEM_TYPES.map((value) => ({
@@ -113,9 +122,12 @@ const STATUS_CLASS: Record<CouponStatus, string> = {
 };
 
 function couponListLine(coupon: Coupon): string {
-  const pct = `${coupon.mechanic.percentOff}% off`;
+  const offer =
+    coupon.mechanic.kind === "printAtCost"
+      ? "Print at cost"
+      : `${coupon.mechanic.percentOff}% off`;
   if (coupon.issuance === "sharedCode") {
-    return coupon.sharedCode ? `${formatCouponCode(coupon.sharedCode)} · ${pct}` : pct;
+    return coupon.sharedCode ? `${formatCouponCode(coupon.sharedCode)} · ${offer}` : offer;
   }
   const kind =
     coupon.issuance === "autoGrant"
@@ -123,7 +135,7 @@ function couponListLine(coupon: Coupon): string {
       : coupon.issuance === "adminGrant"
         ? "Granted"
         : "Single-use";
-  return `${kind} · ${pct}`;
+  return `${kind} · ${offer}`;
 }
 
 function editorTabsFor(coupon: Coupon): { id: string; label: string }[] {
@@ -482,12 +494,29 @@ function OfferFields({
   onChange: (patch: Partial<Coupon>) => void;
 }) {
   const notes = useMemo(() => describeRestrictions(coupon.restrictions), [coupon.restrictions]);
-  const percentOff = coupon.mechanic.percentOff;
+  const isAtCost = coupon.mechanic.kind === "printAtCost";
+  const percentOff = coupon.mechanic.kind === "percentOff" ? coupon.mechanic.percentOff : 0;
   // Advisory, not enforced here: the real clamp happens at checkout against the
   // catalog maximum AND the order's break-even headroom, so a coupon can be
   // saved above the ceiling and will simply be clamped. Saying so beats letting
   // an operator believe they published 40% when 25% is all anyone will get.
-  const overCeiling = coupon.status === "active" && percentOff > maxDiscountPct;
+  const overCeiling = !isAtCost && coupon.status === "active" && percentOff > maxDiscountPct;
+
+  const onChangeMechanicKind = (kind: CouponMechanicKind) => {
+    if (kind === coupon.mechanic.kind) return;
+    if (kind === "printAtCost") {
+      onChange({
+        mechanic: createMechanic("printAtCost"),
+        restrictions: {
+          ...coupon.restrictions,
+          itemTypes: ["print"],
+          stackable: false,
+        },
+      });
+    } else {
+      onChange({ mechanic: createMechanic(kind) });
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -515,48 +544,80 @@ function OfferFields({
         />
       </Field>
 
-      <Grid cols={2}>
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1">
-            <span className="text-sm font-medium text-ink-700">Percentage off</span>
-            <InfoHint title="Percentages only">
-              Fixed-amount coupons and free shipping aren&apos;t available yet. Every guardrail in
-              the pricing engine is a percentage; a fixed amount can exceed the item price, and free
-              shipping isn&apos;t a price discount — both need their own cost model first.
-            </InfoHint>
-          </div>
-          <div className="relative">
-            <Input
-              type="number"
-              min={0}
-              step="1"
-              value={String(percentOff)}
-              onChange={(e) =>
-                onChange({
-                  mechanic: {
-                    ...coupon.mechanic,
-                    percentOff: Math.max(0, Math.min(100, Math.round(Number(e.target.value) || 0))),
-                  },
-                })
-              }
-              className="pr-10"
-            />
-            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-ink-400">
-              %
-            </span>
-          </div>
-        </div>
-        <NumberField
-          label="Cap the amount taken off"
-          value={coupon.mechanic.maxDiscountAmount}
-          step="1"
-          suffix={currency}
-          hint="0 = no cap. This is what makes a public percentage safe to print without knowing what people will buy."
-          onChange={(v) =>
-            onChange({ mechanic: { ...coupon.mechanic, maxDiscountAmount: Math.max(0, v) } })
-          }
+      <Field
+        label="Discount type"
+        hint={
+          isAtCost
+            ? "Removes all retail and shipping markup on printed books so the customer pays the live Lulu cost + Stripe processing fee + tax."
+            : "Takes a percentage off the eligible subtotal, clamped to break-even headroom."
+        }
+      >
+        <Select
+          value={coupon.mechanic.kind}
+          options={MECHANIC_OPTIONS}
+          onChange={(e) => onChangeMechanicKind(e.target.value as CouponMechanicKind)}
         />
-      </Grid>
+      </Field>
+
+      {coupon.mechanic.kind === "percentOff" ? (
+        <Grid cols={2}>
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1">
+              <span className="text-sm font-medium text-ink-700">Percentage off</span>
+              <InfoHint title="Percentage discounts">
+                Every percentage discount is clamped at checkout against the catalog maximum and
+                the order&apos;s break-even headroom. To remove all markup without a percentage,
+                choose &ldquo;Print at cost&rdquo; above.
+              </InfoHint>
+            </div>
+            <div className="relative">
+              <Input
+                type="number"
+                min={0}
+                step="1"
+                value={String(percentOff)}
+                onChange={(e) =>
+                  onChange({
+                    mechanic: {
+                      kind: "percentOff",
+                      maxDiscountAmount:
+                        coupon.mechanic.kind === "percentOff" ? coupon.mechanic.maxDiscountAmount : 0,
+                      percentOff: Math.max(0, Math.min(100, Math.round(Number(e.target.value) || 0))),
+                    },
+                  })
+                }
+                className="pr-10"
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-ink-400">
+                %
+              </span>
+            </div>
+          </div>
+          <NumberField
+            label="Cap the amount taken off"
+            value={coupon.mechanic.maxDiscountAmount}
+            step="1"
+            suffix={currency}
+            hint="0 = no cap. This is what makes a public percentage safe to print without knowing what people will buy."
+            onChange={(v) =>
+              onChange({
+                mechanic: {
+                  kind: "percentOff",
+                  percentOff,
+                  maxDiscountAmount: Math.max(0, v),
+                },
+              })
+            }
+          />
+        </Grid>
+      ) : (
+        <ImpactNote>
+          <span className="font-semibold">Print at cost</span> prices the order at the live Lulu
+          production + shipping cost plus the Stripe payment processing fee (and any applicable tax
+          collected at checkout), removing all retail and shipping markup. Applies to printed books
+          only and cannot combine with another offer.
+        </ImpactNote>
+      )}
       {overCeiling && (
         <ImpactNote>
           {percentOff}% is above the catalog ceiling of {maxDiscountPct}%, so checkout will clamp it
@@ -702,23 +763,37 @@ function LimitsFields({
   const r = coupon.restrictions;
   const setRestrictions = (patch: Partial<Coupon["restrictions"]>) =>
     onChange({ restrictions: { ...r, ...patch } });
-  const percentOff = coupon.mechanic.percentOff;
+  const isAtCost = coupon.mechanic.kind === "printAtCost";
+  const percentOff = coupon.mechanic.kind === "percentOff" ? coupon.mechanic.percentOff : 0;
 
   return (
     <div className="space-y-8">
       <div className="space-y-4">
         <h3 className="text-sm font-semibold text-ink-900">Where it applies</h3>
-        <Field label="Item types" hint="Nothing selected means it applies to everything you sell.">
-          <Chips
-            options={ITEM_OPTIONS}
-            selected={r.itemTypes}
-            allowEmpty
-            onChange={(itemTypes) => setRestrictions({ itemTypes: itemTypes as typeof r.itemTypes })}
-          />
-        </Field>
+        {isAtCost ? (
+          <Field
+            label="Item types"
+            hint="Print-at-cost coupons apply to printed books only."
+          >
+            <Chips
+              options={ITEM_OPTIONS.filter((o) => o.value === "print")}
+              selected={["print"]}
+              onChange={() => setRestrictions({ itemTypes: ["print"] })}
+            />
+          </Field>
+        ) : (
+          <Field label="Item types" hint="Nothing selected means it applies to everything you sell.">
+            <Chips
+              options={ITEM_OPTIONS}
+              selected={r.itemTypes}
+              allowEmpty
+              onChange={(itemTypes) => setRestrictions({ itemTypes: itemTypes as typeof r.itemTypes })}
+            />
+          </Field>
+        )}
         {/* Empty counts: no selection means "everything", which includes
             memberships — the case an earlier version of this note missed. */}
-        {(r.itemTypes.length === 0 || r.itemTypes.includes("plan")) && (
+        {!isAtCost && (r.itemTypes.length === 0 || r.itemTypes.includes("plan")) && (
           <ImpactNote>
             On a membership this comes off the <span className="font-semibold">first invoice only</span>{" "}
             — {percentOff}% off the first month, not {percentOff}% off membership. Renewals bill full
@@ -903,12 +978,14 @@ function LimitsFields({
             label="Let guests use it"
             hint="Almost always wrong: a guest session costs nothing to create, so a discount open to guests is a discount open to everyone, repeatedly."
           />
-          <SwitchField
-            checked={r.stackable}
-            onChange={(stackable) => setRestrictions({ stackable })}
-            label="Can combine with another offer"
-            hint="Off means checkout picks exactly one — this or their referral reward or their campaign offer, whichever is better for them. Stacking is how a promotion accidentally sells below cost."
-          />
+          {!isAtCost && (
+            <SwitchField
+              checked={r.stackable}
+              onChange={(stackable) => setRestrictions({ stackable })}
+              label="Can combine with another offer"
+              hint="Off means checkout picks exactly one — this or their referral reward or their campaign offer, whichever is better for them. Stacking is how a promotion accidentally sells below cost."
+            />
+          )}
         </div>
         <Grid cols={2}>
           <NumberField

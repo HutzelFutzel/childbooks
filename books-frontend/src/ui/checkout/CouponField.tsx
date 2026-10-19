@@ -36,6 +36,8 @@ import { useAuthStore } from "../../state/authStore";
 export function CouponField({
   itemType,
   subtotal,
+  orderTotal,
+  atCostTotal,
   currency,
   productId,
   country,
@@ -46,6 +48,10 @@ export function CouponField({
   itemType: "print" | "ebook" | "pack" | "plan";
   /** The subtotal on screen, in `currency`. */
   subtotal: number;
+  /** Full order total (items + shipping) for print orders. */
+  orderTotal?: number;
+  /** Break-even at-cost total (Lulu cost + Stripe fee) for print orders. */
+  atCostTotal?: number;
   currency: string;
   productId?: string;
   country?: string;
@@ -84,20 +90,27 @@ export function CouponField({
     if (!code) return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      void checkCouponCode({ code, itemType, subtotal, currency, productId, country }).then(
-        (next) => {
-          if (cancelled) return;
-          setVerdict(next);
-          onChangeRef.current(next.ok ? next.code : null);
-          onDiscountRef.current?.(next.ok ? next.discountAmount : 0);
-        },
-      );
+      void checkCouponCode({
+        code,
+        itemType,
+        subtotal,
+        orderTotal,
+        atCostTotal,
+        currency,
+        productId,
+        country,
+      }).then((next) => {
+        if (cancelled) return;
+        setVerdict(next);
+        onChangeRef.current(next.ok ? next.code : null);
+        onDiscountRef.current?.(next.ok ? next.discountAmount : 0);
+      });
     }, 400);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [itemType, subtotal, currency, productId, country]);
+  }, [itemType, subtotal, orderTotal, atCostTotal, currency, productId, country]);
 
   // Codes are per-account (caps, first-order-only, allowlists), so there's
   // nothing to offer a guest but a box that will refuse whatever they type.
@@ -112,6 +125,8 @@ export function CouponField({
         code,
         itemType,
         subtotal,
+        orderTotal,
+        atCostTotal,
         currency,
         productId,
         country,

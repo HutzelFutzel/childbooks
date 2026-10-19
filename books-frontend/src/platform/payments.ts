@@ -164,6 +164,8 @@ export interface RetailPricePreview {
   items: number;
   shipping: number;
   total: number;
+  /** Break-even at-cost total (Lulu production + Lulu shipping + Stripe fee, ex tax). */
+  atCostTotal?: number;
   /**
    * What the print provider's address validation made of the destination. Null
    * when it had no comment. Pricing already sends the full address, so this

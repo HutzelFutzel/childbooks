@@ -44,6 +44,7 @@ import {
   TAX_ID_REQUIRED,
 } from "../../books-frontend/src/core/config/countries";
 import {
+  computeAtCostOrder,
   computeMargin,
   defaultShippingMethod,
   destinationPolicyFor,
@@ -52,6 +53,7 @@ import {
   isDestinationAllowed,
   offeredMethodsFor,
   resolveShippingCharged,
+  type AtCostBreakdown,
 } from "../../books-frontend/src/core/config/productMath";
 import { fetchLiveCost, productionCostSource } from "./printCost";
 import type {
@@ -298,6 +300,12 @@ interface AppliedDiscount {
   percentOff: number;
   /** Frozen description, for the checkout line the buyer sees. */
   summary: string;
+  /**
+   * True when the winning offer is a `printAtCost` coupon, so print checkout
+   * replaces both the book and shipping line items with the exact break-even
+   * at-cost figures (Lulu cost + Stripe fee).
+   */
+  atCost?: boolean;
 }
 
 interface DiscountOutcome {
@@ -342,6 +350,10 @@ async function earnedDiscount(args: {
   settings: PricingSettings;
   /** Amount the discount would come off (for the cost bookkeeping). */
   amount: number;
+  /** Full retail order total (items + shipping) for print orders. */
+  orderTotal?: number | null;
+  /** Break-even at-cost total (Lulu cost + Stripe fee) for print orders. */
+  atCostTotal?: number | null;
   /** Discount % the buyer's plan already applied. */
   appliedPct?: number;
   /** Deepest TOTAL discount that still breaks even (default: unbounded). */
@@ -366,6 +378,8 @@ async function earnedDiscount(args: {
         purchase: {
           itemType: args.itemType,
           subtotal: args.amount,
+          orderTotal: args.orderTotal ?? null,
+          atCostTotal: args.atCostTotal ?? null,
           currency,
           productId: args.productId ?? null,
           country: args.country ?? null,
@@ -400,13 +414,15 @@ async function earnedDiscount(args: {
       });
     }
     for (const coupon of coupons.candidates) {
+      const isAtCost = coupon.terms.mechanic.kind === "printAtCost";
       candidates.push({
         source: "coupon",
         percentOff: coupon.percentOff,
         summary: coupon.summary,
         handle: coupon.couponId,
-        stackable: coupon.stackable,
+        stackable: isAtCost ? false : coupon.stackable,
         priority: coupon.priority,
+        atCost: isAtCost,
       });
     }
 
@@ -449,6 +465,7 @@ async function earnedDiscount(args: {
     const total = resolution.applied.reduce((sum, c) => sum + c.percentOff, 0);
     const summaries: string[] = [];
     let reservedPct = 0;
+    let wonAtCost = false;
     for (const candidate of resolution.applied) {
       const share =
         total > 0
@@ -467,16 +484,23 @@ async function earnedDiscount(args: {
         case "coupon": {
           const coupon = coupons.candidates.find((c) => c.couponId === candidate.handle);
           if (!coupon) break;
+          const isAtCost = coupon.terms.mechanic.kind === "printAtCost";
+          const couponDiscount = isAtCost ? coupon.discountAmount : discount;
+          const couponSubtotal =
+            isAtCost && typeof args.orderTotal === "number" && args.orderTotal > 0
+              ? args.orderTotal
+              : args.amount;
           ok = await reserveCoupon({
             uid: args.uid,
             candidate: coupon,
             paymentRef: args.paymentId,
             itemType: args.itemType,
             percentOff: share,
-            discountAmount: discount,
-            originalSubtotal: args.amount,
+            discountAmount: couponDiscount,
+            originalSubtotal: couponSubtotal,
             currency,
           });
+          if (ok && isAtCost) wonAtCost = true;
           // Losing the reservation race means somebody else is mid-checkout with
           // the same single-use code. The buyer needs to hear that rather than
           // be quietly charged full price on an order they thought was discounted.
@@ -500,6 +524,7 @@ async function earnedDiscount(args: {
       applied: {
         percentOff: Math.round(reservedPct * 10) / 10,
         summary: summaries.join(" + "),
+        ...(wonAtCost ? { atCost: true } : {}),
       },
       codeRejection,
     };
@@ -871,6 +896,8 @@ interface RetailPriceResult {
    */
   breakEvenDiscountPct: number;
   shippingCharged: number;
+  /** Exact break-even at-cost pricing (Lulu production + Lulu shipping + Stripe fee). */
+  atCost: AtCostBreakdown;
   /**
    * What the print provider's address validation said about the destination.
    * Undefined when it said nothing (or we never got to ask).
@@ -1031,12 +1058,14 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
     shippingSource: (live.shippingCost != null ? "live" : "table") as "live" | "table",
     productionSource: productionCostSource(product, live),
   };
+  const atCost = computeAtCostOrder(margin, settings);
   return {
     unitPrice,
     listUnitPrice: margin.pricePerUnit,
     discountPct,
     breakEvenDiscountPct: margin.breakEvenDiscountPct,
     shippingCharged,
+    atCost,
     addressValidation: live.addressValidation,
     estimatedCost,
   };
@@ -1172,6 +1201,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
   const {
     unitPrice: planPrice,
     shippingCharged,
+    atCost,
     estimatedCost,
     addressValidation,
     discountPct,
@@ -1206,6 +1236,9 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     return { ok: false, error: "This product isn't priced for ordering yet." };
   }
 
+  const retailItems = Math.round(planPrice * copies * 100) / 100;
+  const retailTotal = Math.round((retailItems + shippingCharged) * 100) / 100;
+
   // The payment id is minted here (rather than just before the session) because
   // an earned discount is RESERVED against it — the reservation is what makes the
   // reward single-use across an abandoned checkout.
@@ -1215,7 +1248,9 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     itemType: "print",
     paymentId,
     settings,
-    amount: planPrice * copies,
+    amount: retailItems,
+    orderTotal: retailTotal,
+    atCostTotal: atCost.total,
     appliedPct: discountPct,
     breakEvenPct: breakEvenDiscountPct,
     couponCode: args.couponCode,
@@ -1231,7 +1266,12 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     await releaseCoupons(paymentId, `code refused: ${codeRejection.reason}`);
     return { ok: false, error: codeRejection.message };
   }
-  const unitPrice = earned ? discountedAmount(planPrice, earned.percentOff) : planPrice;
+  const unitPrice = earned?.atCost
+    ? atCost.unitPrice
+    : earned
+      ? discountedAmount(planPrice, earned.percentOff)
+      : planPrice;
+  const finalShippingCharged = earned?.atCost ? atCost.shipping : shippingCharged;
 
   // The provider downloads the print files LATER, on its own schedule, so a URL
   // it can't fetch comes back as a rejected job with the customer already
@@ -1262,7 +1302,12 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
 
   const customerId = await ensureCustomer(uid, args.email);
 
-  const taxBehavior = settings.tax.perCurrency[currency]?.behavior ?? "exclusive";
+  // At-cost orders quote ex-tax (Lulu cost + Stripe fee) and let Stripe Tax add
+  // any destination tax on top, so VAT in inclusive markets is never backed out
+  // of the provider's cost.
+  const taxBehavior = earned?.atCost
+    ? "exclusive"
+    : (settings.tax.perCurrency[currency]?.behavior ?? "exclusive");
   const taxCode = settings.tax.bookTaxCode;
   const hasTax = Boolean(taxCode);
 
@@ -1287,12 +1332,12 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
       },
     },
   ];
-  if (shippingCharged > 0) {
+  if (finalShippingCharged > 0) {
     lineItems.push({
       quantity: 1,
       price_data: {
         currency: currency.toLowerCase(),
-        unit_amount: toMinor(shippingCharged, currency),
+        unit_amount: toMinor(finalShippingCharged, currency),
         tax_behavior: hasTax ? taxBehavior : undefined,
         product_data: { name: "Shipping & handling" },
       },
@@ -1319,7 +1364,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     estimatedCost,
   };
 
-  const estimatedTotal = unitPrice * copies + shippingCharged;
+  const estimatedTotal = unitPrice * copies + finalShippingCharged;
   // `rewardful: "false"` when a print order is outside the referring campaign's
   // scope — Rewardful reads it off the charge and creates no commission.
   const affiliateMeta = await affiliateChargeMetadata(uid, "order");
@@ -1359,8 +1404,8 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     ...args.device,
     items: [
       { label: product.presentation.name, amount: unitPrice, quantity: copies },
-      ...(shippingCharged > 0
-        ? [{ label: "Shipping & handling", amount: shippingCharged, quantity: 1 }]
+      ...(finalShippingCharged > 0
+        ? [{ label: "Shipping & handling", amount: finalShippingCharged, quantity: 1 }]
         : []),
     ],
   });
@@ -1771,6 +1816,7 @@ export function registerStripeUserRoutes(app: Express): void {
         items: Math.round(priced.unitPrice * copies * 100) / 100,
         shipping: priced.shippingCharged,
         total: Math.round((priced.unitPrice * copies + priced.shippingCharged) * 100) / 100,
+        atCostTotal: priced.atCost.total,
         // The carrier's normalization of this address, so checkout can offer the
         // correction while it's still free to make.
         addressValidation: priced.addressValidation ?? null,

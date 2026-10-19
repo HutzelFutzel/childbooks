@@ -153,20 +153,32 @@ export interface PercentOffMechanic {
   maxDiscountAmount: number;
 }
 
-export type CouponMechanic = PercentOffMechanic;
+/**
+ * Removes all retail and shipping markup on a printed book so the customer
+ * pays the exact break-even cost (Lulu production + Lulu shipping + Stripe
+ * payment processing fee) plus any applicable tax.
+ */
+export interface PrintAtCostMechanic {
+  kind: "printAtCost";
+}
+
+export type CouponMechanic = PercentOffMechanic | PrintAtCostMechanic;
 
 export type CouponMechanicKind = CouponMechanic["kind"];
 
-export const COUPON_MECHANIC_KINDS: CouponMechanicKind[] = ["percentOff"];
+export const COUPON_MECHANIC_KINDS: CouponMechanicKind[] = ["percentOff", "printAtCost"];
 
 export const COUPON_MECHANIC_LABELS: Record<CouponMechanicKind, string> = {
   percentOff: "Percentage off",
+  printAtCost: "Print at cost (no markup)",
 };
 
 export function createMechanic(kind: CouponMechanicKind = "percentOff"): CouponMechanic {
   switch (kind) {
     case "percentOff":
       return { kind, percentOff: 10, maxDiscountAmount: 0 };
+    case "printAtCost":
+      return { kind: "printAtCost" };
   }
 }
 
@@ -180,6 +192,8 @@ export function describeMechanic(mechanic: CouponMechanic, items: DiscountItemTy
         ? `${base} (up to ${mechanic.maxDiscountAmount})`
         : base;
     }
+    case "printAtCost":
+      return "print at cost (print & shipping at cost + payment fee)";
   }
 }
 
@@ -853,6 +867,14 @@ export interface CouponPurchaseFacts {
   productId?: string | null;
   /** Destination or billing country, when known. */
   country?: string | null;
+  /**
+   * Total retail charge (items + shipping, ex tax) and the break-even at-cost
+   * total (Lulu production + Lulu shipping + Stripe fee) in `currency`, for
+   * print orders. Used by `printAtCost` coupons to compute the exact discount
+   * that brings the order down to cost.
+   */
+  orderTotal?: number | null;
+  atCostTotal?: number | null;
 }
 
 /** Usage counters the caller looked up (0 when there's nothing recorded yet). */
@@ -882,12 +904,13 @@ const DAY_MS = 86_400_000;
  * The percentage comes back as well as the amount because every downstream
  * guardrail in this codebase is a percentage — the checkout clamp, the
  * break-even headroom, the margin waterfall. A mechanic whose natural shape is
- * an amount (a future `fixedAmount`) still has to answer in percent HERE, so
- * that the clamps keep working without being rewritten.
+ * an amount (`printAtCost`) still answers in percent HERE so the resolver can
+ * rank it against percentage offers.
  */
 export function couponDiscountPercent(
   mechanic: CouponMechanic,
   subtotal: number,
+  atCostContext?: { orderTotal?: number | null; atCostTotal?: number | null },
 ): { percentOff: number; discountAmount: number } {
   switch (mechanic.kind) {
     case "percentOff": {
@@ -899,6 +922,25 @@ export function couponDiscountPercent(
         return { percentOff: round1((capped / subtotal) * 100), discountAmount: round2(capped) };
       }
       return { percentOff: pct, discountAmount: raw };
+    }
+    case "printAtCost": {
+      const atCostTotal = atCostContext?.atCostTotal;
+      if (typeof atCostTotal !== "number" || !Number.isFinite(atCostTotal) || atCostTotal <= 0) {
+        return { percentOff: 0, discountAmount: 0 };
+      }
+      const baseTotal =
+        typeof atCostContext?.orderTotal === "number" &&
+        Number.isFinite(atCostContext.orderTotal) &&
+        atCostContext.orderTotal > 0
+          ? atCostContext.orderTotal
+          : subtotal;
+      if (baseTotal <= 0) return { percentOff: 0, discountAmount: 0 };
+      const discountAmount = round2(Math.max(0, baseTotal - atCostTotal));
+      if (discountAmount <= 0) return { percentOff: 0, discountAmount: 0 };
+      return {
+        percentOff: round1(clamp((discountAmount / baseTotal) * 100, 0, 100)),
+        discountAmount,
+      };
     }
   }
 }
@@ -994,6 +1036,9 @@ export function validateCoupon(args: {
   if (r.dailyBudget > 0 && usage.todaySpend >= r.dailyBudget) return reject("budget_exhausted");
 
   // Purchase shape.
+  if (terms.mechanic.kind === "printAtCost" && purchase.itemType !== "print") {
+    return reject("item_not_eligible");
+  }
   if (r.itemTypes.length > 0 && !r.itemTypes.includes(purchase.itemType)) {
     return reject("item_not_eligible");
   }
@@ -1012,7 +1057,11 @@ export function validateCoupon(args: {
   }
   if (r.minSubtotal > 0 && purchase.subtotal < r.minSubtotal) return reject("min_subtotal");
 
-  const { percentOff, discountAmount } = couponDiscountPercent(terms.mechanic, purchase.subtotal);
+  const { percentOff, discountAmount } = couponDiscountPercent(
+    terms.mechanic,
+    purchase.subtotal,
+    { orderTotal: purchase.orderTotal, atCostTotal: purchase.atCostTotal },
+  );
   if (percentOff <= 0 || discountAmount <= 0) return reject("no_headroom");
 
   return {
@@ -1025,7 +1074,7 @@ export function validateCoupon(args: {
     summary: terms.summary,
     notes: terms.notes,
     terms,
-    stackable: r.stackable,
+    stackable: terms.mechanic.kind === "printAtCost" ? false : r.stackable,
     priority: r.priority,
   };
 }
@@ -1050,6 +1099,13 @@ export interface CouponDiscountCandidate {
   handle: string;
   stackable: boolean;
   priority: number;
+  /**
+   * True when this candidate is a `printAtCost` coupon. Its percentage was
+   * computed directly from the order's break-even cost (Lulu cost + Stripe
+   * fee), so it is not subject to the catalog `maxDiscountPct` ceiling and
+   * never stacks with another discount.
+   */
+  atCost?: boolean;
 }
 
 export type DiscountCandidate = EarnedDiscountCandidate | CouponDiscountCandidate;
@@ -1092,29 +1148,47 @@ export function resolveBestDiscount(args: {
   const headroom = Math.max(0, (args.breakEvenPct ?? 100) - (args.appliedPct ?? 0));
   const ceiling = Math.max(0, Math.min(args.maxDiscountPct, headroom));
 
-  const ranked = [...args.candidates]
-    .filter((c) => c.percentOff > 0)
-    .sort((a, b) => b.percentOff - a.percentOff || b.priority - a.priority);
+  const isAtCost = (c: DiscountCandidate): boolean => c.source === "coupon" && c.atCost === true;
+  const ceilingFor = (c: DiscountCandidate): number => (isAtCost(c) ? 100 : ceiling);
+  const effectiveFor = (c: DiscountCandidate): number =>
+    Math.max(0, Math.min(c.percentOff, ceilingFor(c)));
 
+  const positive = args.candidates.filter((c) => c.percentOff > 0);
   const rejected: DiscountResolution["rejected"] = [];
-  if (ceiling <= 0) {
-    return {
-      applied: [],
-      percentOff: 0,
-      rejected: ranked.map((candidate) => ({ candidate, reason: "no_headroom" as const })),
-    };
+  const viable: DiscountCandidate[] = [];
+  for (const candidate of positive) {
+    if (effectiveFor(candidate) <= 0) {
+      rejected.push({ candidate, reason: "no_headroom" });
+    } else {
+      viable.push(candidate);
+    }
+  }
+
+  viable.sort(
+    (a, b) =>
+      effectiveFor(b) - effectiveFor(a) ||
+      b.percentOff - a.percentOff ||
+      b.priority - a.priority,
+  );
+
+  if (viable.length === 0) {
+    return { applied: [], percentOff: 0, rejected };
   }
 
   const applied: DiscountCandidate[] = [];
   let total = 0;
-  for (const candidate of ranked) {
+  for (const candidate of viable) {
     if (applied.length === 0) {
       applied.push(candidate);
-      total = Math.min(candidate.percentOff, ceiling);
+      total = effectiveFor(candidate);
       continue;
     }
     // Past the winner, only a mutually-stackable candidate gets a look in.
-    const stackable = candidate.stackable && applied.every((a) => a.stackable);
+    // An at-cost coupon is already at break-even and never stacks.
+    const stackable =
+      !isAtCost(candidate) &&
+      candidate.stackable &&
+      applied.every((a) => !isAtCost(a) && a.stackable);
     if (!stackable) {
       rejected.push({ candidate, reason: "better_offer_active" });
       continue;
@@ -1363,6 +1437,8 @@ function normalizeMechanic(raw: unknown): CouponMechanic | null {
         maxDiscountAmount: nonNegative(m.maxDiscountAmount, 0),
       };
     }
+    case "printAtCost":
+      return { kind: "printAtCost" };
     default:
       return null;
   }
@@ -1424,6 +1500,10 @@ function normalizeCoupon(raw: unknown, index: number, at: number): Coupon {
     : "sharedCode";
   const restrictions = normalizeRestrictions(c.restrictions);
   const parsed = normalizeMechanic(c.mechanic);
+  if (parsed?.kind === "printAtCost") {
+    restrictions.itemTypes = ["print"];
+    restrictions.stackable = false;
+  }
   // A mechanic that normalized away leaves the coupon present but NOT active —
   // silently rewriting it to something payable would be worse than showing the
   // admin a coupon that plainly isn't running.
@@ -1500,6 +1580,9 @@ const mechanicSchema = z.discriminatedUnion("kind", [
     kind: z.literal("percentOff"),
     percentOff: z.number().min(1).max(100),
     maxDiscountAmount: z.number().min(0),
+  }),
+  z.object({
+    kind: z.literal("printAtCost"),
   }),
 ]);
 
@@ -1655,6 +1738,21 @@ export const couponsConfigSchema = z
                 `Printed books cost real money to produce even when they're free to the customer.`,
             );
           }
+        }
+      }
+
+      if (coupon.mechanic.kind === "printAtCost") {
+        if (r.itemTypes.some((t) => t !== "print")) {
+          at(
+            ["restrictions", "itemTypes"],
+            `"${coupon.name}" is a print-at-cost coupon and can only apply to printed books.`,
+          );
+        }
+        if (r.stackable) {
+          at(
+            ["restrictions", "stackable"],
+            `"${coupon.name}" is a print-at-cost coupon and cannot combine with another offer — there is no margin left to discount.`,
+          );
         }
       }
 

@@ -68,6 +68,8 @@ const previewSchema = z.object({
   code: z.string().min(1).max(64),
   itemType: z.enum(["print", "ebook", "pack", "plan"]),
   subtotal: z.number().min(0).max(1_000_000),
+  orderTotal: z.number().min(0).max(1_000_000).optional(),
+  atCostTotal: z.number().min(0).max(1_000_000).optional(),
   currency: z.string().min(3).max(3),
   productId: z.string().max(120).optional(),
   country: z.string().max(2).optional(),
@@ -139,6 +141,8 @@ export function registerCouponUserRoutes(app: Express): void {
         purchase: {
           itemType: parsed.data.itemType,
           subtotal: parsed.data.subtotal,
+          orderTotal: parsed.data.orderTotal ?? null,
+          atCostTotal: parsed.data.atCostTotal ?? null,
           currency: parsed.data.currency.toUpperCase(),
           productId: parsed.data.productId ?? null,
           country: parsed.data.country ?? null,

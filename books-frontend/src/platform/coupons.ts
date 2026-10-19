@@ -94,6 +94,8 @@ export async function checkCouponCode(input: {
   code: string;
   itemType: "print" | "ebook" | "pack" | "plan";
   subtotal: number;
+  orderTotal?: number;
+  atCostTotal?: number;
   currency: string;
   productId?: string;
   country?: string;

@@ -1607,6 +1607,8 @@ export function OrderCheckout({
                     <CouponField
                       itemType="print"
                       subtotal={quote.items}
+                      orderTotal={quote.total}
+                      atCostTotal={quote.atCostTotal}
                       currency={quoteCurrency}
                       productId={offerableCatalog.get(product.sku)?.id}
                       country={country}

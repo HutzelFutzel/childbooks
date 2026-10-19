@@ -1695,6 +1695,117 @@ rejects("a 0% coupon", {
   check("a resolved total is always a percentage Stripe will accept", expressible);
 }
 
+// ---- 19. Print-at-cost coupons remove markup and never go below cost --------
+
+{
+  const atCost = coupon({
+    id: "at-cost",
+    name: "Print at cost",
+    sharedCode: "ATCOST",
+    mechanic: { kind: "printAtCost" },
+    restrictions: { ...safeCaps, itemTypes: ["print"], stackable: false },
+  });
+
+  // Positive control: $20 book ($25 with shipping), $15 at-cost total => $10 off.
+  const ok = verdict({
+    coupon: atCost,
+    codeRecord: code({ code: "ATCOST", couponId: "at-cost" }),
+    purchase: purchase({ itemType: "print", subtotal: 20, orderTotal: 25, atCostTotal: 15 }),
+  });
+  check("accepts a print-at-cost coupon on a print order above cost", ok.ok, ok.ok ? "" : ok.reason);
+  if (ok.ok) {
+    check("print-at-cost takes off the exact markup", ok.discountAmount === 10, `got ${ok.discountAmount}`);
+    check("print-at-cost reports the effective percentage", ok.percentOff === 40, `got ${ok.percentOff}`);
+    check("print-at-cost is never stackable", ok.stackable === false);
+  }
+
+  // Non-print items are always refused, even if restrictions.itemTypes was left empty.
+  for (const itemType of ["ebook", "pack", "plan"] as const) {
+    refuses(
+      `a print-at-cost coupon on a ${itemType} purchase`,
+      {
+        coupon: coupon({ mechanic: { kind: "printAtCost" }, restrictions: { ...safeCaps, itemTypes: [] } }),
+        purchase: purchase({ itemType, subtotal: 20, orderTotal: 20, atCostTotal: 5 }),
+      },
+      "item_not_eligible",
+    );
+  }
+
+  // Missing or already-at-cost baseline refuses with no_headroom rather than
+  // discounting blind or raising the price.
+  refuses(
+    "a print-at-cost coupon when no at-cost baseline was supplied",
+    {
+      coupon: atCost,
+      codeRecord: code({ code: "ATCOST", couponId: "at-cost" }),
+      purchase: purchase({ itemType: "print", subtotal: 20 }),
+    },
+    "no_headroom",
+  );
+  refuses(
+    "a print-at-cost coupon when the order is already at or below cost",
+    {
+      coupon: atCost,
+      codeRecord: code({ code: "ATCOST", couponId: "at-cost" }),
+      purchase: purchase({ itemType: "print", subtotal: 15, orderTotal: 15, atCostTotal: 15 }),
+    },
+    "no_headroom",
+  );
+
+  // Resolver: an at-cost candidate is not clamped by maxDiscountPct, and never stacks.
+  const resolution = resolveBestDiscount({
+    candidates: [
+      candidate({ handle: "at-cost", percentOff: 40, stackable: false, atCost: true }),
+      candidate({ handle: "referral", source: "referral", percentOff: 15, stackable: true }),
+    ],
+    maxDiscountPct: 20,
+    appliedPct: 10,
+    breakEvenPct: 25,
+  });
+  check(
+    "an at-cost coupon bypasses the catalog percentage ceiling",
+    resolution.percentOff === 40 && resolution.applied[0]?.handle === "at-cost",
+    JSON.stringify(resolution),
+  );
+  check("an at-cost coupon never stacks with another discount", resolution.applied.length === 1);
+
+  // Schema & normalizer guards.
+  accepts("a well-formed print-at-cost coupon", {
+    mechanic: { kind: "printAtCost" },
+    restrictions: { ...safeCaps, itemTypes: ["print"], stackable: false },
+  });
+  rejects("a print-at-cost coupon scoped to ebooks", {
+    mechanic: { kind: "printAtCost" },
+    restrictions: { ...safeCaps, itemTypes: ["ebook"], stackable: false },
+  });
+  rejects("a stackable print-at-cost coupon", {
+    mechanic: { kind: "printAtCost" },
+    restrictions: { ...safeCaps, itemTypes: ["print"], stackable: true },
+  });
+
+  const normalizedAtCost = normalizeCouponsConfig(
+    {
+      version: 1,
+      enabled: true,
+      coupons: [
+        {
+          ...atCost,
+          restrictions: { ...safeCaps, itemTypes: ["print", "ebook"], stackable: true },
+        },
+      ],
+    },
+    NOW,
+  ).coupons[0]!;
+  check(
+    "normalizing a print-at-cost coupon locks it to print and non-stackable",
+    normalizedAtCost.mechanic.kind === "printAtCost" &&
+      normalizedAtCost.restrictions.itemTypes.length === 1 &&
+      normalizedAtCost.restrictions.itemTypes[0] === "print" &&
+      normalizedAtCost.restrictions.stackable === false,
+    JSON.stringify(normalizedAtCost.restrictions),
+  );
+}
+
 // ---- Report -----------------------------------------------------------------
 
 console.log(`${checks.length} invariant(s) held.`);
