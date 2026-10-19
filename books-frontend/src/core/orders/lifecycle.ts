@@ -55,7 +55,7 @@ export const PRINT_ORDER_STATE_LABEL: Record<PrintOrderState, string> = {
   shipped: "Shipped",
   failed: "Failed",
   rejected: "Rejected",
-  cancelled: "Cancelled",
+  cancelled: "Canceled",
   refunded: "Refunded",
 };
 

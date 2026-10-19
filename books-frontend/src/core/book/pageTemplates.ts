@@ -28,9 +28,9 @@ export const PAGE_TEMPLATES: readonly PageTemplate[] = [
     id: "drawing",
     label: "Drawing page",
     position: "back",
-    text: "Your turn!\nDraw your favourite part of the story here.",
+    text: "Your turn!\nDraw your favorite part of the story here.",
   },
-  { id: "notes", label: "Notes & memories", position: "back", text: "Our favourite moments\n\n" },
+  { id: "notes", label: "Notes & memories", position: "back", text: "Our favorite moments\n\n" },
 ];
 
 /**

@@ -2153,6 +2153,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           invent: false,
           fromPhoto: true,
           fromDrawing: false,
+          fromCurrentPortrait: false,
           agedFromPortrait: false,
           hasNote: false,
           isAnimal: false,

@@ -10,8 +10,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ImageOff, Loader2, Plus, ShieldCheck, X } from "lucide-react";
 import { legalUrlByRole } from "../../../core/config/legal";
-import { decideArtworkLookFirstWins } from "../../../core/guide/artworkLook";
-import { artworkStyleRole } from "../../../core/guide/artworkStyle";
+import { ARTWORK_LOOK_FAILED_MESSAGE, decideFromExtract, type ArtworkLookDecision } from "../../../core/guide/artworkLook";
+import { artworkStyleRole, settleOnFirstArtwork } from "../../../core/guide/artworkStyle";
 import { setSourceArtOnNamedCharacters } from "../../../core/book/sourceArt";
 import { currentPortrait, likenessPhotosOf, lookSourceOf } from "../../../core/guide/portrait";
 import { briefOf } from "../../../core/story/brief";
@@ -23,6 +23,7 @@ import {
   type SourceArtRef,
   type StoryCastMember,
 } from "../../../core/types";
+import { extractArtStyleRemote } from "../../../platform/aiClient";
 import { deleteLikenessPhoto, likenessPhotoExpired, uploadLikenessPhoto } from "../../../platform/likeness";
 import { uploadSourceArt } from "../../../platform/sourceArt";
 import { useAppConfigStore } from "../../../state/appConfigStore";
@@ -465,7 +466,13 @@ export function DrawingPanel({
     };
     // Cast and sheets of the same name carry the same drawings: a replaced picture must not linger on the sheet.
     if (member.name.trim()) withDrawing = setSourceArtOnNamedCharacters(withDrawing, member.name, [ref]);
-    const decision = await decideArtworkLookFirstWins(withDrawing);
+    let raw: ArtworkLookDecision;
+    try {
+      raw = decideFromExtract(withDrawing, await extractArtStyleRemote(withDrawing));
+    } catch (err) {
+      raw = { status: "failed", message: err instanceof Error ? err.message : ARTWORK_LOOK_FAILED_MESSAGE };
+    }
+    const decision = settleOnFirstArtwork(withDrawing, raw);
     return decision.status === "resolved"
       ? { style: decision.style, reason: "" }
       : { style: null, reason: decision.status === "failed" ? decision.message : "" };

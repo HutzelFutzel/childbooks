@@ -1,8 +1,5 @@
 /**
  * Decide a book-wide visual style from character drawings.
- *
- * This is presentation-neutral: Chat and Steps share the same extraction and
- * decision rules while rendering their own conflict/failure UI.
  */
 import type { ArtStyleSelection, Project, SourceArtRef } from "../types";
 import {
@@ -10,10 +7,8 @@ import {
   derivedStyleSelection,
   firstStyleArtwork,
 } from "../book/sourceArt";
-import { settleOnFirstArtwork } from "./artworkStyle";
 import type { CustomStyleRef } from "../config/customArtStyles";
 import type { ExtractArtStyleResult } from "../pipeline/styleExtract";
-import { extractArtStyleRemote } from "../../platform/aiClient";
 
 export interface ArtworkLookOption {
   id: string;
@@ -30,7 +25,7 @@ export type ArtworkLookDecision =
   | { status: "conflict"; options: ArtworkLookOption[] }
   | { status: "failed"; message: string };
 
-const FAILED_MESSAGE = "We couldn’t read a look from the uploaded artwork.";
+export const ARTWORK_LOOK_FAILED_MESSAGE = "We couldn’t read a look from the uploaded artwork.";
 
 export function decideFromExtract(
   project: Project,
@@ -78,7 +73,7 @@ export function decideFromExtract(
   }));
   if (options.length < 2) {
     const prompt = options[0]?.stylePrompt || result.stylePrompt;
-    if (!prompt.trim()) return { status: "failed", message: FAILED_MESSAGE };
+    if (!prompt.trim()) return { status: "failed", message: ARTWORK_LOOK_FAILED_MESSAGE };
     return {
       status: "resolved",
       style: derivedStyleSelection({
@@ -90,27 +85,4 @@ export function decideFromExtract(
     };
   }
   return { status: "conflict", options };
-}
-
-export async function decideArtworkLook(
-  project: Project,
-  signal?: AbortSignal,
-): Promise<ArtworkLookDecision> {
-  try {
-    const result = await extractArtStyleRemote(project, signal);
-    return decideFromExtract(project, result);
-  } catch (err) {
-    return {
-      status: "failed",
-      message:
-        !signal?.aborted && err instanceof Error ? err.message : FAILED_MESSAGE,
-    };
-  }
-}
-
-export async function decideArtworkLookFirstWins(
-  project: Project,
-  signal?: AbortSignal,
-): Promise<ArtworkLookDecision> {
-  return settleOnFirstArtwork(project, await decideArtworkLook(project, signal));
 }

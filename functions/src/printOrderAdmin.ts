@@ -354,7 +354,7 @@ export function registerPrintOrderAdminRoutes(app: Express): void {
         key: record.key,
         type: "admin_action",
         source: `admin:${by}`,
-        message: `${by} cancelled job ${record.currentJobId} at the printer`,
+        message: `${by} canceled job ${record.currentJobId} at the printer`,
         silent: true,
       });
       await applyOrderStatusUpdate(cancelled, "lulu_poll");
