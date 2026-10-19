@@ -14,6 +14,7 @@ import type { Anchor, DepictedSubject } from "../types";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderTextPrompt } from "../prompts/render";
 import { withRetry } from "./retry";
+import { errorForLog } from "../errors";
 
 /** Thrown when the resolver cannot pick a unique target; UI should disambiguate. */
 export class IntentAmbiguousError extends Error {
@@ -154,7 +155,8 @@ export async function resolveEditIntent(
         }),
       { signal: input.signal, retries: 1 },
     );
-  } catch {
+  } catch (error) {
+    console.warn(`[intent] resolving who "${edit}" is about (${input.model}) failed:`, errorForLog(error));
     return [{ op: "freeform", instruction: edit, confidence: 0 }];
   }
 
@@ -309,7 +311,8 @@ export async function resolveMentionedAnchors(
     );
     const valid = new Set(input.candidates.map((a) => a.id));
     return [...new Set(res.mentionedAnchorIds)].filter((id) => valid.has(id));
-  } catch {
+  } catch (error) {
+    console.warn(`[intent] finding who an instruction mentions (${input.model}) failed:`, errorForLog(error));
     return [];
   }
 }

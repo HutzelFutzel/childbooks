@@ -26,6 +26,7 @@ import { arg, askFor, beat } from "./shared";
 import { illustrationUnits } from "../../../book/units";
 import { pageNumberOf } from "../../../book/pageRefs";
 import { anchorByName, anchorsNamedIn, castOnPage, withPageCast } from "../../../book/pageCast";
+import { absentFromPage, ambiguousPerson, speaksOfSomeoneUnnamed } from "../../../book/editTarget";
 import { asksForNewPicture } from "../../redrawMode";
 
 /** How a page is called to a reader: its printed number, or the cover. */
@@ -773,8 +774,40 @@ export const DESIGN_COMMANDS: CommandDef[] = [
       // Who the change is about is looked up in the book, never guessed: a person put on the page
       // is drawn from their own sheet, or the picture gets a stranger.
       const wrote = arg(args, "people");
-      const withoutThem = wrote.toLowerCase() === "none";
-      const wanted = withoutThem ? [] : wrote.split(/[,;&]|\band\b|\bund\b/i).map((name) => name.trim()).filter(Boolean);
+      const choice = wrote.toLowerCase();
+      // Answers to "they are not on that page": leave the picture alone, or they are in it already.
+      if (choice === "skip") return { kind: "noop", beat: beat("leftAsIs") };
+      const withoutThem = choice === "none" || choice === "here";
+
+      // Who a change is about is settled now, before a price or a job: a person the page is not drawn
+      // with has nothing there to fix, and "his hand" with two people it could be needs a name.
+      const soleUnit = unitIds.length === 1 ? unitIds[0]! : null;
+      const pageNo = soleUnit ? pageNumberOf(project, soleUnit) : null;
+      const absent = soleUnit && pageNo !== null ? absentFromPage(project, soleUnit, change) : [];
+      const adding = choice === "add";
+      const wanted = adding
+        ? absent.map((anchor) => anchor.name.trim())
+        : withoutThem
+          ? []
+          : wrote.split(/[,;&]|\band\b|\bund\b/i).map((name) => name.trim()).filter(Boolean);
+      if (!fresh && soleUnit && pageNo !== null && !withoutThem && !adding) {
+        if (absent.length > 0) {
+          return askFor(
+            "people",
+            "personNotOnPage",
+            [
+              { id: "add", label: `Add them to page ${pageNo}` },
+              { id: "here", label: "They're already there" },
+              { id: "skip", label: "Leave the page as it is" },
+            ],
+            { names: absent.map((anchor) => anchor.name.trim()).join(" and "), n: pageNo },
+          );
+        }
+        const either = wanted.length === 0 ? ambiguousPerson(project, soleUnit, change) : null;
+        if (either) {
+          return askFor("people", "whichName", either.map((anchor) => ({ id: anchor.name.trim(), label: anchor.name.trim() })));
+        }
+      }
       const resolved = new Map<string, Anchor>();
       for (const name of wanted) {
         const hit = anchorByName(name, project.anchors);
@@ -785,7 +818,13 @@ export const DESIGN_COMMANDS: CommandDef[] = [
       if (!fresh && unknown.length > 0 && !withoutThem) {
         return askFor("people", "personNotInBook", [{ id: "none", label: "Draw them anyway" }], { names: unknown[0]! });
       }
-      const effect: CommandEffect = { kind: "redrawPage", unitIds, instruction: change, ...(fresh ? { mode: "new" as const } : {}) };
+      // A "his"/"her" the reader just said who they meant gets the name, so the picture
+      // worker is not left to guess between the people on the page.
+      const instruction =
+        !fresh && wanted.length > 0 && resolved.size > 0 && speaksOfSomeoneUnnamed(project, change)
+          ? `${change} (this is about ${[...resolved.values()].map((anchor) => anchor.name.trim()).join(" and ")})`
+          : change;
+      const effect: CommandEffect = { kind: "redrawPage", unitIds, instruction, ...(fresh ? { mode: "new" as const } : {}) };
       const added = fresh ? [] : [...resolved.keys()].filter((id) => unitIds.some((unit) => !castOnPage(project, unit).includes(id)));
       if (added.length > 0) {
         return {

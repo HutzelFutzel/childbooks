@@ -80,12 +80,43 @@ export interface UsageEvent {
  */
 export const NON_BILLABLE_STEPS = NON_BILLABLE_GENERATION_STEPS;
 
+/** One provider call that failed: enough to tell which step broke, and why. */
+export interface CallFailure {
+  step?: string;
+  provider: ProviderId;
+  model: string;
+  status?: number;
+  error: string;
+  durationMs: number;
+}
+
 /** Provider-call counters collected alongside usage events (incl. failures). */
 export interface CallStats {
   /** Every provider HTTP attempt made inside the scope (incl. retries). */
   calls: number;
   /** Attempts that failed: non-2xx, network error, or timeout. */
   failures: number;
+  /** The first few of those failures, kept so a run's log says what went wrong. */
+  failed?: CallFailure[];
+}
+
+const FAILURES_KEPT = 6;
+
+function noteFailure(stats: CallStats, failure: CallFailure): void {
+  stats.failures += 1;
+  const kept = (stats.failed ??= []);
+  if (kept.length < FAILURES_KEPT) kept.push(failure);
+}
+
+/** Add one scope's counters (and the failures it kept) onto another's. */
+export function addCallStats(into: CallStats, from: CallStats | undefined): void {
+  if (!from) return;
+  into.calls += from.calls;
+  into.failures += from.failures;
+  for (const failure of from.failed ?? []) {
+    const kept = (into.failed ??= []);
+    if (kept.length < FAILURES_KEPT) kept.push(failure);
+  }
 }
 
 interface Collector {
@@ -140,8 +171,7 @@ export function withUsage<T>(
         const ledger = ledgerStorage.getStore();
         if (ledger) {
           ledger.events.push(...collector.events);
-          ledger.stats.calls += collector.stats.calls;
-          ledger.stats.failures += collector.stats.failures;
+          addCallStats(ledger.stats, collector.stats);
         }
         throw err;
       }
@@ -199,6 +229,14 @@ export function runWithCarriedCost<T>(carry: CarriedCost, fn: () => Promise<T>):
 export function withStep<T>(step: string, fn: () => Promise<T>): Promise<T> {
   nextStepId += 1;
   return stepStorage.run({ step, id: nextStepId }, fn);
+}
+
+/**
+ * Run `fn` with a text action's call parameters, for a text call made inside a
+ * larger action (the binding pass inside a page render). The innermost scope wins.
+ */
+export function withTextParams<T>(params: TextCallParams | undefined, fn: () => Promise<T>): Promise<T> {
+  return params && Object.keys(params).length > 0 ? paramsStorage.run(params, fn) : fn();
 }
 
 export interface BillableSplit {
@@ -398,6 +436,26 @@ async function acquireImageSlot(): Promise<() => void> {
   };
 }
 
+/** The provider's own words from an error body, short enough for a log line. */
+function providerMessage(body: string): string {
+  if (!body) return "";
+  try {
+    const json = JSON.parse(body) as { error?: { message?: unknown } | { message?: unknown }[]; message?: unknown };
+    const error = Array.isArray(json.error) ? json.error[0] : json.error;
+    const message = error?.message ?? json.message;
+    if (typeof message === "string") return message.slice(0, 300);
+  } catch {
+    // not JSON
+  }
+  return body.slice(0, 300);
+}
+
+function abortReason(signal: AbortSignal): string {
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error) return reason.name === "TimeoutError" ? "its deadline passed" : reason.message || reason.name;
+  return typeof reason === "string" && reason ? reason : "aborted";
+}
+
 /** Did the request end because a deadline or an abort signal gave up on it? */
 function isGivenUp(err: unknown): boolean {
   const name = (err as { name?: string } | null)?.name;
@@ -439,11 +497,34 @@ export async function meteredFetch(url: string, init?: RequestInit): Promise<Res
   const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   if (provider && collector) collector.stats.calls += 1;
   const startedAt = Date.now();
+  const failed = (error: string, status?: number) => {
+    if (!provider) return;
+    const failure: CallFailure = {
+      ...(stepStorage.getStore()?.step ? { step: stepStorage.getStore()!.step } : {}),
+      provider,
+      model: modelFromRequestBody(init) ?? modelFromGeminiUrl(url) ?? "unknown",
+      ...(status !== undefined ? { status } : {}),
+      error,
+      durationMs: Date.now() - startedAt,
+    };
+    if (collector) noteFailure(collector.stats, failure);
+    console.warn(
+      `[provider] ${failure.provider} ${failure.model}${failure.step ? ` (${failure.step})` : ""} failed after ${Math.round(failure.durationMs / 100) / 10}s: ${error}`,
+    );
+  };
   let res: Response;
   try {
     res = await fetch(url, { ...init, signal });
   } catch (err) {
-    if (provider && collector) collector.stats.failures += 1;
+    failed(
+      timeout.aborted
+        ? `no answer within ${Math.round(timeoutMs / 1000)}s`
+        : init?.signal?.aborted
+          ? `stopped by the caller (${abortReason(init.signal)})`
+          : err instanceof Error
+            ? err.message
+            : String(err),
+    );
     // A generation that ran until WE gave up on it was most likely still
     // invoiced. Book a nominal image so the attempt is not free on paper.
     if (provider && collector && imageGeneration && isGivenUp(err)) {
@@ -461,9 +542,12 @@ export async function meteredFetch(url: string, init?: RequestInit): Promise<Res
     release?.();
   }
   const durationMs = Date.now() - startedAt;
+  if (!res.ok) {
+    const body = await res.clone().text().catch(() => "");
+    failed(`${res.status} ${providerMessage(body)}`.trim(), res.status);
+  }
   try {
     if (provider && collector) {
-      if (!res.ok) collector.stats.failures += 1;
       const contentType = res.headers.get("content-type") ?? "";
       // Only a SUCCESSFUL response describes work the provider will invoice us
       // for. An error body still parses as JSON, and the OpenAI image branch

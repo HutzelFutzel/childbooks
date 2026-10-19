@@ -79,6 +79,7 @@ import {
   singleSubjectEdit,
   type ResolvedEditOp,
 } from "./intentResolve";
+import { errorForLog } from "../errors";
 import {
   growToMinPartSide,
   locateAndCountSubjects,
@@ -298,8 +299,11 @@ export interface IllustrationRunOptions {
 /** An edit that had to stay in place could not be done there. */
 export class InPlaceEditError extends Error {
   readonly name = "InPlaceEditError";
-  constructor(message = IN_PLACE_EDIT_FAILED) {
-    super(message);
+  /** Why, for logs; the message stays the one the studio recognizes. */
+  readonly reason?: string;
+  constructor(reason?: string) {
+    super(IN_PLACE_EDIT_FAILED);
+    this.reason = reason;
   }
 }
 
@@ -480,6 +484,18 @@ export function signalUntil(
   if (remaining <= 0) return AbortSignal.abort("Quality-control budget expired");
   const timeout = AbortSignal.timeout(remaining);
   return parent ? AbortSignal.any([parent, timeout]) : timeout;
+}
+
+/**
+ * A helper call an edit waits on (who the change means, where a subject
+ * stands, which part to repaint) answers in seconds. One that has not after
+ * this long is not going to, and the provider's own timeout is minutes: the
+ * reader would wait all of it for the same failure.
+ */
+export const HELPER_CALL_MS = 45_000;
+
+function helperSignal(signal: AbortSignal | undefined): AbortSignal {
+  return signalUntil(signal, Date.now() + HELPER_CALL_MS);
 }
 
 function tunedReferenceLimit(
@@ -682,6 +698,12 @@ async function bindAndRepairPage(args: {
     );
   } catch (error) {
     if (signal?.aborted) throw error;
+    // Visible on purpose: a page saved without positions sends every later
+    // in-place edit to look for its subjects again.
+    console.warn(
+      `[illustration] the subjects on this page could not be located (${anchors.map((a) => a.name).join(", ")}), so it is saved without their positions:`,
+      errorForLog(error),
+    );
     return { image, depicted: [] };
   }
 
@@ -1000,13 +1022,17 @@ async function trySurgicalModifyOne(args: {
       editedMime: result.mimeType,
       maskBase64: mask.base64,
     });
-    return composited.base64 ? { base64: composited.base64, mimeType: composited.mimeType } : null;
+    if (!composited.base64) {
+      console.warn("[illustration] in-place change to " + targetAnchor.name + (part ? " (" + part + ")" : "") + " came back empty");
+      return null;
+    }
+    return { base64: composited.base64, mimeType: composited.mimeType };
   } catch (error) {
     if (signal?.aborted) throw error;
     // Falling back is intended, but never silent: this is where an in-place failure comes from.
     console.warn(
       "[illustration] in-place change to " + targetAnchor.name + (part ? " (" + part + ")" : "") + " failed:",
-      error instanceof Error ? error.message : error,
+      errorForLog(error),
     );
     return null;
   }
@@ -1191,7 +1217,7 @@ async function locateSubjectsNow(args: {
         model: model.id,
         providerId: model.provider,
         prompts: env.prompts,
-        signal,
+        signal: helperSignal(signal),
       }),
     );
     return anchors.flatMap((a) => {
@@ -1200,6 +1226,10 @@ async function locateSubjectsNow(args: {
     });
   } catch (error) {
     if (signal?.aborted) throw error;
+    console.warn(
+      `[illustration] could not locate ${anchors.map((a) => a.name).join(", ")} for an in-place change:`,
+      errorForLog(error),
+    );
     return [];
   }
 }
@@ -1243,7 +1273,7 @@ async function narrowToPart(args: {
         model: model.id,
         providerId: model.provider,
         prompts: env.prompts,
-        signal,
+        signal: helperSignal(signal),
       }),
     );
     if (!found || !found.part) return whole;
@@ -1253,6 +1283,7 @@ async function narrowToPart(args: {
     return { box: growToMinPartSide(found.box), part: found.part };
   } catch (error) {
     if (signal?.aborted) throw error;
+    console.warn(`[illustration] could not narrow the change to part of ${anchor.name}; changing all of them:`, errorForLog(error));
     return whole;
   }
 }
@@ -1613,17 +1644,18 @@ async function renderPage(
           model: intentModel.id,
           providerId: intentModel.provider,
           prompts: env.prompts,
-          signal: options.signal,
+          signal: helperSignal(options.signal),
         }),
       );
     } catch (e) {
       if (e instanceof IntentAmbiguousError) throw e;
+      if (options.signal?.aborted) throw e;
       // Degrading is intentional (substring heuristics still work), but never
       // silent: a persistent resolver failure (bad model id, quota) would
       // otherwise quietly worsen every edit with no trace to debug from.
       console.warn(
         "[illustration] edit-intent resolution failed; falling back to substring heuristics:",
-        e instanceof Error ? e.message : e,
+        errorForLog(e),
       );
       editOps = null;
     }
@@ -1962,6 +1994,14 @@ async function renderPage(
         signal: options.signal,
       });
       depictedForEdit = [...prevDepicted, ...located];
+      const lost = missing.filter((a) => !located.some((d) => d.anchorId === a.id));
+      // Nothing to change in place without knowing where they are: stop now,
+      // before any picture is paid for.
+      if (lost.length > 0 && options.inPlaceOnly) {
+        const reason = `could not find ${lost.map((a) => a.name).join(", ")} on the page`;
+        console.warn(`[illustration] in-place change stopped: ${reason}`);
+        throw new InPlaceEditError(reason);
+      }
     }
     const structured = await tryStructuredEdit({
       project,
@@ -1984,7 +2024,10 @@ async function renderPage(
     // The model can change one spot and the edit names a subject, yet the spot
     // could not be changed. Redrawing the whole picture would alter what the
     // reader never asked to touch, so say so instead.
-    if (options.inPlaceOnly) throw new InPlaceEditError();
+    if (options.inPlaceOnly) {
+      console.warn("[illustration] in-place change stopped: the change could not be made in place");
+      throw new InPlaceEditError("the change could not be made in place");
+    }
   }
 
   const configuredReferenceLimit = Math.min(

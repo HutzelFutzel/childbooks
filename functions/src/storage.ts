@@ -9,6 +9,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { logger } from "firebase-functions/v2";
 import sharp from "sharp";
+import { PICTURE_FILE_MISSING } from "../../books-frontend/src/core/pipeline/pictureFileMessage";
 import {
   BLOB_VARIANTS,
   BLOB_VARIANT_MIME,
@@ -184,10 +185,42 @@ export interface UploadBlobOptions {
   variants?: boolean;
 }
 
+/**
+ * A picture the book lists whose file is not in storage. Thrown instead of the
+ * raw "No such object: bucket/path" so the reader gets a sentence they can act
+ * on; the blob id stays on the error (and in the log) for whoever debugs it.
+ */
+export class BlobMissingError extends Error {
+  readonly name = "BlobMissingError";
+  constructor(
+    readonly blobId: string,
+    readonly storagePath: string,
+  ) {
+    super(PICTURE_FILE_MISSING);
+  }
+}
+
+function isObjectMissing(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: unknown; message?: unknown };
+  return e.code === 404 || (typeof e.message === "string" && /No such object/i.test(e.message));
+}
+
+/** Download a file, turning "it is not there" into a {@link BlobMissingError}. */
+async function downloadFile(file: ReturnType<ReturnType<typeof blobBucket>["file"]>, id: string): Promise<Buffer> {
+  try {
+    const [buf] = await file.download();
+    return buf;
+  } catch (err) {
+    if (!isObjectMissing(err)) throw err;
+    logger.warn("[storage] a picture file the book lists is missing", { blobId: id, path: file.name });
+    throw new BlobMissingError(id, file.name);
+  }
+}
+
 /** Download a blob's raw bytes. */
 export async function downloadBlob(uid: string, id: string): Promise<Buffer> {
-  const [buf] = await blobBucket().file(blobPath(uid, id)).download();
-  return buf;
+  return downloadFile(blobBucket().file(blobPath(uid, id)), id);
 }
 
 /** Download a blob as base64 with its stored content type (defaults to PNG). */
@@ -196,7 +229,7 @@ export async function downloadBlobBase64(
   id: string,
 ): Promise<{ base64: string; mimeType: string }> {
   const file = blobBucket().file(blobPath(uid, id));
-  const [buf] = await file.download();
+  const buf = await downloadFile(file, id);
   let mimeType = "image/png";
   try {
     const [meta] = await file.getMetadata();

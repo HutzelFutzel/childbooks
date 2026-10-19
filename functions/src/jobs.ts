@@ -57,12 +57,13 @@ import {
   runWithSpendLedger,
   withStep,
   withUsage,
+  addCallStats,
   type CallStats,
   type CarriedCost,
   type SpendLedger,
   type UsageEvent,
 } from "./usage";
-import { meterAndSettle } from "./actionRun";
+import { errorText, meterAndSettle } from "./actionRun";
 import { featureAllowedForUser } from "./plans";
 import { ensureAfford, estimateForUser, referenceGroupFor, referenceLimitsForAction } from "./sparks";
 import { quoteUnitKey } from "../../books-frontend/src/core/billing/generationQuote";
@@ -89,7 +90,7 @@ import {
   type GenerationTuningConfig,
 } from "../../books-frontend/src/core/config/generationTuning";
 import { ALL_SECRETS } from "./secrets";
-import { downloadBlob, downloadPublicBase64, ensureAdmin, uploadBlob } from "./storage";
+import { BlobMissingError, downloadBlob, downloadPublicBase64, ensureAdmin, uploadBlob } from "./storage";
 import { applyCustomStyleToProject } from "./customStyles";
 import { captureStyleCover } from "./styleShowcase";
 import { deleteLikenessPhotoForSubject, hasLikenessPhotoForSubject, loadLikenessPhotosForSubject } from "./likeness";
@@ -127,7 +128,7 @@ import {
   renderAnchor,
   type AnchorRender,
 } from "../../books-frontend/src/core/pipeline/anchorRun";
-import { renderIllustration } from "../../books-frontend/src/core/pipeline/illustrationRun";
+import { InPlaceEditError, renderIllustration } from "../../books-frontend/src/core/pipeline/illustrationRun";
 import { signalUntil } from "../../books-frontend/src/core/pipeline/illustrationRun";
 import { generateScreenplay } from "../../books-frontend/src/core/pipeline/screenplay";
 import {
@@ -929,6 +930,15 @@ async function readDeps(uid: string, jobId: string, depIds: string[]): Promise<T
   return snaps.filter((s) => s.exists).map((s) => s.data() as TaskDoc);
 }
 
+/**
+ * An edit that could not stay in place, or a saved picture that is gone: the
+ * same render would end the same way, so a free recovery pass only makes the
+ * reader wait minutes longer for the same answer.
+ */
+function failsTheSameAgain(cause: unknown): boolean {
+  return cause instanceof InPlaceEditError || cause instanceof BlobMissingError;
+}
+
 async function markTaskError(
   taskRef: DocumentReference,
   claimToken: string,
@@ -938,15 +948,25 @@ async function markTaskError(
   // Record the provider failure class alongside the message so the studio can
   // describe it properly instead of relaying a raw provider string.
   const kind = cause instanceof ProviderError ? cause.kind : undefined;
+  const final = failsTheSameAgain(cause);
   return db().runTransaction(async (tx) => {
     const snap = await tx.get(taskRef);
     if (!snap.exists) return false;
     const task = snap.data() as TaskDoc;
     if (isTerminal(task.status) || task.claimToken !== claimToken) return false;
+    logger.warn("[fan] task failed", {
+      jobId: task.jobId,
+      taskId: task.id,
+      error: message,
+      ...(cause !== undefined ? { cause: errorText(cause) } : {}),
+      ...(kind ? { errorKind: kind } : {}),
+      final,
+    });
     tx.update(taskRef, {
       status: "error",
       error: message,
       ...(kind ? { errorKind: kind } : {}),
+      ...(final ? { errorFinal: true } : {}),
       claimedBy: null,
       claimToken: null,
       claimedUntil: 0,
@@ -1092,17 +1112,18 @@ function recoveryApplies(job: AnyJob): boolean {
 async function retryFailedTasks(ref: DocumentReference, uid: string, kind: JobKind): Promise<void> {
   const all = (await tasksCol(uid, ref.id).get()).docs.map((d) => d.data() as TaskDoc);
   const failed = all.filter((t) => t.status === "error");
-  if (failed.length === 0) {
+  const worthRetrying = failed.filter((t) => !t.errorFinal);
+  if (worthRetrying.length === 0) {
     // Nothing to retry, so close the job properly. Clearing only the email
     // here left `recovering` set and the job open forever.
     await forceFinalize(ref, uid);
     return;
   }
   const statusById = new Map(all.map((t) => [t.id, t.status]));
-  const retrying = new Set(failed.map((t) => t.id));
+  const retrying = new Set(worthRetrying.map((t) => t.id));
   // A task whose dependency is gone, and is not itself being retried, can
   // never become ready. Leave it failed so the wave doesn't sit pending.
-  const canRetry = failed.filter((t) =>
+  const canRetry = worthRetrying.filter((t) =>
     t.dependsOn.every((id) => statusById.get(id) === "done" || retrying.has(id)),
   );
   if (canRetry.length === 0) {
@@ -1118,6 +1139,7 @@ async function retryFailedTasks(ref: DocumentReference, uid: string, kind: JobKi
       errorKind: null,
       lastError: null,
       lastErrorKind: null,
+      errorFinal: null,
       claimedBy: null,
       claimToken: null,
       claimedUntil: 0,
@@ -1544,10 +1566,9 @@ async function runImageTask(args: {
     return rendered;
   });
   const events = [...(args.priorUsage?.events ?? []), ...renderEvents];
-  const stats: CallStats = {
-    calls: renderStats.calls + (args.priorUsage?.stats.calls ?? 0),
-    failures: renderStats.failures + (args.priorUsage?.stats.failures ?? 0),
-  };
+  const stats: CallStats = { calls: 0, failures: 0 };
+  addCallStats(stats, args.priorUsage?.stats);
+  addCallStats(stats, renderStats);
   const isEdit = Boolean(req.composite || req.maskBlobId);
   const renderKind = isEdit ? "edit" : "fresh";
   const estimateProfile = estimateProfileForAction({
@@ -2401,6 +2422,7 @@ async function recordFailedAttempt(args: {
       outcome: "failed",
       errorCode:
         args.err instanceof ProviderError ? args.err.kind : isAbortError(args.err) ? "aborted" : "error",
+      ...(args.err ? { errorMessage: errorText(args.err) } : {}),
     });
     const imageCalls = ledger.events.filter((e) => e.modality === "image").length;
     if (!args.delivered && (metered.costUsd > 0 || imageCalls > 0)) {

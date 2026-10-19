@@ -515,6 +515,8 @@ export interface TaskDoc {
   /** Server-written: what the last attempt that was handed back to the queue died of. */
   lastError?: string;
   lastErrorKind?: ProviderErrorKind;
+  /** Server-written: the error would come back the same on another try, so no recovery pass runs it. */
+  errorFinal?: boolean;
   updatedAt: number;
 }
 

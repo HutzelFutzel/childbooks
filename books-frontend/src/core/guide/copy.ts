@@ -51,6 +51,7 @@ export const GUIDE_LINE_KEYS = [
   "pageAttention",
   "coverAttention",
   "pageKeepFailed",
+  "pageFileMissing",
   "printReady",
   "accountFirst",
   "topUp",
@@ -101,6 +102,8 @@ export const GUIDE_LINE_KEYS = [
   "pagesSkipped",
   "askWhichPage",
   "personNotInBook",
+  "personNotOnPage",
+  "leftAsIs",
   "openedView",
   "removeMentionsAsk",
   "cannotDoThat",
@@ -253,6 +256,8 @@ export const DEFAULT_GUIDE_COPY: Record<GuideCopyKey, string> = {
   coverAttention: "The cover needs another go.",
   pageKeepFailed:
     "I couldn't change just that on page {n} without touching the rest, so I left the page as it was. I can draw it again from scratch instead.",
+  pageFileMissing:
+    "The saved picture for page {n} is missing, so I couldn't change it. I can draw the page again from scratch instead.",
   printReady: "It's ready to print.",
   accountFirst: "Create an account first so this book is saved to you. You'll come straight back here.",
   topUp: "That needs a few more Sparks than you have.",
@@ -302,6 +307,8 @@ export const DEFAULT_GUIDE_COPY: Record<GuideCopyKey, string> = {
   pagesSkipped: "The book doesn't have {what}, so I left it out.",
   askWhichPage: "Which page should I change?",
   personNotInBook: "I don't see {names} in your book, so I can't copy how they look. Should I draw them anyway, as a new face?",
+  personNotOnPage: "{names} isn't drawn on page {n} yet. Should I add them there first?",
+  leftAsIs: "Okay, I left it as it is.",
   redoBlocked: "That can't be put back on its own: {what} changed again since. You can ask for it again.",
   undoConflict: "{what} changed again after that, so undoing it could take newer changes back too. How should I handle it?",
   openedView: "It's open on the right.",
@@ -459,6 +466,9 @@ export const GUIDE_COPY_HELP: Partial<Record<GuideCopyKey, string>> = {
   pagesSkipped: "Added after a change when some of the pages the parent named do not exist. {what} names them.",
   askWhichPage: "Said right before the page buttons when a picture change was meant for the pages in view but not for one of them in particular.",
   personNotInBook: "Said right before the button that draws a picture anyway when the parent asked to add somebody the book does not have. {names} is who.",
+  personNotOnPage:
+    "Said right before three buttons (add them, they're already there, leave it) when a change speaks of somebody's hand, hair or the like and that person is not on the page. {names} is who, {n} the page. Keep it a question.",
+  leftAsIs: "Said when the parent chose to leave a picture as it is instead of changing it.",
   redoBlocked: "Said when a change that was undone can't be put back because the same place changed since. {what} names the pages.",
   undoConflict: "Said above the card that appears when an older change is undone but something newer touched the same page. {what} names the pages.",
   undoBoth: "Button on the undo-conflict card: take back the newer change too.",
@@ -546,6 +556,8 @@ export const GUIDE_COPY_HELP: Partial<Record<GuideCopyKey, string>> = {
   coverAttention: "Said right before the retry button when a redraw of a cover failed.",
   pageKeepFailed:
     "Said instead of the line above when a small change could not be made in place and the page was left as it was. {n} is the page. The button then draws the page again from scratch.",
+  pageFileMissing:
+    "Said instead of the line above when the page's saved picture file is gone, so no change could be made to it. {n} is the page. The button then draws the page again from scratch.",
   printReady: "Said right before the order button, after every page is drawn.",
   hardcoverShort:
     "Said right before the hardcover-or-softcover choice when a story is too short for a hardcover. {count} is the story's pages, {min} the hardcover minimum. Keep it a question: the two buttons sit directly under it.",

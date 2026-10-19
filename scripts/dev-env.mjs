@@ -5,7 +5,7 @@
  * file as the single source of truth); re-exported here so the dev scripts don't
  * reach into a secrets tool for them.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -69,6 +69,69 @@ export function apiBaseUrl() {
 export function storageEmulatorEnabled(fileEnv = {}) {
   const raw = process.env.USE_STORAGE_EMULATOR ?? fileEnv.USE_STORAGE_EMULATOR ?? "";
   return raw.trim().toLowerCase() === "true";
+}
+
+/** Parse a dotenv file into `{KEY: value}`; a missing file is `{}`. */
+function readDotenv(path) {
+  if (!existsSync(path)) return {};
+  const out = {};
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (/^\s*#/.test(line)) continue;
+    const m = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/);
+    if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, "");
+  }
+  return out;
+}
+
+/**
+ * The value Next.js will give the dev server for `key`: the process environment,
+ * then `.env.development.local`, `.env.local`, `.env.development`, `.env` — the
+ * first one that defines it wins (an empty value still counts as defined).
+ */
+function frontendDevEnv(key) {
+  if (process.env[key] !== undefined) return process.env[key];
+  const dir = join(ROOT, "books-frontend");
+  for (const file of [".env.development.local", ".env.local", ".env.development", ".env"]) {
+    const values = readDotenv(join(dir, file));
+    if (key in values) return values[key];
+  }
+  return undefined;
+}
+
+/**
+ * Whether the browser will read Storage from the emulator. Mirrors
+ * `useEmulators()` and `useStorageEmulator()` in books-frontend/src/lib/firebase.ts:
+ * the storage flag only counts while the other emulators are on, which they are
+ * in dev unless explicitly switched off.
+ */
+export function frontendStorageEmulatorEnabled() {
+  const all = (frontendDevEnv("NEXT_PUBLIC_USE_FIREBASE_EMULATORS") ?? "").trim().toLowerCase();
+  if (all === "false") return false;
+  return (frontendDevEnv("NEXT_PUBLIC_USE_STORAGE_EMULATOR") ?? "").trim().toLowerCase() === "true";
+}
+
+/**
+ * Null when the browser and the backend agree on which Storage bucket to use,
+ * otherwise a message saying how they disagree.
+ *
+ * They must agree: a picture saved by one side to the emulator is invisible to
+ * the other side reading the real bucket (and the reverse), which shows up as a
+ * page that displays but cannot be edited ("No such object: …/blobs/…").
+ */
+export function storageFlagMismatch(fileEnv = {}) {
+  const backend = storageEmulatorEnabled(fileEnv);
+  const frontend = frontendStorageEmulatorEnabled();
+  if (backend === frontend) return null;
+  const word = (on) => (on ? "the Storage EMULATOR" : "the REAL bucket");
+  return (
+    `The backend will use ${word(backend)} but the browser will use ${word(frontend)}.\n` +
+    "   Pictures saved by one would be invisible to the other.\n" +
+    "   Make these two agree:\n" +
+    `     USE_STORAGE_EMULATOR              (functions/.env.local)           → ${backend}\n` +
+    `     NEXT_PUBLIC_USE_STORAGE_EMULATOR  (books-frontend/.env.development) → ${frontend}\n` +
+    "   Keep both \"true\" to stay on local, throwaway storage. \"false\" is the PRODUCTION bucket:\n" +
+    "   this repo has one Firebase project, so dev files would land beside real customers' pictures."
+  );
 }
 
 /**

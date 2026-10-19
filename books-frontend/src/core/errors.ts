@@ -56,6 +56,17 @@ export class ProviderError extends Error {
   }
 }
 
+/** An error with the provider's status and its own words, for one log line (not for readers). */
+export function errorForLog(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const parts = [error.message || error.name];
+  if (error instanceof ProviderError) {
+    parts.push(`[${error.provider ? `${error.provider} ` : ""}${error.kind}${error.status ? ` ${error.status}` : ""}]`);
+    if (error.details) parts.push(`— ${error.details.slice(0, 300)}`);
+  }
+  return parts.join(" ");
+}
+
 /** Whether an error represents a cancelled/aborted request (no toast needed). */
 export function isAbortError(err: unknown): boolean {
   if (err instanceof ProviderError) return err.kind === "aborted";

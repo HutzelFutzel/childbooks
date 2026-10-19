@@ -16,7 +16,8 @@ import {
   samplePixels,
 } from "./imaging";
 import { downloadBlobBase64, uploadBlob } from "./storage";
-import { withStep } from "./usage";
+import { withStep, withTextParams } from "./usage";
+import type { TextCallParams } from "../../books-frontend/src/core/config/modelConfig";
 import { getImageMasksConfig } from "./appConfig";
 import { measureImageMaskPng } from "./imageMasks";
 import type { FrameInsets } from "../../books-frontend/src/core/book/subjectInset";
@@ -93,6 +94,13 @@ export function backendPipelineEnv(
   imageAction: ImageActionId = "pageIllustration",
 ): PipelineEnv {
   const actionTuning = generationTuningFor(generationTuning, imageAction);
+  const binding = (models.bindingModel ?? models.textModel).params;
+  const stepParams: Record<string, TextCallParams | undefined> = {
+    binding,
+    embedded: binding,
+    intent: (models.intentModel ?? models.textModel).params,
+    localize: models.textModel.params,
+  };
   return {
     models,
     imageAction,
@@ -117,7 +125,9 @@ export function backendPipelineEnv(
       );
       return small ? { base64: bufToB64(small.buf), mimeType: small.mimeType } : image;
     },
-    runStep: (step, fn) => withStep(step, fn),
+    // A text call inside a render runs with its own action's parameters (the
+    // binding pass's "low" reasoning), not the provider's slow default.
+    runStep: (step, fn) => withStep(step, () => withTextParams(stepParams[step], fn)),
     composite: {
       async compositeMaskedRegion(input) {
         const out = await compositeMaskedRegion({

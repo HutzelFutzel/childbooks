@@ -36,7 +36,7 @@ import { COVER_BACK_ID, COVER_FRONT_ID, type Project, type ScreenplayDoc } from 
 import { createVersionTree } from "../books-frontend/src/core/versioning";
 import { bookBusyOf, busyReason } from "../books-frontend/src/core/guide/bookBusy";
 import { changesTheScene } from "../books-frontend/src/core/pipeline/editScope";
-import { anchorsNamedIn, castOnPage } from "../books-frontend/src/core/book/pageCast";
+import { anchorsNamedIn, castOnPage, withPageCast } from "../books-frontend/src/core/book/pageCast";
 import { restoreCastOf, snapshotForFields } from "../books-frontend/src/core/guide/agent/restore";
 import { GUIDE_COMMANDS } from "../books-frontend/src/core/guide/agent/registry";
 import { resolvePaperColor } from "../books-frontend/src/core/guide/agent/commands/design";
@@ -433,6 +433,38 @@ export function checkGuideHistory(): CheckResult {
   const noReference = edit.run(cast, { change: "add Bella", people: "none" }, ctxFor([pageIds[1]!]));
   check(noReference.kind === "effect", "drawing noReference a reference goes ahead when the reader says so");
   check(edit.run(cast, { change: "make the sky pink", people: "" }, ctxFor([pageIds[1]!])).kind === "effect", "a change that names nobody leaves the page's people alone");
+
+  // --- Who a change is about is settled before anything is drawn ---------------------------
+  const person = (id: string, name: string, description: string) => ({ id, name, type: "character", description, include: true });
+  const people = [
+    person("p-hugo", "Hugo", "a small boy with a red hat"),
+    person("p-max", "Max", "a tall boy"),
+    person("p-mia", "Mia", "a girl with a yellow coat"),
+  ];
+  const trio = { ...drawnBook, anchors: people } as unknown as Project;
+  const pageOne = pageIds[1]!;
+  const hugoOnly = withPageCast(trio, [pageOne], ["p-hugo"]);
+  const hugoMax = withPageCast(trio, [pageOne], ["p-hugo", "p-max"]);
+  const hugoMia = withPageCast(trio, [pageOne], ["p-hugo", "p-mia"]);
+  const absent = edit.run(hugoOnly, { change: "fix Max's hand" }, ctxFor([pageOne]));
+  check(absent.kind === "ask" && absent.arg === "people" && absent.options.map((o) => o.id).join() === "add,here,skip", "somebody named but not on the page is asked about before any drawing");
+  const absentLoose = edit.run(hugoOnly, { change: "fix maxs hand", people: "Max" }, ctxFor([pageOne]));
+  check(absentLoose.kind === "ask" && absentLoose.arg === "people", "the same holds when the model passes the name along");
+  const addThem = edit.run(hugoOnly, { change: "fix Max's hand", people: "add" }, ctxFor([pageOne]));
+  check(
+    addThem.kind === "write" && addThem.then?.kind === "redrawPage" && castOnPage(addThem.project, pageOne).includes("p-max"),
+    "answering add puts them on the page, then redraws it",
+  );
+  check(edit.run(hugoOnly, { change: "fix Max's hand", people: "here" }, ctxFor([pageOne])).kind === "effect", "they are already there goes ahead without adding anybody");
+  check(edit.run(hugoOnly, { change: "fix Max's hand", people: "skip" }, ctxFor([pageOne])).kind === "noop", "leaving it as it is changes nothing");
+  check(edit.run(hugoOnly, { change: "fix Hugo's hand" }, ctxFor([pageOne])).kind === "effect", "somebody who is on the page is fixed straight away");
+  const either = edit.run(hugoMax, { change: "fix his hand" }, ctxFor([pageOne]));
+  check(either.kind === "ask" && either.arg === "people" && either.options.map((o) => o.id).join() === "Hugo,Max", "his hand with two boys on the page asks which one");
+  check(edit.run(hugoMia, { change: "fix his hand" }, ctxFor([pageOne])).kind === "effect", "his hand with one boy and one girl needs no question");
+  check(edit.run(hugoMax, { change: "fix Hugo's hand, his hat too" }, ctxFor([pageOne])).kind === "effect", "a named person settles who his is");
+  const picked = edit.run(hugoMax, { change: "fix his hand", people: "Max" }, ctxFor([pageOne]));
+  check(picked.kind === "effect" && picked.effect.kind === "redrawPage" && picked.effect.instruction.includes("Max"), "the answer is carried into what is drawn");
+  check(edit.run(hugoOnly, { change: "fix his hand" }, ctxFor([pageOne])).kind === "effect", "one person on the page is who it means");
 
   // --- Bubbles, shapes and the page's own words ----------------------------------------
   const shapesOf = (p: Project, id: string) =>

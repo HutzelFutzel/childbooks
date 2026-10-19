@@ -19,6 +19,7 @@ import { chatLocaleOf, useChatStudio } from "../../state/chatStudio";
 import { castAgesAskLine } from "../../core/guide/agent/requirements";
 import { readingAgeAskLine } from "../../core/guide/readingAge";
 import { IN_PLACE_EDIT_FAILED } from "../../core/pipeline/inPlaceMessage";
+import { PICTURE_FILE_MISSING } from "../../core/pipeline/pictureFileMessage";
 import type { ChatJourney, ChatWell } from "./useChatJourney";
 
 /** What a well is about, so a line can say which one it introduced. */
@@ -109,7 +110,14 @@ export function wellIntro(
     case "pageFix":
       return [
         {
-          key: well.error === IN_PLACE_EDIT_FAILED ? "pageKeepFailed" : well.page === 0 ? "coverAttention" : "pageAttention",
+          key:
+            well.error === IN_PLACE_EDIT_FAILED
+              ? "pageKeepFailed"
+              : well.error === PICTURE_FILE_MISSING && well.page !== 0
+                ? "pageFileMissing"
+                : well.page === 0
+                  ? "coverAttention"
+                  : "pageAttention",
           priority: "blocking",
           vars: { n: well.page },
         },

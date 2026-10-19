@@ -69,6 +69,7 @@ import { buildModifySubjectPrompt } from "../books-frontend/src/core/pipeline/il
 import { singleSubjectEdit } from "../books-frontend/src/core/pipeline/intentResolve";
 import { partOnSubject } from "../books-frontend/src/core/pipeline/localize";
 import { IN_PLACE_EDIT_FAILED } from "../books-frontend/src/core/pipeline/inPlaceMessage";
+import { PICTURE_FILE_MISSING } from "../books-frontend/src/core/pipeline/pictureFileMessage";
 import { renderTextPrompt } from "../books-frontend/src/core/prompts/render";
 import { resolvePromptsConfig } from "../books-frontend/src/core/prompts/context";
 import type { Anchor } from "../books-frontend/src/core/types";
@@ -1193,6 +1194,7 @@ const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "chang
   check(ask.user.includes("Arthur") && ask.user.includes("make Arthur's hair yellow"), "The part-finding prompt lost the subject or the change.");
 
   check(IN_PLACE_EDIT_FAILED.length > 0 && DEFAULT_GUIDE_COPY.pageKeepFailed.includes("{n}"), "The words for a change that could not stay in place are missing.");
+  check(PICTURE_FILE_MISSING.length > 0 && PICTURE_FILE_MISSING !== IN_PLACE_EDIT_FAILED && DEFAULT_GUIDE_COPY.pageFileMissing.includes("{n}"), "The words for a page whose saved picture is missing are absent, or the two failures share a message.");
 }
 
 // --- Typed pictures: the admin's cap on what starts without a tap -------------------------------

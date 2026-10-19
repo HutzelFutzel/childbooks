@@ -9,8 +9,14 @@ import type { ProviderId } from "../config/options";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import { withRetry } from "./retry";
+import { errorForLog } from "../errors";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderTextPrompt } from "../prompts/render";
+
+/** A failed vision call reads as "not found" to the callers, so the reason is told here. */
+function visionCallFailed(what: string, model: string, error: unknown): void {
+  console.warn(`[localize] ${what} (${model}) failed: ${errorForLog(error)}`);
+}
 
 const boxSchema = z.object({
   found: z.boolean(),
@@ -112,7 +118,8 @@ export async function locateSubjects(
         }),
       { signal: input.signal, retries: 1 },
     );
-  } catch {
+  } catch (error) {
+    visionCallFailed("locating subjects", input.model, error);
     return out; // all null → caller treats as "not localized"
   }
 
@@ -192,6 +199,8 @@ export async function locateAndCountSubjects(
     { role: "user" as const, content: user },
   ];
 
+  // A failure is thrown, not answered as "nobody found": the caller has to know
+  // the page's positions are missing, not that the page is empty.
   let res: z.infer<typeof bindingSchema>;
   try {
     res = await withRetry(
@@ -206,8 +215,9 @@ export async function locateAndCountSubjects(
         }),
       { signal: input.signal, retries: 1 },
     );
-  } catch {
-    return out;
+  } catch (error) {
+    visionCallFailed("binding pass", input.model, error);
+    throw error;
   }
 
   for (const entry of res.subjects) {
@@ -314,7 +324,8 @@ export async function locateEmbeddedObsolete(
         }),
       { signal: input.signal, retries: 1 },
     );
-  } catch {
+  } catch (error) {
+    visionCallFailed("finding stray copies of embedded subjects", input.model, error);
     return out;
   }
 
@@ -391,7 +402,8 @@ export async function countSheetPanels(input: CountSheetPanelsInput): Promise<nu
       { signal: input.signal, retries: 1 },
     );
     return Math.round(res.count);
-  } catch {
+  } catch (error) {
+    visionCallFailed("counting sheet panels", input.model, error);
     return null;
   }
 }
@@ -439,7 +451,8 @@ export async function locateSubject(input: LocateSubjectInput): Promise<SubjectB
         }),
       { signal: input.signal, retries: 1 },
     );
-  } catch {
+  } catch (error) {
+    visionCallFailed(`locating ${input.name}`, input.model, error);
     return null;
   }
 
@@ -481,7 +494,8 @@ export async function locateEditPart(
   let res: z.infer<typeof partSchema>;
   try {
     res = await requestEditPart(input);
-  } catch {
+  } catch (error) {
+    visionCallFailed(`finding the part of ${input.name} to change`, input.model, error);
     return null;
   }
   const box = sanitizeBox(res);

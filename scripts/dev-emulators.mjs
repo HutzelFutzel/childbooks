@@ -39,6 +39,7 @@ import {
   readEnvLocal,
   repairCredentials,
   storageEmulatorEnabled,
+  storageFlagMismatch,
   useRepoCredentials,
 } from "./dev-env.mjs";
 
@@ -48,6 +49,14 @@ if (process.argv.includes("--clear")) {
   rmSync(DATA, { recursive: true, force: true });
   console.log(`Cleared saved emulator data (${DATA}).`);
   process.exit(0);
+}
+
+const mismatch = storageFlagMismatch(readEnvLocal());
+if (mismatch) {
+  // Starting anyway would split the book across two buckets: pages that show
+  // but cannot be edited, found out minutes later in a job error.
+  console.error(`\n❌ Storage settings disagree.\n   ${mismatch}\n`);
+  process.exit(1);
 }
 
 const emulateStorage = storageEmulatorEnabled(readEnvLocal());

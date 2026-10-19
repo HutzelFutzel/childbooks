@@ -27,6 +27,7 @@ import {
   costGroupOf,
   recordUsage,
   splitBillable,
+  type CallFailure,
   type CallStats,
   type CostGroup,
   type UsageEvent,
@@ -48,6 +49,22 @@ import type { ResolvedImageGenerationOptions } from "../../books-frontend/src/co
 
 function isImageAction(action: string): action is ImageActionId {
   return (ALL_IMAGE_ACTION_IDS as string[]).includes(action);
+}
+
+/** An error in its own words for a run record or a log line, with the reason a pipeline error carries. */
+export function errorText(err: unknown): string {
+  if (!(err instanceof Error)) return String(err).slice(0, 500);
+  const reason = (err as { reason?: unknown }).reason;
+  return (typeof reason === "string" && reason ? `${err.message} (${reason})` : err.message || err.name).slice(0, 500);
+}
+
+/** " Failed calls: binding google:gemini-3.5-flash 400 …" for a log message, or "". */
+function failureSummary(failed: CallFailure[] | undefined): string {
+  if (!failed?.length) return "";
+  const lines = failed.map(
+    (f) => `${f.step ?? "call"} ${f.provider}:${f.model} after ${Math.round(f.durationMs / 1000)}s: ${f.error}`,
+  );
+  return ` Failed calls: ${lines.join("; ")}`;
 }
 
 /** What kind of request produced this run (drives the edit/fresh split). */
@@ -86,6 +103,8 @@ export interface ActionRunDoc {
     failures: number;
     byStep: Record<string, number>;
     durationMsByStep: Record<string, number>;
+    /** The first few failed provider calls: step, model, status and the provider's words. */
+    failed?: CallFailure[];
   };
   costUsd: {
     total: number;
@@ -112,6 +131,8 @@ export interface ActionRunDoc {
   durationMs: number;
   outcome: RunOutcome;
   errorCode?: string;
+  /** What the failed run ended with, in its own words. */
+  errorMessage?: string;
   tokens: number;
   generation?: {
     requested: Record<string, unknown>;
@@ -147,6 +168,7 @@ export interface MeterAndSettleArgs {
   startedAt: number;
   outcome?: RunOutcome;
   errorCode?: string;
+  errorMessage?: string;
   /** Models resolved for this run, keyed by role ("image", "text", …). */
   models?: Record<string, ModelSelection | undefined>;
   /** Latency bucket for the rolling window; skipped when absent. */
@@ -285,6 +307,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
         failures: args.stats?.failures ?? 0,
         byStep: totals.callsByStep,
         durationMsByStep: durationByStep(args.events),
+        ...(args.stats?.failed?.length ? { failed: args.stats.failed } : {}),
       },
       costUsd: {
         total: totals.totalUsd,
@@ -308,6 +331,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
       durationMs,
       outcome,
       ...(args.errorCode ? { errorCode: args.errorCode } : {}),
+      ...(args.errorMessage ? { errorMessage: args.errorMessage } : {}),
       tokens: totals.tokens,
       ...(args.generation
         ? {
@@ -329,7 +353,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
         source: args.source === "worker" ? "worker" : "backend",
         domain: "ai",
         event: `ai.${args.action}.failed`,
-        message: `AI action "${args.action}" (${args.kind}) failed${args.errorCode ? ` [${args.errorCode}]` : ""} after ${durationMs}ms.`,
+        message: `AI action "${args.action}" (${args.kind}) failed${args.errorCode ? ` [${args.errorCode}]` : ""} after ${durationMs}ms${args.errorMessage ? `: ${args.errorMessage}` : "."}${failureSummary(run.calls.failed)}`,
         uid: args.uid,
         projectId: args.projectId ?? null,
         jobId: args.jobId ?? null,
@@ -340,6 +364,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
           tier: args.tier ?? null,
           targetId: args.targetId ?? null,
           errorCode: args.errorCode ?? null,
+          errorMessage: args.errorMessage ?? null,
           models: run.models,
           calls: run.calls,
           costUsd: run.costUsd,
@@ -351,7 +376,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
         source: args.source === "worker" ? "worker" : "backend",
         domain: "ai",
         event: `ai.${args.action}.repaired`,
-        message: `AI action "${args.action}" succeeded with ${args.stats?.failures ?? 0} provider failure(s) and ${unbilled.length} quality-repair call(s) (${durationMs}ms).`,
+        message: `AI action "${args.action}" succeeded with ${args.stats?.failures ?? 0} provider failure(s) and ${unbilled.length} quality-repair call(s) (${durationMs}ms).${failureSummary(run.calls.failed)}`,
         uid: args.uid,
         projectId: args.projectId ?? null,
         jobId: args.jobId ?? null,
