@@ -5,9 +5,6 @@
  *
  * Each decision on its own panel:
  *
- * - **Rollout**: who gets the Chat studio. A release decision with a blast
- *   radius, so each mode is described by its effect on customers, and `off`
- *   also revokes an admin's own opt-in.
  * - **Facts**: what the Chat must know before it writes the story, and what it
  *   does when the reader never said it.
  * - **Wording**: what the guide says and what its controls are called, with a
@@ -18,9 +15,6 @@
  *   (`core/config/guideAgent.ts`); every field shows its effect from
  *   `GUIDE_AGENT_META`.
  *
- * The step flow's question playlist is kept on a fifth panel until the step
- * flow is deleted.
- *
  * What is NOT here: the models and prompts (Configuration → Models, Prompts)
  * and the price of a portrait (Sparks), so each kind of setting has one home.
  */
@@ -30,11 +24,8 @@ import { RotateCcw } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   createDefaultGuideExtraction,
-  describeGuideRollout,
-  GUIDE_ROLLOUT_MODES,
   type GuideConfig,
   type GuideExtractionConfig,
-  type GuideRolloutMode,
 } from "../../../core/config/guide";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Button } from "../../components/Button";
@@ -53,33 +44,8 @@ import { GuideFactsPanel } from "./guide/GuideFactsPanel";
 import { GuideHistoryPanel } from "./guide/GuideHistoryPanel";
 import { GuideTryPanel } from "./guide/GuideTryPanel";
 import { GuideStoryPanel } from "./guide/GuideStoryPanel";
-import { GuideStepFlowPanel } from "./guide/GuideStepFlowPanel";
 import { GuideWordingPanel } from "./guide/GuideWordingPanel";
 import { Section, TabIntro } from "./products/parts";
-
-/**
- * How each mode is described to whoever is about to pick it. Phrased as the
- * effect on customers, because "adminOnly" and "percentage" are names for the
- * mechanism and the question being answered is who ends up in the new studio.
- */
-const MODE_COPY: Record<GuideRolloutMode, { label: string; detail: string }> = {
-  off: {
-    label: "Off",
-    detail: "Nobody, including admins. Overrides an admin's own opt-in — the switch to reach for if the Chat is misbehaving.",
-  },
-  adminOnly: {
-    label: "Admins only",
-    detail: "Every customer stays on Steps. Admins switch per session with the toggle in the studio.",
-  },
-  percentage: {
-    label: "A share of customers",
-    detail: "A sticky slice of customers, picked by book so nobody switches flow mid-book. Admins still choose for themselves.",
-  },
-  on: {
-    label: "Everyone",
-    detail: "Every customer gets the Chat studio unless they explicitly ask for Steps.",
-  },
-};
 
 /** A 0–1 confidence as the percentage an admin is actually thinking in. */
 function percent(value: number): string {
@@ -174,10 +140,8 @@ const EXTRACTION_FIELDS: {
 ];
 
 type PanelId =
-  | "rollout"
   | "facts"
   | "story"
-  | "steps"
   | "persona"
   | "wording"
   | "skills"
@@ -191,12 +155,10 @@ type PanelId =
 
 const PANEL_GROUPS: { label: string; items: { id: PanelId; label: string }[] }[] = [
   {
-    label: "Release & Flow",
+    label: "Flow",
     items: [
-      { id: "rollout", label: "Rollout" },
       { id: "facts", label: "Facts" },
       { id: "story", label: "Story options" },
-      { id: "steps", label: "Step flow" },
     ],
   },
   {
@@ -234,7 +196,7 @@ export function GuideTab() {
   const [draft, setDraft] = useState<GuideConfig>(stored);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [panel, setPanel] = useState<PanelId>("rollout");
+  const [panel, setPanel] = useState<PanelId>("facts");
 
   // Follow the live document while the admin has no unsaved edits, so a change
   // made in another tab or by another owner shows up here instead of being
@@ -333,13 +295,6 @@ export function GuideTab() {
           exit={{ opacity: 0, y: -4 }}
           transition={{ duration: 0.16 }}
         >
-          {panel === "rollout" && (
-            <RolloutPanel
-              rollout={draft.rollout}
-              onChange={(rollout) => edit({ rollout })}
-              readOnly={readOnly}
-            />
-          )}
           {panel === "story" && (
             <GuideStoryPanel brief={draft.brief} onChange={(brief) => edit({ brief })} readOnly={readOnly} />
           )}
@@ -386,93 +341,9 @@ export function GuideTab() {
           )}
           {panel === "try" && <GuideTryPanel draft={draft} />}
           {panel === "history" && <GuideHistoryPanel dirty={dirty} readOnly={readOnly} />}
-          {panel === "steps" && (
-            <Section
-              title="Step flow questions"
-              hint="Only the step-based guide reads this. The Chat studio asks from the Facts panel."
-            >
-              <GuideStepFlowPanel
-                playlist={draft.playlist}
-                onChange={(playlist) => edit({ playlist })}
-                readOnly={readOnly}
-              />
-            </Section>
-          )}
         </motion.div>
       </AnimatePresence>
     </div>
-  );
-}
-
-function RolloutPanel({
-  rollout,
-  onChange,
-  readOnly,
-}: {
-  rollout: GuideConfig["rollout"];
-  onChange: (rollout: GuideConfig["rollout"]) => void;
-  readOnly: boolean;
-}) {
-  return (
-    <Section title="Who gets the Chat studio" hint={describeGuideRollout(rollout)}>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {GUIDE_ROLLOUT_MODES.map((mode) => {
-          const active = rollout.mode === mode;
-          const copy = MODE_COPY[mode];
-          const off = mode === "off";
-          return (
-            <button
-              key={mode}
-              type="button"
-              disabled={readOnly}
-              onClick={() => onChange({ ...rollout, mode })}
-              className={cn(
-                "rounded-xl2 px-4 py-3.5 text-left ring-1 ring-inset transition",
-                active
-                  ? off
-                    ? "bg-amber-50 ring-amber-300"
-                    : "bg-white shadow-soft ring-ink-900"
-                  : "bg-white ring-ink-100 hover:ring-ink-300",
-                readOnly && "cursor-default",
-              )}
-            >
-              <div className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "size-3.5 shrink-0 rounded-full ring-1 ring-inset transition",
-                    active ? (off ? "bg-amber-500 ring-amber-500" : "bg-ink-900 ring-ink-900") : "bg-white ring-ink-300",
-                  )}
-                />
-                <span className="text-sm font-semibold text-ink-900">{copy.label}</span>
-              </div>
-              <p className="mt-1 pl-5.5 text-xs leading-relaxed text-ink-500">{copy.detail}</p>
-            </button>
-          );
-        })}
-      </div>
-
-      {rollout.mode === "percentage" && (
-        <div className="grid gap-3 sm:grid-cols-[10rem_1fr] sm:items-start">
-          <Field label="Share of customers">
-            <Input
-              type="number"
-              min={0}
-              max={100}
-              value={rollout.percent}
-              onChange={(e) => {
-                const parsed = Number.parseInt(e.target.value, 10);
-                onChange({ ...rollout, percent: Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 0 });
-              }}
-            />
-          </Field>
-          <p className="text-[11px] leading-relaxed text-ink-400 sm:pt-8">
-            Each book is assigned a bucket from its own id, so a reader keeps the same flow on every visit and
-            raising this number only ever adds books. Lowering it does not pull a book out of the Chat studio
-            either, so a ramp is only reversible with <strong>Off</strong>.
-          </p>
-        </div>
-      )}
-    </Section>
   );
 }
 

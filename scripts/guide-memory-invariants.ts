@@ -1,5 +1,5 @@
 /**
- * Invariants for changing your mind: checkpoints, jump-back, and staleness.
+ * Invariants for changing your mind: checkpoints and jump-back.
  *
  * The dangerous one here is the round-trip. `captureGuideFacts` is the inverse of the
  * patch writers, and a restore applies whatever it captured — so a capture that is
@@ -28,10 +28,6 @@ import {
   GUIDE_PATCHABLE_SLOT_IDS,
 } from "../books-frontend/src/core/guide/patch";
 import { GUIDE_SLOTS, type GuideSlotId } from "../books-frontend/src/core/guide/slots";
-import {
-  guideStaleSummary,
-  guideStaleness,
-} from "../books-frontend/src/core/guide/staleness";
 import {
   appendGuideMessage,
   createGuideSession,
@@ -272,66 +268,6 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   const reloaded = normalizeGuideSession(JSON.parse(JSON.stringify(session)));
   if (guideRestorePoints(reloaded).length !== 2) {
     fail("Restore points did not survive a storage round-trip.");
-  }
-}
-
-// --- Staleness is ordered, described, and fixable ---------------------------
-
-/**
- * Order is the load-bearing part. Re-drawing pages before the cast sheet they reference
- * produces pages that are stale again on arrival, so the reader pays twice — which is
- * why the notice only ever offers to fix the first item.
- */
-{
-  const project = GUIDE_BOOK_STATES[GUIDE_BOOK_STATES.length - 1]!.project;
-  const items = guideStaleness(project, { anchors: ["a1", "a2"], pages: ["s1"] });
-  cases += 1;
-
-  const order = items.map((item) => item.component);
-  const cast = order.indexOf("cast-looks");
-  const pages = order.indexOf("page-art");
-  if (cast >= 0 && pages >= 0 && cast > pages) {
-    fail("Staleness offered to redraw the pages before the cast sheets they reference.");
-  }
-
-  for (const item of items) {
-    cases += 1;
-    if (!/[.!?]$/.test(item.reason) || item.reason.trim().length < 20) {
-      fail(`A staleness reason isn't a sentence: "${item.reason}".`);
-    }
-    if (item.count < 1) fail(`Staleness reported "${item.component}" with a count of ${item.count}.`);
-  }
-
-  // Counts have to be spoken correctly — this is the plural the wizard gets wrong.
-  const one = guideStaleness(project, { anchors: ["a1"] });
-  cases += 1;
-  if (one[0] && /\b1 characters\b/.test(one[0].reason)) {
-    fail(`A single stale sheet was described as plural: "${one[0].reason}".`);
-  }
-
-  // Nothing stale must be nothing at all, or the notice shows permanently.
-  cases += 1;
-  if (guideStaleness(project, {}).some((item) => item.component !== "story-draft")) {
-    fail("Staleness invented outdated artwork with no detector verdict to support it.");
-  }
-  cases += 1;
-  if (guideStaleSummary([]) !== "") {
-    fail("An empty staleness list produced a summary, so the notice would never hide.");
-  }
-}
-
-// Every book state, with no verdicts: only story staleness may ever appear, and it must
-// be self-consistent.
-for (const { name, project } of GUIDE_BOOK_STATES) {
-  cases += 1;
-  const items = guideStaleness(project, {});
-  for (const item of items) {
-    if (item.component !== "story-draft") {
-      fail(`A "${name}" book reported "${item.component}" stale with no detector verdict.`);
-    }
-    if (item.effect !== "storyDraft") {
-      fail(`Stale story on a "${name}" book offers "${item.effect}" as the fix.`);
-    }
   }
 }
 

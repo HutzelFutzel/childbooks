@@ -26,7 +26,6 @@ import type { GuideEntryRoute, GuideTurn, GuideTurnIntent } from "../core/pipeli
 import { interpretGuideTurnRemote } from "../platform/aiClient";
 import { useAppConfigStore } from "./appConfigStore";
 import { useProjectsStore } from "./projectsStore";
-import { useGuidePreference } from "../ui/guide/guidePreference";
 import type { CommandCall } from "../core/guide/agent/types";
 import { authoringOf } from "../core/guide/projectState";
 export interface GuideTurnOutcome {
@@ -113,7 +112,6 @@ export async function sendGuideTurn(
     message,
     {
       transcript,
-      guidePreference: useGuidePreference.getState().preference,
       ...(pending ? { pending } : {}),
       ...(marked ? { marked } : {}),
       ...(selected ? { selected } : {}),

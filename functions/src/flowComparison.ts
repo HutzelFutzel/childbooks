@@ -33,7 +33,7 @@
  * Projects tab. Only what is genuinely new lives here: the grouping, the turn log
  * aggregation (which exists for the guide alone), and the caveats.
  *
- * Retired with the comparison (see docs/LEGACY-GUIDE.md).
+ * Historical: every book is now made in the Chat studio, so no new data arrives.
  */
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";

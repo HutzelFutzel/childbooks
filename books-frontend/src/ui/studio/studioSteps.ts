@@ -1,10 +1,8 @@
 /**
- * The guided studio flow:
- *
- *   Story → Style → Cast → Book → Order
- *
- * Cast references are required before the book opens so every recurring
- * character and place has a consistent look before page art is created.
+ * How far along a book is: story, cast references, pages, order. Cast
+ * references are required before the pages open so every recurring character and
+ * place has a consistent look before page art is created. The Chat studio reads
+ * this for the order button's guard.
  */
 import type { Project } from "../../core/types";
 // Imported from core rather than through the `state/` re-exports these used to
@@ -13,15 +11,6 @@ import type { Project } from "../../core/types";
 import { currentAnchorImage } from "../../core/pipeline/provenance";
 import { illustrationUnits } from "../../core/book/units";
 import { unitIsDone } from "../../core/book/pageCompletion";
-
-/** Concrete stage shown in the workspace. */
-export type StudioStep = "story" | "anchors" | "edit" | "order";
-
-/** Top-level rail destinations. */
-export type PrimaryStep = "story" | "design" | "order";
-
-/** Focused creation sections represented by the underlying studio states. */
-export type DesignChapter = "style" | "cast" | "pages";
 
 export interface StepProgress {
   /** Whether the step can be opened yet (earlier prerequisites met). */
@@ -50,36 +39,9 @@ export interface StudioProgress {
   pagesReady: number;
 }
 
-export function primaryOf(step: StudioStep): PrimaryStep {
-  if (step === "anchors" || step === "edit") return "design";
-  return step;
-}
-
 /**
- * Active Design chapter from step + style gate.
- * `styleReady === false` forces Style; reopen uses `styleSetupOpen`.
- * Legacy projects with `styleReady === undefined` skip the style gate.
- */
-export function designChapterOf(
-  step: StudioStep,
-  styleReady: boolean | undefined,
-  styleSetupOpen: boolean,
-): DesignChapter {
-  if (styleReady === false || styleSetupOpen) return "style";
-  if (step === "edit") return "pages";
-  return "cast";
-}
-
-/** Open Cast until every required reference is ready, then open Pages. */
-export function preferredDesignStep(project: Project): StudioStep {
-  if (project.config.styleReady === false) return "anchors";
-  const progress = computeProgress(project);
-  return progress.anchors.done && Boolean(project.screenplay) ? "edit" : "anchors";
-}
-
-/**
- * Derive per-step progress from the live project. Kept pure so both the rail and
- * the stages can share exactly the same view of "what's done".
+ * Derive per-step progress from the live project. Kept pure so every surface
+ * shares exactly the same view of "what's done".
  */
 export function computeProgress(project: Project): StudioProgress {
   const setupDone = project.stage === "studio";
@@ -153,11 +115,4 @@ export function computeProgress(project: Project): StudioProgress {
     pagesTotal,
     pagesReady,
   };
-}
-
-/** The step the studio should open on for a given project state. */
-export function initialStep(project: Project): StudioStep {
-  if (project.stage === "setup") return "story";
-  // Do not skip an unfinished Cast when reopening a book.
-  return preferredDesignStep(project);
 }

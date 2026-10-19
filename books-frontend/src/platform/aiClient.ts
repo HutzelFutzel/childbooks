@@ -115,16 +115,14 @@ export function touchProjectRemote(args: {
   projectId: string;
   stage?: string;
   title?: string;
-  /** Which studio the reader is looking at. Retired with the comparison. */
-  flow?: "guide" | "legacy";
   /** True when the reader has reached the finished-book preview. */
   previewed?: boolean;
   /** Another milestone the browser observed. The server accepts a closed list. */
   reached?: "previewed" | "finished" | "setupLocked";
 }): Promise<boolean> {
   // Resolves to whether the server took it, never rejects: callers that care
-  // (the flow beacon, which must not mark a book as reported when the request
-  // failed) read the answer; everyone else can ignore it exactly as before.
+  // (the milestone beacon, which must not mark a book as reported when the
+  // request failed) read the answer; everyone else can ignore it.
   return postAi<{ ok: boolean }>("/ai/project-touch", args)
     .then((result) => result?.ok !== false)
     .catch(() => false);
@@ -241,8 +239,6 @@ export function interpretGuideTurnRemote(
   message: string,
   args: {
     transcript?: GuideTurn[];
-    /** The admin's saved flow toggle; honoured server-side for admins only. */
-    guidePreference?: "guide" | "legacy" | null;
     /** The follow-up the guide just asked, so a short reply finds its skill. */
     pending?: string;
     /** The story passage the reader marked, so "make this nicer" finds its skill. */
@@ -263,7 +259,6 @@ export function interpretGuideTurnRemote(
       }),
       message,
       transcript: args.transcript ?? [],
-      guidePreference: args.guidePreference ?? null,
       ...(args.pending ? { pending: args.pending } : {}),
       ...(args.marked ? { marked: args.marked } : {}),
       ...(args.selected ? { selected: args.selected } : {}),
@@ -467,7 +462,6 @@ export function guideAskNextRemote(args: {
   learned: string;
   open: string;
   transcript: string;
-  guidePreference?: string | null;
 }): Promise<{ text: string; asks: string[] }> {
   return postAi("/ai/guide/speak", { ...args, mode: "next" });
 }
@@ -478,7 +472,6 @@ export function guideSpeakRemote(args: {
   language: string;
   names: string[];
   lines: { id: string; meaning: string }[];
-  guidePreference?: string | null;
 }): Promise<{ lines: Record<string, string> }> {
   return postAi("/ai/guide/speak", args);
 }
@@ -492,7 +485,6 @@ export function guideComposeRemote(
     names: string[];
     meanings: string[];
     transcript: string;
-    guidePreference?: string | null;
   },
   signal?: AbortSignal,
 ): Promise<{ text: string }> {
@@ -502,7 +494,7 @@ export function guideComposeRemote(
 /** Answer a how-to question from the help articles and this book. */
 export function guideAnswerRemote(
   project: Project,
-  args: { question: string; language: string; locale: string; transcript: string; guidePreference?: string | null },
+  args: { question: string; language: string; locale: string; transcript: string },
   signal?: AbortSignal,
 ): Promise<{ text: string; grounded: boolean }> {
   return postAi("/ai/guide/answer", { project: slimProjectForRender(project, {}), ...args }, signal);
@@ -512,7 +504,6 @@ export function guideAnswerRemote(
 export function guideExtractCastRemote(args: {
   projectId: string;
   story: string;
-  guidePreference?: string | null;
 }): Promise<ManuscriptCast> {
   return postAi("/ai/guide/extract-cast", args);
 }

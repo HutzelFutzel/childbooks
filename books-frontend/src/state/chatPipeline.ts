@@ -28,7 +28,6 @@ import { readManuscript, withoutHeading } from "../core/story/manuscriptShape";
 import type { Project } from "../core/types";
 import { analyzeStoryRemote, guideExtractCastRemote } from "../platform/aiClient";
 import { createScreenplayJob } from "../platform/jobs";
-import { useGuidePreference } from "../ui/guide/guidePreference";
 import { useAppConfigStore } from "./appConfigStore";
 import { useChatStudio } from "./chatStudio";
 import { useJobsStore } from "./jobsStore";
@@ -74,7 +73,6 @@ export async function runExtraction(projectId: string): Promise<void> {
     const raw = await guideExtractCastRemote({
       projectId,
       story: withoutHeading(story),
-      guidePreference: useGuidePreference.getState().preference,
     });
     if (token !== extractionToken) return;
     const current = live(projectId);

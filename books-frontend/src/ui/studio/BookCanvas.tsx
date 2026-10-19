@@ -10,45 +10,32 @@ import {
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
-  ArrowRight,
   BookOpen,
   BookText,
-  ChevronDown,
-  Eye,
   Info,
   Layers as LayersIcon,
-  LayoutTemplate,
   MoreHorizontal,
-  Plus,
   Redo2,
   RefreshCw,
   LayoutGrid,
-  SlidersHorizontal,
   Sparkles,
-  Type,
   Undo2,
   Users,
-  X,
 } from "lucide-react";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { getCursor } from "../../core/versioning";
 import { staleIllustrationSpreadIds } from "../../state/ai";
 import { useJobsStore } from "../../state/jobsStore";
-import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { Popover } from "../components/Popover";
 import { Tooltip } from "../components/Tooltip";
-import { ArtworkOrbit } from "../design/ArtworkOrbit";
-import { ShapeKindPicker } from "../design/ShapeKindPicker";
-import { batchItemsOf, SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
 import { cn } from "../lib/cn";
 import { useDialogFocus } from "../lib/dialogFocus";
-import { AssetsLibrary } from "./AssetsLibrary";
 import { ElementPanel, elementPanelHasContent } from "./ElementPanel";
 import { PageFilmstrip } from "./PageFilmstrip";
 import { FacingPageColorControl, PageColorControl } from "./PageColorControl";
@@ -56,11 +43,6 @@ import { PageStagePanel } from "./PageEditorCard";
 import { PairPageStagePanel } from "./PairPageStage";
 import { useStudio } from "./StudioContext";
 import { useStudioPanelStore } from "./studioPanelStore";
-import { plannedIllustrationBatch, refreshSpread, updateAnchorsThenSpread } from "./studioGen";
-import { useBookGeneration } from "./useBookGeneration";
-import { BookPreview } from "./BookPreview";
-import { PagePacingNote } from "./PagePacingNote";
-import { changedAnchorsForSpread, staleAnchorIds } from "../../state/ai";
 import {
   buildDisplaySpreads,
   coverSideOf,
@@ -68,21 +50,11 @@ import {
   FOLD_GRADIENT,
   HalfFrame,
   isPlainPagePair,
-  entryNeedsArtwork,
   sideAspect,
-  useDisplayStatus,
   type DisplaySpread,
   type Entry,
 } from "./SpreadEditor";
 import { activeSurfaceFor } from "./surfaceCapabilities";
-
-/**
- * Books whose flip-through has already been offered on arrival this session.
- * Module-scoped rather than component state on purpose: leaving Pages unmounts
- * the canvas, and the offer is meant to happen once per book per session, not
- * once per mount.
- */
-const autoPreviewedBookIds = new Set<string>();
 
 const SCREENPLAY_PHASES: PipelinePhase[] = [
   { id: "cast", label: "Casting characters & places", icon: Users },
@@ -91,29 +63,23 @@ const SCREENPLAY_PHASES: PipelinePhase[] = [
 ];
 
 /**
- * `guided`: the Chat studio owns this canvas. Its Preview/Edit switch is the way
- * in and out, its composer is the only place to ask for something, and a paid
- * picture goes through its priced button. So the toolbar keeps only what edits
- * the page in front of you: no Preview button, no Add menu, no book setup, no
- * per-page "create artwork" button, no pacing note.
+ * The Chat studio owns this canvas. Its Preview/Edit switch is the way in and out,
+ * its composer is the only place to ask for something, and a paid picture goes
+ * through its priced button. So the toolbar keeps only what edits the page in
+ * front of you.
  */
-export function BookCanvas({
-  autoPreview = true,
-  guided = false,
-}: { autoPreview?: boolean; guided?: boolean } = {}) {
+export function BookCanvas() {
   const {
     project,
     pages,
     selection,
     select,
-    selectIllustration,
     editingDispId,
     setEditingDisp,
     undo,
     redo,
     canUndo,
     canRedo,
-    openDesignSetup,
   } = useStudio();
   const imageEditSection = useStudioPanelStore((s) => s.imageEditSection);
   const toolPanel = useStudioPanelStore((s) => s.toolPanel);
@@ -123,41 +89,10 @@ export function BookCanvas({
   const models = useResolvedModels();
   const screenplayJob = useJobsStore((s) => s.screenplayJob);
   const startScreenplay = useJobsStore((s) => s.startScreenplay);
-  const [previewing, setPreviewing] = useState(false);
-  const closePreview = useCallback(() => setPreviewing(false), []);
-  const openPreview = useCallback(() => {
-    // Typing in a shape isn't written until blur. Preview reads the store, so
-    // commit the live editor first or the copy looks like it vanished.
-    const el = document.activeElement;
-    if (el instanceof HTMLElement && el.isContentEditable) el.blur();
-    setPreviewing(true);
-  }, []);
   const closeInspector = useCallback(() => {
     closeToolPanel();
     closeImageEdit();
   }, [closeImageEdit, closeToolPanel]);
-
-  /** Toggle docked illustration tools for a page (same control opens/closes). */
-  const openIllustrationTools = useCallback(
-    (entry: Entry, section: "refine" | "characters" | "scene" = "refine") => {
-      const pageId = entry.page.id;
-      const panel = useStudioPanelStore.getState();
-      const alreadyOpen =
-        (selection.kind === "image" || selection.kind === "page") &&
-        selection.pageId === pageId &&
-        panel.imageEditSection === section;
-      if (alreadyOpen) {
-        panel.closeImageEdit();
-        return;
-      }
-      // With art: select/create the illustration frame. Without art: select the
-      // page only and purge empty ghost frames — never invent a croppable
-      // empty illustration just to open the toolbox.
-      selectIllustration(pageId);
-      panel.openImageEdit(section);
-    },
-    [selection, selectIllustration],
-  );
 
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
   const staleIds = useMemo(() => new Set(staleIllustrationSpreadIds(project)), [project]);
@@ -184,25 +119,6 @@ export function BookCanvas({
     () => (doc ? buildDisplaySpreads(doc, entries) : []),
     [doc, entries],
   );
-
-  // Preview-first: a finished book opens AS a book. The editor is still one tap
-  // away — closing the preview lands on it — but it is no longer what the reader
-  // arrives in.
-  //
-  // Decided once, the first time this book has spreads to show, and only when
-  // every illustration is already there: a book that is still rendering belongs
-  // on the canvas, where the progress and the next action are, and a page that
-  // finishes while the reader is editing must never throw a full-screen preview
-  // over their work.
-  const gen = useBookGeneration();
-  const autoPreviewDecided = useRef(false);
-  useEffect(() => {
-    if (!autoPreview || autoPreviewDecided.current || displays.length === 0) return;
-    autoPreviewDecided.current = true;
-    if (autoPreviewedBookIds.has(project.id)) return;
-    autoPreviewedBookIds.add(project.id);
-    if (gen.everythingDone) setPreviewing(true);
-  }, [autoPreview, displays.length, gen.everythingDone, project.id]);
 
   // `editingDispId` doubles as "the spread currently open in the main stage" —
   // there's no separate review mode any more, so this is just page navigation.
@@ -291,7 +207,6 @@ export function BookCanvas({
         <div className="flex min-w-0 items-center gap-1">
           {activeDisp && <SurfaceIdentity disp={activeDisp} />}
           <span className="mx-1 hidden h-5 w-px bg-ink-200 sm:block" />
-          {!guided && <PageAddMenu pageId={activePageId} pageLabel={activePageLabel} />}
           <ToolbarIconButton
             icon={<LayersIcon className="size-4" />}
             label="Arrange"
@@ -343,37 +258,14 @@ export function BookCanvas({
             </button>
             <span className="mx-0.5 h-5 w-px bg-ink-200" />
           </div>
-          {!guided && (
-            <div className="hidden sm:block">
-              <Button
-                size="sm"
-                variant="secondary"
-                leftIcon={<Eye className="size-4" />}
-                onClick={openPreview}
-              >
-                Preview
-              </Button>
-            </div>
-          )}
           <PagesToolbarMore
             onUndo={undo}
             onRedo={redo}
             canUndo={canUndo}
             canRedo={canRedo}
-            onPreview={guided ? undefined : openPreview}
-            onOpenSetup={guided ? undefined : openDesignSetup}
           />
-          {!guided && activeDisp && (
-            <SurfacePrimaryAction
-              disp={activeDisp}
-              stale={isStale}
-              onCustomize={(entry) => openIllustrationTools(entry)}
-            />
-          )}
         </div>
       </div>
-
-      {!guided && <PagePacingNote screenplay={doc} ageRangeId={project.config.ageRangeId} />}
 
       {/* Body: book navigation + focused editing stage. */}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -435,16 +327,6 @@ export function BookCanvas({
           </AnimatePresence>
         </div>
       </div>
-
-      <AnimatePresence>
-        {!guided && previewing && displays.length > 0 && (
-          <BookPreview
-            displays={displays}
-            startId={activeDisp?.id}
-            onClose={closePreview}
-          />
-        )}
-      </AnimatePresence>
     </div>
   );
 }
@@ -457,109 +339,6 @@ function SurfaceIdentity({ disp }: { disp: DisplaySpread }) {
       <span className="truncate text-sm font-semibold text-ink-800">{surface.label}</span>
     </div>
   );
-}
-
-function PageAddMenu({
-  pageId,
-  pageLabel,
-}: {
-  pageId?: string;
-  pageLabel?: string;
-}) {
-  const { addText, addShape, addAssetImage } = useStudio();
-  if (!pageId) {
-    return (
-      <ToolbarIconButton
-        icon={<Plus className="size-4" />}
-        label="Select a page to add content"
-        disabled
-        onClick={() => undefined}
-      />
-    );
-  }
-  return (
-    <Popover
-      align="start"
-      side="bottom"
-      panelClassName="w-80 p-2"
-      trigger={(open) => (
-        <span
-          title={`Add to ${pageLabel ?? "page"}`}
-          className={cn(
-            "flex size-9 items-center justify-center rounded-lg text-sm font-semibold transition sm:w-auto sm:px-2.5",
-            open ? "bg-brand-50 text-brand-700" : "text-ink-600 hover:bg-ink-100",
-          )}
-        >
-          <Plus className="size-4" />
-          <span className="ml-1.5 hidden sm:inline">Add</span>
-        </span>
-      )}
-    >
-      {(close) => (
-        <div>
-          <p className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
-            Add to {pageLabel ?? "this page"}
-          </p>
-          <AddMenuRow
-            icon={<Type className="size-4" />}
-            label="Text"
-            hint="Story text or an empty text box"
-            onClick={() => {
-              addText(pageId);
-              close();
-            }}
-          />
-          <div className="my-1 border-t border-ink-100" />
-          <div className="px-2.5 py-1.5">
-            <ShapeKindPicker
-              onSelect={(kind) => {
-                addShape(pageId, kind);
-                close();
-              }}
-            />
-          </div>
-          <div className="my-1 border-t border-ink-100" />
-          <div className="px-1.5 py-1.5">
-            <AssetsLibrary
-              onPlace={(asset) => {
-                addAssetImage(pageId, asset);
-                close();
-              }}
-            />
-          </div>
-        </div>
-      )}
-    </Popover>
-  );
-}
-
-function AddMenuRow({
-  icon,
-  label,
-  hint,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  hint: string;
-  onClick: () => void;
-}) {
-  const control = (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-ink-700 transition hover:bg-ink-50"
-    >
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-        {icon}
-      </span>
-      <span className="min-w-0">
-        <span className="block text-sm font-semibold">{label}</span>
-        <span className="block text-[11px] leading-snug text-ink-400">{hint}</span>
-      </span>
-    </button>
-  );
-  return control;
 }
 
 function ToolbarIconButton({
@@ -599,17 +378,11 @@ function PagesToolbarMore({
   onRedo,
   canUndo,
   canRedo,
-  onPreview,
-  onOpenSetup,
 }: {
   onUndo: () => void;
   onRedo: () => void;
   canUndo: boolean;
   canRedo: boolean;
-  /** Absent when something else owns previewing (the Chat studio's switch). */
-  onPreview?: () => void;
-  /** Absent when the book's size and layout are not this menu's to change. */
-  onOpenSetup?: () => void;
 }) {
   const {
     snap,
@@ -664,19 +437,6 @@ function PagesToolbarMore({
               }}
             />
           </div>
-          {onPreview && (
-            <div className="sm:hidden">
-              <PagesToolbarMenuItem
-                icon={<Eye className="size-4" />}
-                label="Preview"
-                onClick={() => {
-                  onPreview();
-                  close();
-                }}
-              />
-              <div className="my-1 border-t border-ink-100" />
-            </div>
-          )}
           <p className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
             Canvas
           </p>
@@ -730,20 +490,6 @@ function PagesToolbarMore({
               />
             </div>
           </div>
-          {onOpenSetup && (
-            <>
-              <div className="my-1 border-t border-ink-100" />
-              <PagesToolbarMenuItem
-                icon={<LayoutTemplate className="size-4" />}
-                label="Book setup"
-                description="Size, layout and page defaults"
-                onClick={() => {
-                  onOpenSetup();
-                  close();
-                }}
-              />
-            </>
-          )}
         </div>
       )}
     </Popover>
@@ -956,280 +702,6 @@ function InspectorDock({
       </div>
     </motion.aside>
   );
-}
-
-/**
- * Exactly one primary action for the open surface. Missing/stale artwork is
- * handled in one click; the adjacent disclosure opens page-specific inputs.
- */
-function SurfacePrimaryAction({
-  disp,
-  stale,
-  onCustomize,
-}: {
-  disp: DisplaySpread;
-  stale: (pageId: string) => boolean;
-  onCustomize: (entry: Entry) => void;
-}) {
-  const {
-    project,
-    selectIllustration,
-    setPageGenerating,
-  } = useStudio();
-  const gen = useBookGeneration();
-  const status = useDisplayStatus(disp, stale);
-  const surface = activeSurfaceFor(disp);
-
-  const artworkEntries = surface.entries
-    .map(({ entry, label }) => ({ entry, label }))
-    .filter(({ entry }) => entryNeedsArtwork(entry));
-  const missingEntries = artworkEntries.filter(({ entry }) => {
-    const tree = project.illustrations?.[entry.page.id];
-    const blobId = tree ? getCursor(tree).content.blobId : entry.page.blobId;
-    return !blobId;
-  });
-  const staleEntries = artworkEntries.filter(({ entry }) => stale(entry.page.id));
-  const targets = status === "stale" ? staleEntries : missingEntries;
-  const actionRange = useImageBatchRange(
-    batchItemsOf(
-      plannedIllustrationBatch(
-        project,
-        targets.map(({ entry }) => entry.page.id),
-        status === "stale" ? { useReference: true } : {},
-      ),
-    ),
-  );
-
-  async function createArtwork() {
-    for (const { entry } of targets) {
-      const pageId = entry.page.id;
-      const live =
-        useProjectsStore.getState().projects.find((candidate) => candidate.id === project.id) ??
-        project;
-      selectIllustration(pageId, { createIfMissing: true });
-      setPageGenerating(pageId, true);
-      try {
-        await refreshSpread(live, pageId, {}, (err) => notify.error(err));
-      } finally {
-        setPageGenerating(pageId, false);
-      }
-    }
-  }
-
-  async function updateArtwork() {
-    for (const { entry } of targets) {
-      const pageId = entry.page.id;
-      const live =
-        useProjectsStore.getState().projects.find((candidate) => candidate.id === project.id) ??
-        project;
-      selectIllustration(pageId, { createIfMissing: true });
-      setPageGenerating(pageId, true);
-      try {
-        const changed = changedAnchorsForSpread(live, pageId);
-        const staleSet = new Set(staleAnchorIds(live));
-        const staleRefs = changed.filter((anchor) => staleSet.has(anchor.id)).map((anchor) => anchor.id);
-        if (staleRefs.length > 0) {
-          await updateAnchorsThenSpread(live, pageId, staleRefs, (err) => notify.error(err));
-        } else {
-          await refreshSpread(
-            live,
-            pageId,
-            { useReference: true },
-            (err) => notify.error(err),
-          );
-        }
-      } finally {
-        setPageGenerating(pageId, false);
-      }
-    }
-  }
-
-  if (!gen.modelsReady) return null;
-  if (gen.busy) return <NextActionChip />;
-  if (status === "generating") {
-    return (
-      <span className="inline-flex h-9 items-center gap-1.5 px-2 text-xs font-semibold text-brand-700">
-        <ArtworkOrbit />
-        <span className="hidden sm:inline">Creating artwork…</span>
-      </span>
-    );
-  }
-  if ((status !== "missing" && status !== "stale") || targets.length === 0) {
-    return <NextActionChip />;
-  }
-
-  const primaryLabel =
-    status === "stale"
-      ? targets.length > 1
-        ? `Update ${targets.length} pages`
-        : surface.definition.kind === "front-cover" || surface.definition.kind === "back-cover"
-          ? "Update cover"
-          : surface.definition.kind === "spread"
-            ? "Update spread"
-            : "Update page"
-      : targets.length > 1
-        ? `Illustrate ${targets.length} pages`
-        : surface.definition.createArtworkLabel;
-
-  return (
-    <div className="flex items-center gap-1">
-      <Button
-        size="sm"
-        variant="magic"
-        loading={false}
-        leftIcon={status === "stale" ? <RefreshCw className="size-4" /> : <Sparkles className="size-4" />}
-        onClick={() => void (status === "stale" ? updateArtwork() : createArtwork())}
-      >
-        <span className="hidden max-w-36 truncate sm:inline">{primaryLabel}</span>
-        <span className="sm:hidden">
-          {status === "stale"
-            ? "Update"
-            : surface.definition.kind === "front-cover" || surface.definition.kind === "back-cover"
-              ? "Create"
-              : "Illustrate"}
-        </span>
-        <span className="hidden sm:inline-flex">
-          <SparkEstimateCost range={actionRange} />
-        </span>
-      </Button>
-      <Popover
-        align="end"
-        side="bottom"
-        panelClassName="w-60 p-1.5"
-        trigger={
-          <span
-            title="Artwork options"
-            className="flex size-9 items-center justify-center rounded-xl bg-magic-700 text-white shadow-soft transition hover:brightness-110 group-focus-visible:ring-2 group-focus-visible:ring-magic-300"
-          >
-            <ChevronDown className="size-4" />
-            <span className="sr-only">Artwork options</span>
-          </span>
-        }
-      >
-        {(close) => (
-          <div className="space-y-0.5">
-            {artworkEntries.map(({ entry, label }) => (
-              <PagesToolbarMenuItem
-                key={entry.page.id}
-                icon={<SlidersHorizontal className="size-4" />}
-                label={
-                  artworkEntries.length > 1
-                    ? `Customize ${label}`
-                    : surface.definition.customizeArtworkLabel
-                }
-                description="Scene, characters and versions"
-                onClick={() => {
-                  onCustomize(entry);
-                  close();
-                }}
-              />
-            ))}
-            {gen.pendingCount > targets.length && (
-              <>
-                <div className="my-1 border-t border-ink-100" />
-                <PagesToolbarMenuItem
-                  icon={<Sparkles className="size-4" />}
-                  label={`Illustrate all ${gen.pendingCount} remaining`}
-                  onClick={() => {
-                    void gen.generateEverything();
-                    close();
-                  }}
-                />
-              </>
-            )}
-          </div>
-        )}
-      </Popover>
-    </div>
-  );
-}
-
-/**
- * The single "next best action" for the whole book, always visible in the
- * toolbar: generate what's missing → update what's stale → review & order.
- */
-function NextActionChip() {
-  const gen = useBookGeneration();
-  const { navigate } = useStudio();
-
-  if (!gen.modelsReady) return null;
-
-  if (gen.busy) {
-    return (
-      <span className="flex items-center gap-1 rounded-full bg-brand-50 py-1 pl-3 pr-1 text-xs font-semibold text-brand-700 ring-1 ring-brand-200">
-        <ArtworkOrbit />
-        <span className="hidden sm:inline">Illustrating your book…</span>
-        <span className="sm:hidden">Illustrating…</span>
-        <button
-          type="button"
-          onClick={gen.cancelGeneration}
-          title="Cancel generation"
-          aria-label="Cancel generation"
-          className="ml-1 flex size-8 items-center justify-center rounded-full text-brand-400 transition hover:bg-brand-100 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
-        >
-          <X className="size-3.5" />
-        </button>
-      </span>
-    );
-  }
-
-  if (gen.pendingCount > 0) {
-    const label =
-      gen.pendingAnchors > 0
-        ? "Create book artwork"
-        : gen.pendingPages === 1
-          ? "Illustrate 1 page"
-          : `Illustrate ${gen.pendingPages} pages`;
-    return (
-      <Button size="sm" leftIcon={<Sparkles className="size-4" />} onClick={() => void gen.generateEverything()}>
-        <span className="hidden sm:inline">{label}</span>
-        <span className="sm:hidden">Create artwork</span>
-        <span className="hidden sm:inline-flex">
-          <SparkEstimateCost range={gen.batchRange} />
-        </span>
-      </Button>
-    );
-  }
-
-  if (gen.staleCount > 0) {
-    const pageLabel = `${gen.stalePageCount} ${gen.stalePageCount === 1 ? "page" : "pages"}`;
-    const castLabel = `${gen.staleAnchorCount} cast ${gen.staleAnchorCount === 1 ? "look" : "looks"}`;
-    const label =
-      gen.stalePageCount > 0 && gen.staleAnchorCount > 0
-        ? `Update ${pageLabel} & ${castLabel}`
-        : gen.stalePageCount > 0
-          ? `Update ${pageLabel}`
-          : `Update ${castLabel}`;
-    return (
-      <Button
-        size="sm"
-        variant="secondary"
-        loading={gen.refreshing}
-        leftIcon={!gen.refreshing ? <RefreshCw className="size-4" /> : undefined}
-        onClick={() => void gen.refreshStale()}
-      >
-        <span className="hidden sm:inline">
-          {gen.refreshing ? "Updating…" : label}
-        </span>
-        <span className="sm:hidden">{gen.refreshing ? "Updating…" : `Update ${gen.staleCount}`}</span>
-      </Button>
-    );
-  }
-
-  if (gen.everythingDone) {
-    return (
-      <Button
-        size="sm"
-        variant="primary"
-        rightIcon={<ArrowRight className="size-4" />}
-        onClick={() => navigate("order")}
-      >
-        Review & order
-      </Button>
-    );
-  }
-
-  return null;
 }
 
 /** The book is the focus: no labels or controls compete with the live surface. */

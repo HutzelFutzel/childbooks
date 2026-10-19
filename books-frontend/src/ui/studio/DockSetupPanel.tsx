@@ -1,6 +1,6 @@
 /**
  * Narrow-dock book setup: hub of topics → detail picker with Back, instead of
- * an accordion. Smooth slide between levels; compact pickers from designQuestions.
+ * an accordion. Smooth slide between levels; compact pickers from setupPickers.
  */
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -14,7 +14,7 @@ import {
   SizeQuestion,
   layoutSummary,
   sizeSummary,
-} from "../wizard/designQuestions";
+} from "./setupPickers";
 import { PageColorControl } from "./PageColorControl";
 import { pageColorAppliedToAll, pageColorOf } from "./pageBackground";
 import { useStudio } from "./StudioContext";
@@ -50,12 +50,10 @@ function pageColorSummary(color: string, appliedToAll: boolean): string {
 export function DockSetupPanel({ pageId }: { pageId?: string }) {
   const { design } = useStudio();
   const config = useProjectsStore((s) => s.current()?.config);
-  const updateConfig = useProjectsStore((s) => s.updateConfig);
   const [section, setSection] = useState<SectionId | null>(null);
 
   if (!config) return null;
-  const update = (patch: Partial<BookConfig>) => void updateConfig(patch);
-  const stepProps = { config, update };
+  const stepProps = { config };
   const color = pageColorOf(pageId ? design.pages[pageId] : undefined);
   const applied = pageColorAppliedToAll(design, color);
   const topicTitle =

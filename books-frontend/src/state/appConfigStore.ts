@@ -575,10 +575,8 @@ interface AppConfigState {
   /** Admin-editable LLM prompt templates. */
   prompts: PromptsConfig;
   /**
-   * Which studio flow readers get (the wizard, or the chat-guided studio). The
-   * document is absent until an admin changes the rollout, so this is the shipped
-   * `adminOnly` default for as long as the new flow is being built —
-   * see `core/config/guide.ts` and `core/guide/mode.ts`.
+   * The Chat studio's settings. The document is absent until an admin saves
+   * one, so this is the shipped default until then — see `core/config/guide.ts`.
    */
   guide: GuideConfig;
   /**
@@ -636,7 +634,7 @@ interface AppConfigState {
   saveTypography: (config: TypographyConfig) => Promise<void>;
   saveBookLanguages: (config: BookLanguagesConfig) => Promise<void>;
   /**
-   * Publish the guide rollout and playlist. The server re-normalizes, so the
+   * Publish the Chat studio's settings. The server re-normalizes, so the
    * response — not the draft that was sent — is what lands in the store.
    */
   saveGuide: (config: GuideConfig) => Promise<void>;
@@ -1196,8 +1194,8 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       onSnapshot(doc(db, "appConfig", "prompts"), (snap) => {
         set({ prompts: normalizePromptsConfig(snap.exists() ? snap.data() : undefined) });
       }),
-      // Subscribed rather than fetched once: reverting the rollout has to reach
-      // an open studio without waiting for a reload.
+      // Subscribed rather than fetched once: a saved change has to reach an open
+      // studio without waiting for a reload.
       onSnapshot(doc(db, "appConfig", "guide"), (snap) => {
         set({ guide: normalizeGuideConfig(snap.exists() ? snap.data() : undefined) });
       }),

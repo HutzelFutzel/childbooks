@@ -18,7 +18,6 @@ import { backendPipelineEnv } from "./pipelineEnv";
 import { withUsage } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
 import { isClientMilestone, touchProject } from "./projects";
-import { isStudioFlow } from "../../books-frontend/src/core/guide/flow";
 import { ensureAffordAction, InsufficientSparks, referenceLimitsForAction } from "./sparks";
 import { hasLikenessPhotoForSubject } from "./likeness";
 import {
@@ -94,7 +93,6 @@ import {
   skillsHelpText,
 } from "../../books-frontend/src/core/guide/agent/help";
 import { extractManuscriptCast, OWN_WORDS_MAX_CHARS } from "../../books-frontend/src/core/guide/ownWords";
-import { resolveGuideMode } from "../../books-frontend/src/core/guide/mode";
 import { recordGuideEvent, recordGuideTurn, recordGuideTurnOutcome } from "./guideTurns";
 import { isGuideEventKind } from "../../books-frontend/src/core/guide/events";
 import { downloadBlobBase64 } from "./storage";
@@ -314,19 +312,6 @@ function sendError(res: Response, err: unknown): void {
 
 function isCoverId(id: string): boolean {
   return id === COVER_FRONT_ID || id === COVER_BACK_ID || id === SPINE_ID;
-}
-
-/** Whether the Chat studio is on for this caller and book (same gate as the interpreter). */
-async function guideAllowed(uid: string, preference: unknown, bucketKey: string): Promise<boolean> {
-  const [guide, isAdmin] = await Promise.all([getGuideConfig(), isAdminUid(uid)]);
-  return (
-    resolveGuideMode({
-      rollout: guide.rollout,
-      isAdmin,
-      preference: preference === "guide" || preference === "legacy" ? preference : null,
-      bucketKey,
-    }) === "guide"
-  );
 }
 
 export function registerAiRoutes(app: Express): void {
@@ -814,7 +799,6 @@ export function registerAiRoutes(app: Express): void {
         project,
         message: rawMessage,
         transcript: rawTranscript,
-        guidePreference,
         pending,
         marked: rawMarked,
         selected: rawSelected,
@@ -822,7 +806,6 @@ export function registerAiRoutes(app: Express): void {
         project: Project;
         message?: unknown;
         transcript?: unknown;
-        guidePreference?: unknown;
         pending?: unknown;
         marked?: unknown;
         selected?: unknown;
@@ -842,11 +825,7 @@ export function registerAiRoutes(app: Express): void {
         res.status(400).json({ error: { message: "There's no message to read." } });
         return;
       }
-      // The rollout decides, not the caller. The client's saved toggle is passed
-      // as a PREFERENCE, which `resolveGuideMode` only honours for admins — so a
-      // customer sending `guidePreference: "guide"` gets the same refusal as one
-      // sending nothing.
-      const [guide, isAdmin] = await Promise.all([getGuideConfig(), isAdminUid(req.uid!)]);
+      const guide = await getGuideConfig();
 
       // Bounded before it reaches a prompt: an unbounded paste is a cost we'd pay
       // per turn. The ceiling is admin-set rather than a constant because the one
@@ -855,18 +834,6 @@ export function registerAiRoutes(app: Express): void {
       // turns was rejecting it.
       if (message.length > guide.extraction.maxMessageChars) {
         res.status(400).json({ error: { message: "That message is too long to read at once." } });
-        return;
-      }
-      const mode = resolveGuideMode({
-        rollout: guide.rollout,
-        isAdmin,
-        preference: guidePreference === "guide" || guidePreference === "legacy"
-          ? guidePreference
-          : null,
-        bucketKey: project.id,
-      });
-      if (mode !== "guide") {
-        res.status(403).json({ error: { message: "This isn't available yet." } });
         return;
       }
 
@@ -1117,7 +1084,7 @@ export function registerAiRoutes(app: Express): void {
    *
    * The configured sentence is the meaning; this only decides the words. Names
    * are passed separately and a phrasing that loses one falls back to the
-   * meaning (`speakGuideLines`). Same rollout gate as the interpreter.
+   * meaning (`speakGuideLines`).
    */
   app.post("/ai/guide/speak", json, async (req: AuthedRequest, res: Response) => {
     try {
@@ -1126,7 +1093,6 @@ export function registerAiRoutes(app: Express): void {
         language?: unknown;
         names?: unknown;
         lines?: unknown;
-        guidePreference?: unknown;
         mode?: unknown;
         open?: unknown;
         learned?: unknown;
@@ -1138,10 +1104,6 @@ export function registerAiRoutes(app: Express): void {
         const transcript = typeof body.transcript === "string" ? body.transcript.slice(0, 4000) : "";
         if (typeof body.language !== "string" || !body.language.trim()) {
           res.status(400).json({ error: { message: "Nothing to say." } });
-          return;
-        }
-        if (!(await guideAllowed(req.uid!, body.guidePreference, String(body.projectId ?? "")))) {
-          res.status(403).json({ error: { message: "This isn't available yet." } });
           return;
         }
         const [model, prompts] = await Promise.all([resolveText("guideSpeak"), loadPromptContext()]);
@@ -1190,10 +1152,6 @@ export function registerAiRoutes(app: Express): void {
         : [];
       if (typeof body.language !== "string" || !body.language.trim() || lines.length === 0) {
         res.status(400).json({ error: { message: "Nothing to say." } });
-        return;
-      }
-      if (!(await guideAllowed(req.uid!, body.guidePreference, String(body.projectId ?? "")))) {
-        res.status(403).json({ error: { message: "This isn't available yet." } });
         return;
       }
       const [model, prompts] = await Promise.all([resolveText("guideSpeak"), loadPromptContext()]);
@@ -1247,17 +1205,12 @@ export function registerAiRoutes(app: Express): void {
         names?: unknown;
         meanings?: unknown;
         transcript?: unknown;
-        guidePreference?: unknown;
       };
       const meanings = Array.isArray(body.meanings)
         ? body.meanings.filter((m): m is string => typeof m === "string" && Boolean(m.trim())).slice(0, 6).map((m) => m.slice(0, 600))
         : [];
       if (typeof body.language !== "string" || !body.language.trim() || meanings.length === 0) {
         res.status(400).json({ error: { message: "Nothing to say." } });
-        return;
-      }
-      if (!(await guideAllowed(req.uid!, body.guidePreference, String(body.projectId ?? "")))) {
-        res.status(403).json({ error: { message: "This isn't available yet." } });
         return;
       }
       const guide = await getGuideConfig();
@@ -1316,16 +1269,11 @@ export function registerAiRoutes(app: Express): void {
         language?: unknown;
         locale?: unknown;
         transcript?: unknown;
-        guidePreference?: unknown;
       };
       const question = typeof body.question === "string" ? body.question.trim().slice(0, 800) : "";
       const project = body.project;
       if (!question || !project || typeof project !== "object") {
         res.status(400).json({ error: { message: "There's no question to answer." } });
-        return;
-      }
-      if (!(await guideAllowed(req.uid!, body.guidePreference, String(project.id ?? "")))) {
-        res.status(403).json({ error: { message: "This isn't available yet." } });
         return;
       }
       const guide = await getGuideConfig();
@@ -1379,14 +1327,10 @@ export function registerAiRoutes(app: Express): void {
    */
   app.post("/ai/guide/extract-cast", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const body = (req.body ?? {}) as { projectId?: unknown; story?: unknown; guidePreference?: unknown };
+      const body = (req.body ?? {}) as { projectId?: unknown; story?: unknown };
       const story = typeof body.story === "string" ? body.story.slice(0, OWN_WORDS_MAX_CHARS) : "";
       if (!story.trim()) {
         res.status(400).json({ error: { message: "There's no story to read yet." } });
-        return;
-      }
-      if (!(await guideAllowed(req.uid!, body.guidePreference, String(body.projectId ?? "")))) {
-        res.status(403).json({ error: { message: "This isn't available yet." } });
         return;
       }
       const [model, prompts] = await Promise.all([resolveText("guideExtractCast"), loadPromptContext()]);
@@ -1688,11 +1632,10 @@ export function registerAiRoutes(app: Express): void {
    */
   app.post("/ai/project-touch", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { projectId, stage, title, flow, previewed, reached } = req.body as {
+      const { projectId, stage, title, previewed, reached } = req.body as {
         projectId?: string;
         stage?: string;
         title?: string;
-        flow?: unknown;
         previewed?: unknown;
         reached?: unknown;
       };
@@ -1705,9 +1648,6 @@ export function registerAiRoutes(app: Express): void {
         projectId,
         stage,
         title,
-        // Validated rather than trusted: an unknown value is dropped instead of
-        // creating a third arm in the comparison out of a typo.
-        ...(isStudioFlow(flow) ? { flow } : {}),
         ...(previewed === true ? { previewed: true } : {}),
         // Same rule: only milestones a browser is allowed to name.
         ...(isClientMilestone(reached) ? { reached } : {}),

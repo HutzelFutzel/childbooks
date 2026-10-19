@@ -538,11 +538,8 @@ set wrong, which is the argument for lint-on-save and for keeping schemas in
 code. The documents are worth it because each one replaces a deploy in the middle
 of an incident.
 
-## Not in the legacy manifest
+## Deleted outright
 
-`parsePeople.ts` and `coerceGuidePatch` are deleted outright rather than
-superseded by a parallel flow, so they get no `@legacy guide-v2` marker and no
-row in `docs/LEGACY-GUIDE.md`. That manifest tracks code kept alive *for readers
-still on the wizard*; nothing here serves the wizard. If step 5 ends up shipping
-while both extraction paths run side by side, that judgement changes and a Retire
-row is owed.
+`parsePeople.ts` and `coerceGuidePatch` were deleted rather than superseded by a
+parallel flow. The Steps studio they once served has since been removed, so
+nothing is left to keep alive.

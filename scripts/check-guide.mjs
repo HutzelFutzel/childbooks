@@ -1,6 +1,5 @@
 /**
- * check-guide.mjs — assert the guided-studio rollout invariants hold, and that
- * the legacy manifest still matches the code.
+ * check-guide.mjs — assert the Chat studio's invariants hold.
  *
  *   yarn check:guide
  *

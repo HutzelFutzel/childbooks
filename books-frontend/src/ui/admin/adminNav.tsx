@@ -161,7 +161,7 @@ export const CONFIG_TAB_META: Record<ConfigTabId, TabMeta> = {
   guide: {
     label: "Guided studio",
     icon: <Compass className="size-4" />,
-    description: "Rollout, persona, facts, wording, and step flow of the chat studio.",
+    description: "Persona, facts, wording, skills, and story options of the chat studio.",
   },
   system: {
     label: "System health",

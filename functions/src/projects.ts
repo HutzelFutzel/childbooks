@@ -30,7 +30,6 @@ import type { ProjectBehaviourStats } from "../../books-frontend/src/core/analyt
 import {
   flowArm,
   isStudioFlow,
-  nextAuthoring,
   type FlowArm,
   type ProjectAuthoring,
   type StudioFlow,
@@ -206,9 +205,9 @@ export interface ProjectMirror {
   /** Client-reported stage. Untrusted by construction — never used for money. */
   reported?: { stage: string; updatedAt: number };
   /**
-   * Which studio flow built this book. Absent for every book made before the
-   * comparison shipped, and for any book whose reader never idled long enough on
-   * one flow for the beacon to fire. Retired with the comparison.
+   * Which studio flow built this book. History only: it is no longer written,
+   * because every book is made in the Chat studio. Books from the period when
+   * both studios existed keep it, so the old comparison can still be read.
    */
   authoring?: ProjectAuthoring;
   milestones: Partial<Record<ProjectMilestone, number>>;
@@ -504,8 +503,6 @@ export async function touchProject(args: {
   projectId: string;
   stage?: string;
   title?: string;
-  /** Which studio the reader is looking at. Retired with the comparison. */
-  flow?: StudioFlow;
   /** True when the reader is on the finished-book preview. */
   previewed?: boolean;
   /** Another milestone the browser observed. First report wins. */
@@ -528,47 +525,8 @@ export async function touchProject(args: {
   }
   // Both of these are first-write-wins, so they go through their own transactions
   // rather than riding the merge above.
-  if (args.flow) await stampFlow(uid, projectId, args.flow);
   if (args.previewed) await stampMilestone(uid, projectId, "previewed");
   if (args.reached) await stampMilestone(uid, projectId, args.reached);
-}
-
-/**
- * Record that this book was seen in a flow. First report per flow wins.
- *
- * Deliberately additive and never corrective: a second flow does not overwrite
- * `first`, it appears alongside it in `seen`, which is what marks the book as
- * mixed. Nothing here decides what a mixed book means — that is the report's job
- * (see {@link ProjectAuthoring}).
- *
- * Retired with the comparison (see docs/LEGACY-GUIDE.md).
- */
-export async function stampFlow(
-  uid: string,
-  projectId: string,
-  flow: StudioFlow,
-  at = Date.now(),
-): Promise<void> {
-  if (!uid || !projectId || !isStudioFlow(flow)) return;
-  try {
-    const ref = db().doc(`${COLLECTION}/${projectDocKey(uid, projectId)}`);
-    await db().runTransaction(async (tx) => {
-      const snap = await tx.get(ref);
-      if (!snap.exists) return;
-      // The decision is `nextAuthoring`'s, not this function's: the report reads
-      // the same rule back, and a transaction is a bad place to keep a rule that
-      // has to agree with something else. Null means the sighting is already
-      // recorded, which is the overwhelmingly common case.
-      const next = nextAuthoring(snap.get("authoring") as ProjectAuthoring | undefined, flow, at);
-      if (!next) return;
-      // Written whole rather than merged: `nextAuthoring` returns the complete
-      // `seen` set, and merging a partial one is how a sighting could survive a
-      // rule change that meant to drop it.
-      tx.set(ref, { authoring: next }, { merge: true });
-    });
-  } catch {
-    // telemetry only
-  }
 }
 
 // ---- Read side ---------------------------------------------------------------

@@ -9,18 +9,14 @@
  * finished, crossed with every playlist reachable by reordering the components or
  * switching one off.
  *
- * Four properties carry most of the weight:
+ * Three properties carry most of the weight:
  *
  *   1. **The engine never asks for something it can't have.** Whatever the order,
  *      the component it picks is unsatisfied and all of its requirements are met.
  *   2. **The reader never goes backwards.** As a book advances along the ladder,
  *      the engine's position in the playlist never decreases. A conversational
  *      flow that re-asks a settled question is worse than no guide at all.
- *   3. **The engine agrees with the wizard.** Both flows ship and a book has to be
- *      portable between them, so the two are compared state by state and the
- *      differences have to be exactly the ones named in `EXPECTED_DIVERGENCE` —
- *      anything else is an accident nobody decided on.
- *   4. **A patch can't write what it shouldn't.** Artifact slots have no writer,
+ *   3. **A patch can't write what it shouldn't.** Artifact slots have no writer,
  *      unknown keys are reported rather than merged, and a value outside the
  *      caller's declared world is refused.
  *
@@ -78,12 +74,6 @@ import {
 import { createVersionTree } from "../books-frontend/src/core/versioning";
 import { AGE_RANGES, ART_STYLE_PRESETS } from "../books-frontend/src/core/config/options";
 import { BOOK_PRODUCTS } from "../books-frontend/src/core/fulfillment";
-import {
-  defaultDestination,
-  destinationUnlocked,
-  type StudioDestination,
-} from "../books-frontend/src/ui/studio/studioRoutes";
-
 export interface CheckResult {
   failures: string[];
   notes: string[];
@@ -685,51 +675,6 @@ for (const { label, playlist } of space) {
   }
 }
 
-// --- Engine versus wizard --------------------------------------------------
-
-/**
- * Where the two flows deliberately disagree. Landing a finished book on Review
- * rather than on the pages is the one intended difference: "what's next" for a
- * complete book is ordering it, and the guide says so. Everything else must match,
- * because a book has to be portable between the flows.
- */
-const EXPECTED_DIVERGENCE: Record<string, [legacy: StudioDestination, guide: StudioDestination]> = {
-  "pages opened": ["pages", "order"],
-};
-
-const enginePlaylist: readonly ResolvedGuideComponent[] = resolveGuidePlaylist(defaultPlaylist);
-const divergences: string[] = [];
-
-for (const state of allStates) {
-  cases += 1;
-  const legacy = defaultDestination(state.project);
-  const guided = defaultDestination(state.project, enginePlaylist);
-
-  // Whatever either flow answers, the reader must have unlocked it — this is the
-  // property that lets the engine drive the wizard's routing at all.
-  if (!destinationUnlocked(state.project, guided)) {
-    fail(`The guide would land "${state.name}" on "${guided}", which isn't unlocked.`);
-  }
-
-  if (legacy === guided) continue;
-  divergences.push(`${state.name}: wizard → ${legacy}, guide → ${guided}`);
-  const expected = EXPECTED_DIVERGENCE[state.name];
-  if (!expected) {
-    fail(`Undocumented divergence at "${state.name}": wizard → ${legacy}, guide → ${guided}.`);
-  } else if (expected[0] !== legacy || expected[1] !== guided) {
-    fail(
-      `"${state.name}" was expected to differ as ${expected[0]}/${expected[1]} ` +
-        `but differs as ${legacy}/${guided}.`,
-    );
-  }
-}
-
-for (const name of Object.keys(EXPECTED_DIVERGENCE)) {
-  if (!divergences.some((line) => line.startsWith(`${name}:`))) {
-    fail(`"${name}" is listed as a divergence but the two flows now agree — remove the entry.`);
-  }
-}
-
 // --- The closed-world patch ------------------------------------------------
 
 const patchContext: GuidePatchContext = {
@@ -1151,7 +1096,7 @@ report.push("Guide catalog");
 for (const component of GUIDE_CATALOG) {
   const satisfiedIn = ladder.filter((rung) => component.isSatisfied(rung.project)).length;
   report.push(
-    `  ${component.id.padEnd(14)} ${component.legacyDestination.padEnd(6)} ` +
+    `  ${component.id.padEnd(14)} ` +
       `${component.skippable ? "optional" : "required"}  ` +
       `satisfied by ${satisfiedIn}/${ladder.length} rungs` +
       (component.effect ? `  ⟶ ${component.effect}` : ""),
@@ -1163,18 +1108,8 @@ report.push("\nWhat the guide asks, as a book is made");
   const resolved = resolveGuidePlaylist(defaultPlaylist);
   for (const rung of ladder) {
     const cursor = nextGuideStep(resolved, rung.project);
-    const legacy = defaultDestination(rung.project);
-    const guided = defaultDestination(rung.project, resolved);
-    report.push(
-      `  ${rung.name.padEnd(17)} → ${(cursor.component?.id ?? "nothing left").padEnd(14)} ` +
-        `wizard:${legacy.padEnd(6)} guide:${guided}${legacy === guided ? "" : "   ← differs"}`,
-    );
+    report.push(`  ${rung.name.padEnd(17)} → ${cursor.component?.id ?? "nothing left"}`);
   }
-}
-
-if (divergences.length > 0) {
-  report.push("\nDeliberate differences from the wizard");
-  for (const line of divergences) report.push(`  · ${line}`);
 }
 
 notes.push(

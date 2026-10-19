@@ -381,10 +381,9 @@ export function getBookLanguagesConfig(): Promise<BookLanguagesConfig> {
   return readDoc(BOOK_LANGUAGES_DOC, normalizeBookLanguagesConfig);
 }
 /**
- * The guide rollout. Read on the SERVER as well as the client because a route
- * that does guide-only work must decide from the rollout itself, not from a
- * flag the caller sent: `resolveGuideMode` is shared for exactly that reason.
- * Absent document ⇒ the shipped `adminOnly` default.
+ * The Chat studio's settings. Read on the SERVER as well as the client because the
+ * interpreter, speaker and answer routes take their limits and wording from it.
+ * Absent document ⇒ the shipped defaults.
  */
 export function getGuideConfig(): Promise<GuideConfig> {
   return readDoc(GUIDE_DOC, normalizeGuideConfig);
@@ -1057,14 +1056,11 @@ export async function saveTypographyConfig(input: unknown): Promise<TypographyCo
 }
 
 /**
- * Publish the guide rollout and playlist.
+ * Publish the Chat studio's settings.
  *
- * The one config document whose value decides which studio a customer gets, so
- * it is normalized on the way in as well as on the way out. `normalizeGuideConfig`
- * fails closed — an unreadable percent becomes 0%, an unknown mode becomes
- * `adminOnly` — and running it here means a hand-crafted PUT that satisfies the
- * schema but names a component the catalog no longer has cannot land a playlist
- * the engine would then have to survive.
+ * Normalized on the way in as well as on the way out, so a hand-crafted PUT that
+ * satisfies the schema but names a component the catalog no longer has cannot land
+ * a playlist the engine would then have to survive.
  *
  * Playlist lint problems are deliberately NOT rejected. They are editorial
  * ("you turned off something another component needs"), the tab shows them

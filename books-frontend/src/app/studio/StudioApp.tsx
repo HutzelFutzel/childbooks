@@ -47,16 +47,9 @@ import { SessionTracker } from "@/ui/analytics/SessionTracker";
 import { InviteFriendsDialog } from "@/ui/referrals/InviteFriendsDialog";
 import { notify } from "@/ui/lib/notify";
 import {
-  defaultDestination,
-  fallbackDestination,
   parseStudioPath,
   studioPath,
-  type StudioDestination,
 } from "@/ui/studio/studioRoutes";
-import { studioEntryPath, useGuidePlaylist } from "@/ui/guide/useGuideMode";
-import { useFlowAttribution } from "@/ui/studio/useFlowAttribution";
-import { useMilestoneReached, usePreviewReached } from "@/ui/studio/useMilestoneReached";
-import { GuideModeToggle } from "@/ui/guide/GuideModeToggle";
 import { useChatStudio } from "@/state/chatStudio";
 
 export default function StudioApp() {
@@ -109,13 +102,6 @@ export default function StudioApp() {
   const closeGuide = useChatStudio((s) => s.close);
   const [projectsOwnerUid, setProjectsOwnerUid] = useState<string | null>(null);
   const rejectedBookRef = useRef<string | null>(null);
-  // Null for everyone on the wizard, which is everyone until an admin opts in.
-  // When set, the guide engine picks the default landing destination instead of
-  // the wizard's own precedence — see ui/studio/guideRouting.ts.
-  const guidePlaylist = useGuidePlaylist(
-    route.kind === "project" ? route.bookId : pendingEntryId,
-  );
-
   useEffect(() => {
     initAuth();
   }, [initAuth]);
@@ -185,21 +171,18 @@ export default function StudioApp() {
     if (pendingEntryId === project.id) clearPendingEntry();
     if (currentId !== project.id) openProject(project.id);
 
-    const requested = route.destination ?? defaultDestination(project, guidePlaylist);
-    const allowed = fallbackDestination(project, requested, guidePlaylist);
-    if (route.destination !== allowed) {
-      // Keep the query: a Stripe return can land on a destination this book
-      // isn't eligible for, and rewriting the path bare would throw away the
-      // `payment` id the confirmation screen needs to survive a refresh.
+    if (!route.canonical) {
+      // An old `/studio/{id}/{destination}` link. Keep the query: a Stripe
+      // return can land on one, and rewriting the path bare would throw away
+      // the `payment` id the confirmation screen needs to survive a refresh.
       const search = typeof window === "undefined" ? "" : window.location.search;
-      router.replace(`${studioPath(project.id, allowed)}${search}`, { scroll: false });
+      router.replace(`${studioPath(project.id)}${search}`, { scroll: false });
     }
   }, [
     accessLevel,
     clearPendingEntry,
     closeProject,
     currentId,
-    guidePlaylist,
     openProject,
     pendingEntryId,
     projects,
@@ -402,16 +385,13 @@ export default function StudioApp() {
       heroName = sessionStorage.getItem("pendingHeroName");
       if (heroName) {
         sessionStorage.removeItem("pendingHeroName");
-        // Keep the name for the Story stage's quick-start prefill (session-
-        // scoped; cleared once a draft is written).
-        sessionStorage.setItem("quickStartHeroName", heroName);
       }
     } catch {
       return;
     }
     if (!heroName) return;
     void createProject(`${heroName}'s Storybook`, true).then((projectId) => {
-      router.replace(studioEntryPath(projectId), { scroll: false });
+      router.replace(studioPath(projectId), { scroll: false });
     });
   }, [uid, projectsLoaded, accessLevel, createProject, router]);
 
@@ -459,19 +439,10 @@ export default function StudioApp() {
     route.kind === "project"
       ? projects.find((project) => project.id === route.bookId) ?? null
       : null;
-  const activeDestination =
-    route.kind === "project" && routedProject
-      ? fallbackDestination(
-          routedProject,
-          route.destination ?? defaultDestination(routedProject, guidePlaylist),
-          guidePlaylist,
-        )
-      : null;
   const inProject =
     route.kind === "project" &&
     currentId === route.bookId &&
     routedProject !== null &&
-    activeDestination !== null &&
     projectsOwnerUid === uid &&
     accessLevel !== "loading";
   const enteringProject =
@@ -485,31 +456,8 @@ export default function StudioApp() {
     (route.kind === "project" && !inProject) ||
     (uid !== null && (!projectsLoaded || projectsOwnerUid !== uid));
 
-  // Which studio built this book, and whether the reader got to the end. Recorded
-  // rather than derived: neither is recoverable once the rollout moves on. Only
-  // reported once the book is actually open, so a route still resolving doesn't
-  // attribute a visit to whichever flow rendered the spinner. Goes with the flow
-  // comparison — see docs/LEGACY-GUIDE.md.
-  const attributedProjectId = inProject ? route.bookId : null;
-  useFlowAttribution(attributedProjectId, inProject ? (guidePlaylist ? "guide" : "legacy") : null);
-  // The wizard's order step is a real screen, so being routed to it is both "the
-  // book is finished" and "the reader is looking at it". The guided studio's order
-  // panel has no route — it reports both for itself (see `GuideStudio`), from what
-  // the reader actually opened, rather than from where the engine would send them.
-  const wizardOrderStep = !guidePlaylist && activeDestination === "order";
-  usePreviewReached(attributedProjectId, wizardOrderStep);
-  useMilestoneReached(attributedProjectId, wizardOrderStep, "finished");
-
   // The Chat studio shows work and Sparks in the conversation itself.
-  const chatStudio = inProject && Boolean(guidePlaylist);
-
-  const navigateStudio = useCallback(
-    (destination: StudioDestination) => {
-      if (route.kind !== "project") return;
-      router.push(studioPath(route.bookId, destination), { scroll: false });
-    },
-    [route, router],
-  );
+  const chatStudio = inProject;
 
   const navigateLibrary = useCallback(() => {
     void flushProjectSaves().finally(() => {
@@ -544,7 +492,6 @@ export default function StudioApp() {
         contextLabel={inProject ? currentTitle : undefined}
         right={
           <>
-            {inProject && <GuideModeToggle bookId={route.kind === "project" ? route.bookId : null} />}
             {accessLevel !== "loading" && sparksEnabled && !chatStudio && <SparksBadge />}
             <HelpButton />
             <AuthMenu />
@@ -580,11 +527,7 @@ export default function StudioApp() {
             <p className="text-sm font-medium text-ink-500">{resolvingLabel}</p>
           </div>
         ) : inProject ? (
-          <ProjectWorkspace
-            destination={activeDestination}
-            onNavigate={navigateStudio}
-            guided={Boolean(guidePlaylist)}
-          />
+          <ProjectWorkspace />
         ) : (
           <Dashboard />
         )}

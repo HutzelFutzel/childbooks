@@ -17,7 +17,7 @@
  * a report starts disagreeing with itself, and it is also why this can be walked
  * exhaustively offline by `scripts/guide-flow-invariants.ts`.
  *
- * Retired with the comparison (see docs/LEGACY-GUIDE.md) — one flow needs no
+ * Historical: every book is now made in the Chat studio, so no new data arrives — one flow needs no
  * attribution.
  */
 

@@ -520,19 +520,17 @@ for (const component of GUIDE_CATALOG) {
   }
 }
 
-// --- The rollout survives the same trip -----------------------------------
+// --- A stored rollout field is ignored --------------------------------------
 
-for (const mode of ["off", "adminOnly", "percentage", "on"] as const) {
-  for (const percent of [0, 1, 50, 100]) {
-    cases += 1;
-    const back = saveAndReload({ ...createDefaultGuideConfig(), rollout: { mode, percent } });
-    if (back.rollout.mode !== mode || back.rollout.percent !== percent) {
-      fail(
-        `A rollout of ${mode}@${percent}% came back as ` +
-          `${back.rollout.mode}@${back.rollout.percent}%.`,
-      );
-    }
-  }
+// A document saved before the rollout was removed, or by a dashboard tab left open
+// across the deploy, still carries the field. It must save and load as if absent.
+{
+  cases += 1;
+  const stale = saveAndReload({
+    ...createDefaultGuideConfig(),
+    rollout: { mode: "percentage", percent: 50 },
+  } as never) as unknown as Record<string, unknown>;
+  if ("rollout" in stale) fail("A stale rollout field was stored instead of dropped.");
 }
 
 // The tab sends what it drafted, so the draft shape has to satisfy the schema the

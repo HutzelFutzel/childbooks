@@ -33,7 +33,6 @@ import {
   storewideSafeDiscount,
   DISCOUNT_ITEM_LABELS,
 } from "../../../core/config/discountImpact";
-import { describeGuideRollout } from "../../../core/config/guide";
 import { freezeTerms, inviteTeaser } from "../../../core/config/referral";
 import type { ProductDefinition } from "../../../core/config/products";
 import { cn } from "../../lib/cn";
@@ -70,7 +69,6 @@ export function BusinessOverviewTab() {
   const sparks = useAppConfigStore((s) => s.sparks);
   const shipping = useAppConfigStore((s) => s.shippingSettings);
   const referral = useAppConfigStore((s) => s.referral);
-  const guide = useAppConfigStore((s) => s.guide);
   const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
 
   const canRead = useAdminAccess((s) => s.canRead);
@@ -381,7 +379,7 @@ export function BusinessOverviewTab() {
                   {isLive ? "Real charges" : "Test mode"}
                 </span>
               }
-              detail={`Chat studio: ${describeGuideRollout(guide.rollout)}`}
+              detail={isLive ? "Payments are charged for real" : "Payments run against test cards"}
             />
           </div>
         </section>

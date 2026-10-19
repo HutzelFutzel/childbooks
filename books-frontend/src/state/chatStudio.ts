@@ -108,7 +108,6 @@ import { updateCastMember } from "../ui/guide/bookActions";
 import { unitTarget } from "../ui/guide/book/units";
 import { useRedrawHold } from "./redrawHold";
 import { changesTheScene } from "../core/pipeline/editScope";
-import { useGuidePreference } from "../ui/guide/guidePreference";
 import { useAppConfigStore } from "./appConfigStore";
 import { quoteFor } from "./chatGeneration";
 import { sendGuideTurn } from "./guideTurn";
@@ -697,7 +696,6 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       language,
       names,
       lines: [{ id: "line", meaning }],
-      guidePreference: useGuidePreference.getState().preference,
     })
       .then(({ lines }) => {
         const text = lines.line?.trim();
@@ -823,7 +821,6 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       learned,
       open: describeOpenFacts(project, missing),
       transcript,
-      guidePreference: useGuidePreference.getState().preference,
     })
       .then((result) => {
         const current = live();
@@ -2314,7 +2311,6 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         language: `${getBookLanguage(locale).endonym} (${locale})`,
         locale,
         transcript,
-        guidePreference: useGuidePreference.getState().preference,
       });
       const problems = validateComposed(answer.text, {
         meaning: "",

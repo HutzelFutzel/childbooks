@@ -11,15 +11,9 @@
  *
  * **Satisfaction delegates; it does not restate.** `story-cast` calls
  * `isBriefReady` / `briefBlockers`, `cast-looks` and `page-art` read the same
- * provenance and completion helpers the wizard's progress rail reads. A second
+ * provenance and completion helpers the rest of the studio reads. A second
  * definition of "ready" that agrees today is a second definition that disagrees
- * after the next edit, and the two flows have to stay portable: a book started in
- * one must be finishable in the other.
- *
- * **`legacyDestination` is the bridge, and it is temporary.** While the wizard is
- * still the shipped UI, the engine's answer has to be expressible as a wizard
- * destination, so each component names the one that hosts it. It is the only
- * field here that knows the old UI exists, and it goes away with it.
+ * after the next edit.
  *
  * Two subtleties worth knowing before changing a predicate:
  *
@@ -68,18 +62,12 @@ export type GuideComponentId = (typeof GUIDE_COMPONENT_IDS)[number];
  * the page canvas and the flip-through, it does not reimplement them.
  *
  * This is the guide's own vocabulary for "what the reader is looking at", and it is
- * what drives the pane (see `ui/guide/guideCanvas.ts`). `legacyDestination` below
- * describes the same thing in the *wizard's* vocabulary and is deleted with the
- * wizard; the two are pinned against each other by invariant so this one can take
- * over without a behavioural change.
+ * what drives the pane (see `ui/guide/guideCanvas.ts`).
  */
 export type GuideCanvasKind = "none" | "manuscript" | "style" | "cast" | "pages" | "preview";
 
 /** Durable generation a component kicks off. Wired to jobs in a later phase. */
 export type GuideEffectId = "storyDraft" | "castArt" | "screenplay" | "pageArt";
-
-/** The wizard destination that hosts a component while both flows ship. */
-export type GuideLegacyDestination = "story" | "style" | "cast" | "pages" | "order";
 
 export interface GuideComponent {
   id: GuideComponentId;
@@ -99,8 +87,6 @@ export interface GuideComponent {
   isSatisfied: (project: Project) => boolean;
   /** Why it isn't satisfied yet, in the reader's words. Empty when satisfied. */
   blockers: (project: Project) => string[];
-  /** @legacy guide-v2 L5 — only `guideRouting` reads it. */
-  legacyDestination: GuideLegacyDestination;
 }
 
 /**
@@ -164,7 +150,6 @@ const CATALOG: GuideComponent[] = [
       Boolean(p.config.storyBrief) || storySettled(p)
         ? []
         : ["Choose whether we write the story, or you do."],
-    legacyDestination: "story",
   },
   {
     id: "story-cast",
@@ -179,7 +164,6 @@ const CATALOG: GuideComponent[] = [
     // the generator refuses to write.
     isSatisfied: (p) => isBriefReady(briefOf(p.config)) || storySettled(p),
     blockers: (p) => (storySettled(p) ? [] : briefBlockers(briefOf(p.config))),
-    legacyDestination: "story",
   },
   {
     id: "audience",
@@ -204,7 +188,6 @@ const CATALOG: GuideComponent[] = [
       storySettled(p)
         ? []
         : ["Tell us the reading age, or the age of the child it's for."],
-    legacyDestination: "story",
   },
   {
     id: "story-idea",
@@ -227,7 +210,6 @@ const CATALOG: GuideComponent[] = [
       );
     },
     blockers: () => [],
-    legacyDestination: "story",
   },
   {
     id: "story-draft",
@@ -240,7 +222,6 @@ const CATALOG: GuideComponent[] = [
     skippable: false,
     isSatisfied: (p) => p.config.storyText.trim().length > 0,
     blockers: (p) => (p.config.storyText.trim() ? [] : ["The story hasn't been written yet."]),
-    legacyDestination: "story",
   },
   {
     id: "story-approve",
@@ -254,7 +235,6 @@ const CATALOG: GuideComponent[] = [
     // reader saying yes, and everything downstream costs money.
     isSatisfied: (p) => p.stage === "studio",
     blockers: (p) => (p.stage === "studio" ? [] : ["Read the story over and approve it."]),
-    legacyDestination: "story",
   },
   {
     id: "art-style",
@@ -270,7 +250,6 @@ const CATALOG: GuideComponent[] = [
     // out; `undefined` means a project from before the gate existed.
     isSatisfied: (p) => p.config.styleReady !== false,
     blockers: (p) => (p.config.styleReady === false ? ["Pick the look for your book."] : []),
-    legacyDestination: "style",
   },
   {
     id: "cast-looks",
@@ -295,7 +274,6 @@ const CATALOG: GuideComponent[] = [
       }
       return ["Confirm the cast looks right."];
     },
-    legacyDestination: "cast",
   },
   {
     id: "page-plan",
@@ -310,7 +288,6 @@ const CATALOG: GuideComponent[] = [
     blockers: (p) => (p.screenplay ? [] : ["We're still turning the story into pages."]),
     // The wizard has no surface of its own for the wait, so it holds on Cast
     // while the screenplay drafts. The guide narrates it instead.
-    legacyDestination: "cast",
   },
   {
     id: "page-art",
@@ -332,7 +309,6 @@ const CATALOG: GuideComponent[] = [
       if (missing === 0) return [];
       return [`${missing} page${missing === 1 ? " still needs" : "s still need"} a picture.`];
     },
-    legacyDestination: "pages",
   },
   {
     id: "review",
@@ -349,7 +325,6 @@ const CATALOG: GuideComponent[] = [
     terminal: true,
     isSatisfied: () => false,
     blockers: () => [],
-    legacyDestination: "order",
   },
 ];
 

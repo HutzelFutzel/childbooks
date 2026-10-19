@@ -51,7 +51,6 @@ import {
   defaultIllustrationFocus,
   LEGACY_DEFAULT_FONTS,
   migrateDesignToCurrentVersion,
-  migrateGeneratedTextBoxHeights,
   newImageId,
   newTextBoxId,
   insetPageText,
@@ -83,15 +82,9 @@ import { isInteriorPageId, pageColorOf, pageColorsEqual } from "./pageBackground
 import { loadFontReady } from "../typography/fonts";
 import { buildDisplaySpreads, type DisplaySpread, type Entry, type SpreadSide } from "./spreadModel";
 import type { PageSubject } from "./PageEditorCard";
-import { computeProgress, designChapterOf, type StudioStep } from "./studioSteps";
+import { computeProgress } from "./studioSteps";
 import { pickRandomActiveMaskId } from "../../core/config/imageMasks";
 import { useStudioPanelStore } from "./studioPanelStore";
-import {
-  destinationForStep,
-  stepForDestination,
-  type StudioDestination,
-} from "./studioRoutes";
-import { commitStudioProject } from "./studioUndo";
 import { labelForOps, diffDesign } from "../../core/book/changeLog";
 import { canRedoSelector, canUndoSelector, useBookHistory } from "../../state/bookHistory";
 import {
@@ -423,31 +416,11 @@ interface StudioContextValue {
   /** Cancel the in-flight batch generation (if any). */
   cancelGeneration: () => void;
 
-  // guided flow (Story → Anchors → Edit → Order)
-  destination: StudioDestination;
-  navigate: (destination: StudioDestination) => void;
-  /** @legacy guide-v2 L5 — `step`, `setStep` and `openSetup` only drive the Steps rail. */
-  step: StudioStep;
-  setStep: (step: StudioStep) => void;
-  /** Jump to the Story step (used by "Edit story" affordances). */
-  openSetup: () => void;
-
   /**
-   * @legacy guide-v2 L0 — the full-page book-setup gate. Nothing opens it any more:
-   * Pages opens on the book, and size/layout are edited in the docked Setup
-   * panel. Kept until the legacy studio is removed; see docs/LEGACY-GUIDE.md.
+   * Open checkout for the book. Guarded: a book that isn't ready explains what
+   * is still missing instead of opening.
    */
-  designSetupOpen: boolean;
-  openDesignSetup: () => void;
-  closeDesignSetup: () => void;
-
-  /**
-   * Art-style gate / editor. Forced open when `config.styleReady === false`;
-   * otherwise opened from the studio navigator.
-   */
-  styleSetupOpen: boolean;
-  openStyleSetup: () => void;
-  closeStyleSetup: () => void;
+  openOrder: () => void;
 }
 
 function applyStorySnapshot(project: Project, snapshot: StorySnapshot): Project {
@@ -618,13 +591,15 @@ export function useStudio(): StudioContextValue {
 
 export function StudioProvider({
   project,
-  destination,
-  onNavigate,
+  pagesOpen,
+  onOpenOrder,
   children,
 }: {
   project: Project;
-  destination: StudioDestination;
-  onNavigate: (destination: StudioDestination) => void;
+  /** The book's setup is locked and the pages are on screen. */
+  pagesOpen: boolean;
+  /** Called once the book is ready for checkout. */
+  onOpenOrder: () => void;
   children: React.ReactNode;
 }) {
   const setDesign = useProjectsStore((s) => s.setDesign);
@@ -651,9 +626,6 @@ export function StudioProvider({
     new Map(),
   );
   const [busy, setBusy] = useState(false);
-  const [step, setStepRaw] = useState<StudioStep>(() => stepForDestination(destination));
-  const [designSetupOpen, setDesignSetupOpen] = useState(false);
-  const [styleSetupOpen, setStyleSetupOpen] = useState(destination === "style");
   const [snap, setSnap] = useState(true);
   const [grid, setGrid] = useState(false);
   const [guides, setGuides] = useState(false);
@@ -668,13 +640,6 @@ export function StudioProvider({
   /** Active coalesce key — see {@link HistoryOpts.coalesce}. */
   const coalesceKey = useRef<string | null>(null);
   const genAbort = useRef<AbortController | null>(null);
-
-  // Browser history owns the workflow destination. Local state only adapts the
-  // five URL destinations to the existing four-stage editor implementation.
-  useEffect(() => {
-    setStepRaw(stepForDestination(destination));
-    setStyleSetupOpen(destination === "style");
-  }, [destination]);
 
   const startGeneration = useCallback(() => {
     genAbort.current?.abort();
@@ -840,9 +805,11 @@ export function StudioProvider({
   // (the cutout is their outline). Covers stay plain. The write reads the
   // live design so it cannot wipe a picture that landed while it ran.
   const imageMasks = useAppConfigStore((s) => s.imageMasks);
-  const designChapter = designChapterOf(step, project.config.styleReady, styleSetupOpen);
+  // Only once the art style is chosen (`styleReady === false` is the style gate)
+  // and the pages are open.
+  const framingPages = pagesOpen && project.config.styleReady !== false;
   useEffect(() => {
-    if (designChapter !== "pages") return;
+    if (!framingPages) return;
     const masks = imageMasks;
     void useProjectsStore.getState().patchCurrent((live) => {
       if (live.id !== project.id || !live.design) return live;
@@ -857,7 +824,7 @@ export function StudioProvider({
       if (next === live.design) return live;
       return { ...live, design: next };
     });
-  }, [design, designChapter, imageMasks, project.id, project.illustrations]);
+  }, [design, framingPages, imageMasks, project.id, project.illustrations]);
 
   // Each new picture re-inks the story text laid over it, from the contrast
   // measured when it was rendered — unless the reader chose the color.
@@ -890,86 +857,45 @@ export function StudioProvider({
     });
   }, [design, pages, project.id, project.illustrations]);
 
-  // Guarded route navigation: every workflow affordance goes through one gate.
-  // A blocked jump explains what's still missing instead of changing history.
-  const navigate = useCallback(
-    (nextDestination: StudioDestination) => {
-      // Read the LIVE project from the store (not the render-time prop): the
-      // story step advances the stage and navigates in the same tick, so the
-      // captured prop can be one update behind.
-      const live =
-        useProjectsStore.getState().projects.find((p) => p.id === project.id) ?? project;
-      const progress = computeProgress(live);
-      const next = stepForDestination(nextDestination);
-      if (!progress[next].unlocked) {
-        if ((next === "edit" || next === "order") && !progress.anchors.done) {
-          if (live.config.styleReady === false) {
-            notify.info(
-              "Choose an art style first",
-              "Pick the look for your book, then continue to its characters and places.",
-            );
-          } else {
-            notify.info(
-              "Create your characters first",
-              "Finish the Characters & places step before opening the book.",
-            );
-          }
-        } else if (next === "order") {
-          if (progress.edit.unlocked && live.config.designReady !== true) {
-            notify.info(
-              "Open Pages first",
-              "Open your book's pages before reviewing it.",
-            );
-          } else {
-            notify.info(
-              "Your book is still being prepared",
-              "The page-by-page draft needs to finish before you can review it.",
-            );
-          }
-        } else if (next === "edit" && live.stage === "studio") {
+  // Guarded checkout: a blocked request explains what's still missing instead
+  // of opening.
+  const openOrder = useCallback(() => {
+    // Read the LIVE project from the store (not the render-time prop), which can
+    // be one update behind.
+    const live =
+      useProjectsStore.getState().projects.find((p) => p.id === project.id) ?? project;
+    const progress = computeProgress(live);
+    if (!progress.order.unlocked) {
+      if (!progress.anchors.done) {
+        if (live.config.styleReady === false) {
           notify.info(
-            "Your pages are still being prepared",
-            "The page-by-page draft needs to finish before the book can open.",
+            "Choose an art style first",
+            "Pick the look for your book, then continue to its characters and places.",
           );
         } else {
-          notify.info("One step at a time", "Finish the Story step first.");
+          notify.info(
+            "Create your characters first",
+            "Finish the Characters & places step before opening the book.",
+          );
         }
-        return;
+      } else if (progress.edit.unlocked && live.config.designReady !== true) {
+        notify.info("Open Pages first", "Open your book's pages before reviewing it.");
+      } else {
+        notify.info(
+          "Your book is still being prepared",
+          "The page-by-page draft needs to finish before you can review it.",
+        );
       }
-      onNavigate(nextDestination);
-    },
-    [onNavigate, project],
-  );
-
-  const setStep = useCallback(
-    (next: StudioStep) => {
-      const live =
-        useProjectsStore.getState().projects.find((p) => p.id === project.id) ?? project;
-      navigate(destinationForStep(live, next));
-    },
-    [navigate, project],
-  );
-
-  const openSetup = useCallback(() => setStep("story"), [setStep]);
-  const closeDesignSetup = useCallback(() => setDesignSetupOpen(false), []);
-  const openStyleSetup = useCallback(() => setStyleSetupOpen(true), []);
-  const closeStyleSetup = useCallback(() => setStyleSetupOpen(false), []);
+      return;
+    }
+    onOpenOrder();
+  }, [onOpenOrder, project]);
 
   const select = useCallback((sel: Selection) => {
     setSelection(sel);
     const kind =
       sel.kind === "box" ? "box" : sel.kind === "image" ? "image" : sel.kind === "shape" ? "shape" : "other";
     useStudioPanelStore.getState().onSelectionKind(kind);
-  }, []);
-
-  /**
-   * Book setup is one control that opens and closes the docked Setup panel.
-   * There is no first-visit variant anymore: size and layout ship with working
-   * defaults, so Pages opens on the book and this is simply where either gets
-   * changed.
-   */
-  const openDesignSetup = useCallback(() => {
-    useStudioPanelStore.getState().toggleToolPanel("setup");
   }, []);
 
   // Entering/leaving focused edit clears element selection so the inspector
@@ -2425,17 +2351,7 @@ export function StudioProvider({
             setBusy,
             startGeneration,
             cancelGeneration,
-            destination,
-            navigate,
-            step,
-            setStep,
-            openSetup,
-            designSetupOpen,
-            openDesignSetup,
-            closeDesignSetup,
-            styleSetupOpen,
-            openStyleSetup,
-            closeStyleSetup,
+            openOrder,
           }
         : null,
     [
@@ -2526,17 +2442,7 @@ export function StudioProvider({
       setBusy,
       startGeneration,
       cancelGeneration,
-      destination,
-      navigate,
-      step,
-      setStep,
-      openSetup,
-      designSetupOpen,
-      openDesignSetup,
-      closeDesignSetup,
-      styleSetupOpen,
-      openStyleSetup,
-      closeStyleSetup,
+      openOrder,
     ],
   );
 

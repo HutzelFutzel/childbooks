@@ -23,8 +23,7 @@ import { Skeleton } from "../components/Skeleton";
 import { fadeRise } from "../lib/motion";
 import { notify } from "../lib/notify";
 import { ProjectCard } from "./ProjectCard";
-import { defaultDestination, studioPath } from "../studio/studioRoutes";
-import { guideModeNow, studioEntryPath } from "../guide/useGuideMode";
+import { studioPath } from "../studio/studioRoutes";
 
 type SortOption = "recent" | "title" | "created";
 
@@ -136,7 +135,7 @@ export function Dashboard() {
       // pending entry as a route transition, so the new library card never
       // flashes before the destination is ready.
       const projectId = await createProject(title, true);
-      router.push(studioEntryPath(projectId), { scroll: false });
+      router.push(studioPath(projectId), { scroll: false });
     } catch {
       setCreating(false);
       notify.error("Could not create storybook");
@@ -148,14 +147,7 @@ export function Dashboard() {
     const project = projects.find((candidate) => candidate.id === id);
     if (!project) return;
     setOpeningId(id);
-    // On the guide, open the book without naming a destination and let the studio
-    // shell ask the engine. Baking one here would be the wizard's answer, and the
-    // shell honours an explicit destination — so the engine would never be asked.
-    if (guideModeNow(project.id) === "guide") {
-      router.push(`/studio/${encodeURIComponent(project.id)}`, { scroll: false });
-      return;
-    }
-    router.push(studioPath(project.id, defaultDestination(project)), { scroll: false });
+    router.push(studioPath(project.id), { scroll: false });
   };
 
   const confirmDelete = async () => {

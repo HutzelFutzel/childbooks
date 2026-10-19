@@ -1,9 +1,13 @@
-/** @legacy guide-v2 L4 — deleted with the wizard. See docs/LEGACY-GUIDE.md. */
+/**
+ * The book-size and page-layout pickers behind the studio's Setup dock.
+ *
+ * Size comes first because layout availability depends on it.
+ */
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, Check, LayoutTemplate, Ruler, Sparkles, TriangleAlert } from "lucide-react";
+import { BookOpen, Check, Sparkles, TriangleAlert } from "lucide-react";
 import { bookSizeFromAspect } from "../../core/config/options";
 import { bookProductForConfig } from "../../core/book";
-import { getBookLayout, isKnownLayoutId } from "../../core/book/layouts";
+import { getBookLayout } from "../../core/book/layouts";
 import { layoutAvailability, resolveLayoutById, resolvedLayouts } from "../../core/book/layoutCatalog";
 import { useOfferableFormats, trimKey, type SizeOption } from "../hooks/useOfferableFormats";
 import { useAppConfigStore } from "../../state/appConfigStore";
@@ -14,9 +18,37 @@ import { ShipToNote } from "../components/ShipToNote";
 import { LayoutSchematic } from "../design/LayoutSchematic";
 import { cn } from "../lib/cn";
 import type { BookConfig } from "../../core/types";
-import type { GuidedQuestion } from "./GuidedQuestions";
-import { BookSizeShape } from "./visuals";
-import type { StepProps } from "./steps/types";
+
+/** A page shape rendered at the given aspect ratio. */
+function BookSizeShape({
+  aspect,
+  size = "md",
+}: {
+  aspect: number;
+  /** `sm` fits a compact dock row; `md` is the full-size card visual. */
+  size?: "sm" | "md";
+}) {
+  // Normalize so the larger dimension matches the slot.
+  const max = size === "sm" ? 28 : 64;
+  const w = aspect >= 1 ? max : Math.round(max * aspect);
+  const h = aspect >= 1 ? Math.round(max / aspect) : max;
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-center",
+        size === "sm" ? "size-10 shrink-0" : "h-20",
+      )}
+    >
+      <div
+        className={cn(
+          "bg-brand-100 ring-brand-300",
+          size === "sm" ? "rounded-sm ring-1" : "rounded-md ring-2",
+        )}
+        style={{ width: w, height: h }}
+      />
+    </div>
+  );
+}
 
 /** Format a trim in inches as a friendly "8.5 × 8.5 in" string. */
 function trimLabel(widthIn: number, heightIn: number): string {
@@ -53,7 +85,8 @@ function money(amount: number, currency: string): string {
   }
 }
 
-type PickerProps = StepProps & {
+type PickerProps = {
+  config: BookConfig;
   /** Single-column rows for the docked Setup accordion (~320px). */
   compact?: boolean;
 };
@@ -558,40 +591,3 @@ function SelectDot({ selected }: { selected: boolean }) {
     </span>
   );
 }
-
-/**
- * The Design flow: the decisions the pages themselves are built on.
- *
- * The page size sets the aspect every illustration is generated at, and the
- * layout decides where the words sit and what the image model is told to keep
- * clear for them. Both have to be settled before any art exists; everything
- * else about the printed object — binding, print tier, paper, cover finish —
- * leaves the pages untouched and is asked at checkout, where the page count
- * that constrains the binding is finally known.
- */
-export const DESIGN_QUESTIONS: GuidedQuestion[] = [
-  {
-    id: "size",
-    title: "Choose your book size",
-    subtitle: "Sets the physical dimensions and aspect ratio for your story pages.",
-    icon: Ruler,
-    isAnswered: (c) => Boolean(c.productSku),
-    summary: sizeSummary,
-    render: (props) => <SizeQuestion {...props} />,
-  },
-  {
-    id: "layout",
-    title: "Layout",
-    subtitle: "Words on the picture, or next to it.",
-    icon: LayoutTemplate,
-    // Only ask layout as a guided question if there are multiple layouts to choose from.
-    visible: (c) => {
-      const shape = bookSizeFromAspect(bookProductForConfig(c).aspect);
-      const layouts = resolvedLayouts(useAppConfigStore.getState().layouts, shape);
-      return layouts.length > 1;
-    },
-    isAnswered: (c) => isKnownLayoutId(c.layoutId),
-    summary: layoutSummary,
-    render: (props) => <LayoutQuestion {...props} />,
-  },
-];

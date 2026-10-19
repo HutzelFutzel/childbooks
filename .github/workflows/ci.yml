@@ -70,11 +70,10 @@ jobs:
       - name: Check coupon invariants
         run: yarn check:coupons
 
-      # Two things typechecking can't see while the chat-guided studio is being
-      # built beside the wizard: a rollout document whose absence or corruption
-      # would put a paying customer in an unfinished flow, and a legacy manifest
-      # that has drifted from the code it is supposed to be the delete-list for.
-      - name: Check guide rollout invariants
+      # What typechecking can't see in the Chat studio: the settings document's
+      # defaults and normalization, the engine, the interpreter's contract and the
+      # rest of the guide's offline checks.
+      - name: Check guide invariants
         run: yarn check:guide
 
       # App Hosting applies apphosting.yaml's env when it builds; a bare

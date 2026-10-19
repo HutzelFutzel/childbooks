@@ -83,11 +83,8 @@ yarn dev:all        # frontend on http://localhost:1420 plus the backend
 ```
 
 1. Sign in with an admin account.
-2. Go to **Admin → Configuration → Creative defaults → Guided studio → Rollout**
-   and choose **Admins only** (or **Everyone** on a test environment). Save.
-3. Create a new book. If the Steps studio opens, switch to **Chat** with the
-   toggle at the top of the studio.
-4. Leave every Guided-studio setting at its default for sections 1–10.
+2. Create a new book. It opens in the Chat studio.
+3. Leave every Guided-studio setting at its default for sections 1–10.
    Section 11 changes them.
 
 Tips:
@@ -320,10 +317,9 @@ on a fresh guided book.
       casual "du" (for example "Wähl, was dir wichtig ist, oder leg direkt
       los."). Theme, setting and device options come from the admin's Story
       craft catalog and keep their catalog labels.
-- [ ] **3A.12 Steps keeps the details.** Switch the book from 3A.5 to Steps
-      before writing. *Expected:* theme, setting, devices, occasion and
-      "Anything else" (the Steps brief's **Must include**) show in the Steps
-      brief. Switch back: the card still shows them.
+- [ ] **3A.12 The details survive a reload.** Reload the page after 3A.5 and
+      before writing. *Expected:* the card still shows theme, setting, devices,
+      occasion and "Anything else".
 - [ ] **3A.13 A detail that fits nowhere.** With the card open, type
       `Grandpa always whistles when he cooks`.
       *Expected:* an **Anything else: Grandpa always whistles when he cooks**
@@ -1485,14 +1481,6 @@ changes**, reload the studio, and check the effect.
       after the portraits button appeared, then tap it).
       *Expected:* the job ends with an error starting "This needs an age for
       …", and no Sparks are charged.
-
----
-
-## 13. Steps studio
-
-- [ ] **13.1 Steps is unchanged.** Switch a book to Steps.
-      *Expected:* the Steps studio works as before. The skills and suggestion
-      chips appear only in Chat.
 
 ---
 

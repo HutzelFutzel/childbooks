@@ -51,7 +51,6 @@ import { useAuthStore } from "../../state/authStore";
 import { Drawer } from "../components/Drawer";
 import { cn } from "../lib/cn";
 import { StudioProvider, useStudio } from "../studio/StudioContext";
-import type { StudioDestination } from "../studio/studioRoutes";
 import { CastView } from "./book/CastView";
 import { PageFocus } from "./book/PageFocus";
 import { PagesView } from "./book/PagesView";
@@ -79,7 +78,7 @@ import { useGuideMemory } from "./useGuideMemory";
 import { useCardHold, useWellConversation } from "./useWellConversation";
 import { isQuietMessage, latestTurn } from "../../core/guide/conversation";
 
-export function GuideStudio({ onNavigate }: { onNavigate: (destination: StudioDestination) => void }) {
+export function GuideStudio() {
   const project = useProjectsStore((s) => s.current());
   const open = useChatStudio((s) => s.open);
   const close = useChatStudio((s) => s.close);
@@ -103,26 +102,19 @@ export function GuideStudio({ onNavigate }: { onNavigate: (destination: StudioDe
   if (!project) return null;
   return (
     <GuideIntl>
-      <StudioShell project={project} onNavigate={onNavigate} />
+      <StudioShell project={project} />
     </GuideIntl>
   );
 }
 
-function StudioShell({ project, onNavigate }: { project: Project; onNavigate: (d: StudioDestination) => void }) {
+function StudioShell({ project }: { project: Project }) {
   const journey = useChatJourney(project);
   const [ordering, setOrdering] = useState(false);
-  const destination: StudioDestination = journey.locked ? "pages" : "story";
-  // The Studio's own navigation (the editor's "order" button) opens checkout
-  // here; everything else stays on the conversation.
-  const navigate = useCallback(
-    (next: StudioDestination) => {
-      if (next === "order") setOrdering(true);
-      else onNavigate(next);
-    },
-    [onNavigate],
-  );
+  // The editor's "order" button opens checkout here; everything else stays on
+  // the conversation.
+  const openOrder = useCallback(() => setOrdering(true), []);
   return (
-    <StudioProvider project={project} destination={destination} onNavigate={navigate}>
+    <StudioProvider project={project} pagesOpen={journey.locked} onOpenOrder={openOrder}>
       <ChatShell project={project} journey={journey} ordering={ordering} onOrdering={setOrdering} />
     </StudioProvider>
   );

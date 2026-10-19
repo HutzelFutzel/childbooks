@@ -53,7 +53,6 @@ import { deleteLikenessPhoto } from "../platform/likeness";
 import { guideComposeRemote, storyFitRemote } from "../platform/aiClient";
 import { startStoryRevision } from "../platform/storyRevisions";
 import { confirmCoverWords, setAuthor, setSubtitle, setTitle, stepPicture, updateCastMember } from "../ui/guide/bookActions";
-import { useGuidePreference } from "../ui/guide/guidePreference";
 import { fontsForBookLanguage } from "../ui/typography/fonts";
 import { useAppConfigStore } from "./appConfigStore";
 import { useAuthStore } from "./authStore";
@@ -655,7 +654,6 @@ export async function composeUtterance(
         names: utterance.names,
         meanings: utterance.meanings,
         transcript: args.transcript,
-        guidePreference: useGuidePreference.getState().preference,
       },
       controller.signal,
     );

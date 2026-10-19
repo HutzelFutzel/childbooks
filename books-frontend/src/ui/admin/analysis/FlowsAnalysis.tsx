@@ -27,7 +27,7 @@
  * flows belongs to neither, and seeing that there are forty of them is the
  * difference between trusting this page and being misled by it.
  *
- * Retired with the comparison (see docs/LEGACY-GUIDE.md).
+ * Historical: every book is now made in the Chat studio, so no new data arrives.
  */
 import { useEffect } from "react";
 import { AlertTriangle, GitCompare, Info, Loader2, MessagesSquare, RefreshCw } from "lucide-react";

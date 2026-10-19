@@ -1,6 +1,6 @@
 # New studio guide
 
-The Chat presentation. The Steps studio stays as it is. Shared editors, jobs, and the project stay shared. This file is the authoritative UI and behaviour contract from an empty book through the order button. `STUDIO-GUIDE-FLOW-DESIGN.md` owns checkout after that button; its earlier journey material is supporting rationale only where it does not conflict with this file.
+The Chat presentation, now the only studio. Shared editors, jobs, and the project stay shared. This file is the authoritative UI and behaviour contract from an empty book through the order button. `STUDIO-GUIDE-FLOW-DESIGN.md` owns checkout after that button; its earlier journey material is supporting rationale only where it does not conflict with this file.
 
 ## UI
 

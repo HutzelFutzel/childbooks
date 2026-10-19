@@ -1,6 +1,9 @@
 # Studio Guide dual-flow implementation
 
-Status: accepted for implementation.
+Status: delivered. The migration is complete: the Steps studio, the rollout and the
+admin toggle are removed, and the Chat studio is the only studio. The sections below
+are kept as the record of the plan; where they mention Steps, rollout or
+`LEGACY-GUIDE.md`, that no longer exists.
 
 This plan turns the product behavior in:
 
@@ -14,8 +17,8 @@ This plan turns the product behavior in:
 into an additive migration beside the existing Steps studio. It does not replace
 the Steps presentation while the new Chat presentation is being built.
 
-`LEGACY-GUIDE.md` remains the retirement ledger. This document owns implementation
-order and architecture decisions; it does not redefine product requirements.
+This document owns implementation order and architecture decisions; it does not
+redefine product requirements.
 
 ## Non-negotiable boundaries
 
@@ -210,7 +213,7 @@ decision.
 
 ## Retirement rule
 
-Retire one `LEGACY-GUIDE.md` row at a time only when the Guide has parity for that
+(Historical.) The legacy path was to be retired one row at a time, only when the Guide has parity for that
 behavior, assigned cohorts meet the agreed product and reliability metrics, no
 unresolved hard-stop defect remains, rollback has survived the observation window,
 usage/import scans show the old item is unreachable, and the row's own retirement
