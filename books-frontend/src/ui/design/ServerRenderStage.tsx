@@ -95,6 +95,14 @@ interface RenderState {
   };
 }
 
+/** How large one picture is drawn relative to its own pixels (page laid out at print DPI). */
+interface ArtworkUse {
+  blobId: string;
+  scale: number;
+  naturalWidth: number;
+  naturalHeight: number;
+}
+
 declare global {
   interface Window {
     __bookRender?: {
@@ -102,6 +110,7 @@ declare global {
       error?: string;
       captures?: CaptureSpec[];
       viewport?: { width: number; height: number };
+      artwork?: ArtworkUse[];
     };
   }
 }
@@ -145,6 +154,7 @@ export function ServerRenderStage() {
           ready: true,
           captures: state.captures,
           viewport: viewportFor(state),
+          artwork: measureArtwork(stage, state.artwork.artwork),
         };
       } catch (err) {
         window.__bookRender = { error: (err as Error)?.message ?? "The book could not be laid out." };
@@ -187,6 +197,42 @@ export function ServerRenderStage() {
       )}
     </div>
   );
+}
+
+/**
+ * The largest factor each picture is drawn at. The stage is laid out at
+ * EXPORT_DPI CSS pixels per inch and photographed at device scale 1, so a factor
+ * of 2 means the picture has half the pixels its printed size needs. Cropped
+ * (`object-fit: cover`) art is drawn at the larger of the two axis factors.
+ * Never throws: a missing measurement only means print preparation measures again.
+ */
+function measureArtwork(stage: HTMLElement, artwork: Record<string, string>): ArtworkUse[] {
+  try {
+    const byUrl = new Map<string, string>();
+    for (const [blobId, url] of Object.entries(artwork)) {
+      byUrl.set(url, blobId);
+      try {
+        byUrl.set(new URL(url, window.location.href).href, blobId);
+      } catch {
+        // A URL the page can't resolve can't match an <img> either.
+      }
+    }
+    const uses = new Map<string, ArtworkUse>();
+    for (const img of Array.from(stage.querySelectorAll("img"))) {
+      const blobId = byUrl.get(img.currentSrc) ?? byUrl.get(img.src);
+      if (!blobId || !img.naturalWidth || !img.naturalHeight) continue;
+      const rect = img.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      const scale = Math.max(rect.width / img.naturalWidth, rect.height / img.naturalHeight);
+      const prev = uses.get(blobId);
+      if (!prev || scale > prev.scale) {
+        uses.set(blobId, { blobId, scale, naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight });
+      }
+    }
+    return [...uses.values()];
+  } catch {
+    return [];
+  }
 }
 
 /** The largest single page, so the renderer's viewport can hold one whole. */

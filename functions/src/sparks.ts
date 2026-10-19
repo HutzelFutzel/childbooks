@@ -41,9 +41,13 @@ import { recordFinanceEvent } from "./finance";
 import {
   estimateForAction,
   priceForAction,
+  printPrepFixedSparks,
+  printPrepSurchargeUsd,
   type LedgerEntryType,
   type SparksConfig,
 } from "../../books-frontend/src/core/config/sparks";
+import { isPrintPrepAction, slotHasArt } from "../../books-frontend/src/core/billing/printPrepCharge";
+import type { Project } from "../../books-frontend/src/core/types";
 import {
   costForUsage,
   costKey,
@@ -1009,9 +1013,11 @@ export async function estimateForUser(
   kind: CostSampleKind = "fresh",
   /** Reference images this render plans to send (`referencePlan`); absent prices from every count. */
   referenceCount?: number,
+  opts: { printPrep?: boolean } = {},
 ): Promise<number> {
   const config = await getSparksConfig();
   if (!config.enabled) return 0;
+  const prepUsd = opts.printPrep && isPrintPrepAction(action) ? printPrepSurchargeUsd(config) : 0;
   // The campaign override is folded in here as well as at settlement, from the
   // same helper. If it only reached one of the two, the studio would quote a
   // price the wallet doesn't charge — in whichever direction is worse.
@@ -1044,9 +1050,97 @@ export async function estimateForUser(
           : Math.min(referenceCount, (await referenceLimitsForAction(action, tier)).maxReferenceImages),
     });
     const rateUsd = await nominalRateCostUsd(models.imageModel);
-    return derivedUnitPrice({ stats, sparks: config, action, tier, profile, rateUsd }, multiplier).sparks;
+    return derivedUnitPrice({ stats, sparks: config, action, tier, profile, rateUsd, extraUsd: prepUsd }, multiplier)
+      .sparks;
   }
-  return estimateForAction(config, action, multiplier);
+  const flat = estimateForAction(config, action, multiplier);
+  return flat > 0 && prepUsd > 0 ? flat + printPrepFixedSparks(config, multiplier) : flat;
+}
+
+// ---- Print-prep slot ledger ---------------------------------------------------------
+
+/**
+ * One page/cover slot whose print preparation has been paid for:
+ * `users/{uid}/printPrepSlots/{hash(projectId, slotId)}`. Server-only.
+ */
+function printPrepSlotRef(uid: string, projectId: string, slotId: string) {
+  const id = createHash("sha256").update(`${projectId}\n${slotId}`).digest("hex").slice(0, 40);
+  return db().doc(`users/${uid}/printPrepSlots/${id}`);
+}
+
+/**
+ * Whether this render of this slot should carry the print-prep surcharge: it is
+ * a page/cover render, the surcharge is on, the book has no artwork there yet
+ * and the slot was never paid for. Fails open to "no surcharge" — a lookup error
+ * must not raise a price.
+ */
+export async function printPrepDue(
+  uid: string,
+  project: Pick<Project, "id" | "illustrations"> | null | undefined,
+  slotId: string,
+  action: string,
+): Promise<boolean> {
+  try {
+    if (!project?.id || !isPrintPrepAction(action)) return false;
+    if (printPrepSurchargeUsd(await getSparksConfig()) <= 0) return false;
+    if (slotHasArt(project, slotId)) return false;
+    return !(await printPrepSlotRef(uid, project.id, slotId).get()).exists;
+  } catch (err) {
+    console.warn("[sparks] print-prep lookup failed; quoting without the surcharge", err);
+    return false;
+  }
+}
+
+/**
+ * The surcharge's share of one quoted price: the price with it minus the price
+ * without it. Computed by the same estimator, so the split is exact.
+ */
+export async function printPrepShare(
+  uid: string,
+  action: string,
+  tier: ImageTier,
+  kind: CostSampleKind,
+  referenceCount: number | undefined,
+  withPrep: number,
+): Promise<number> {
+  const without = await estimateForUser(uid, action, tier, kind, referenceCount);
+  return Math.max(0, withPrep - without);
+}
+
+/**
+ * Claim a slot's print preparation for one settlement, atomically.
+ *
+ * Returns true when this settlement owns the claim (first ever, or the same
+ * settle key re-driven) and should charge the surcharge; false when another
+ * render already paid for the slot — the caller then drops the surcharge's share
+ * from its charge. Fails open to "already paid" so an outage never double-bills.
+ */
+export async function claimPrintPrepSlot(
+  uid: string,
+  projectId: string,
+  slotId: string,
+  claim: { settleKey: string; sparks: number; runId: string },
+): Promise<boolean> {
+  try {
+    ensureAdmin();
+    const ref = printPrepSlotRef(uid, projectId, slotId);
+    return await db().runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (snap.exists) return snap.get("settleKey") === claim.settleKey;
+      tx.create(ref, {
+        projectId,
+        slotId,
+        settleKey: claim.settleKey,
+        sparks: claim.sparks,
+        runId: claim.runId,
+        at: Date.now(),
+      });
+      return true;
+    });
+  } catch (err) {
+    console.warn("[sparks] print-prep slot claim failed; charging without the surcharge", err);
+    return false;
+  }
 }
 
 /** What the priced model and the action's tuning let a render send. */
@@ -1074,6 +1168,8 @@ export interface AffordActionOptions extends AffordOptions {
   kind?: CostSampleKind;
   /** Reference images the render plans to send, planned by the server from the request. */
   referenceCount?: number;
+  /** This render is its slot's first and carries the print-prep surcharge ({@link printPrepDue}). */
+  printPrep?: boolean;
 }
 
 /**
@@ -1089,7 +1185,9 @@ export async function ensureAffordAction(
   tier: ImageTier,
   opts: AffordActionOptions = {},
 ): Promise<number> {
-  const estimate = await estimateForUser(uid, action, tier, opts.kind ?? "fresh", opts.referenceCount);
+  const estimate = await estimateForUser(uid, action, tier, opts.kind ?? "fresh", opts.referenceCount, {
+    printPrep: opts.printPrep,
+  });
   await ensureAfford(uid, estimate, opts);
   return estimate;
 }

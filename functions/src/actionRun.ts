@@ -32,7 +32,8 @@ import {
   type CostGroup,
   type UsageEvent,
 } from "./usage";
-import { estimateForUser, settleActionCost } from "./sparks";
+import { claimPrintPrepSlot, estimateForUser, settleActionCost } from "./sparks";
+import { recordPrintPrepCharge } from "./printPrepStats";
 import { ensureProjectMirror, recordProjectRun } from "./projects";
 import { recordTaskLatency } from "./latency";
 import { log } from "./logs";
@@ -125,6 +126,8 @@ export interface ActionRunDoc {
     unfunded: number;
     paidUsd: number;
     byLotSource: Record<string, number>;
+    /** The print-prep surcharge inside `charged` (0 when the slot was already paid for). */
+    printPrep?: number;
   };
   /** Spark value charged minus what the calls cost us. */
   marginUsd: number;
@@ -165,6 +168,12 @@ export interface MeterAndSettleArgs {
    * repeat is the user deliberately asking again.
    */
   settleKey?: string;
+  /**
+   * The quote included the print-prep surcharge for this slot (`sparks` is its
+   * share). Settlement claims the slot first and drops the share when another
+   * render already paid for it.
+   */
+  printPrep?: { slotId: string; sparks: number };
   startedAt: number;
   outcome?: RunOutcome;
   errorCode?: string;
@@ -274,6 +283,21 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
           )))
         : 0;
 
+    // The slot is claimed BEFORE the charge: if two renders of one slot finish
+    // together, exactly one pays for its print preparation.
+    let charge = quoted;
+    let printPrepSparks = 0;
+    if (outcome === "ok" && args.printPrep && args.projectId && typeof quoted === "number") {
+      const share = Math.min(quoted, Math.max(0, Math.round(args.printPrep.sparks)));
+      const owns = await claimPrintPrepSlot(args.uid, args.projectId, args.printPrep.slotId, {
+        settleKey: args.settleKey ?? `run:${runId}`,
+        sparks: share,
+        runId,
+      });
+      if (owns) printPrepSparks = share;
+      else charge = quoted - share;
+    }
+
     const settled = await settleActionCost(args.uid, args.action, args.events, {
       projectId: args.projectId,
       runId,
@@ -281,12 +305,16 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
       // you spent on fast renders" with a query rather than a join through here.
       tier: args.tier,
       settleKey: args.settleKey,
-      exactSparks: quoted,
+      exactSparks: charge,
     });
 
     const { billable, unbilled } = eventSplit;
     const sparksConfig = await getSparksConfig();
     const chargedValueUsd = settled.sparks * sparksConfig.sparkValueUsd;
+    // A re-driven task settles to 0 (already charged): only a real charge counts.
+    if (printPrepSparks > 0 && settled.sparks > 0) {
+      await recordPrintPrepCharge(printPrepSparks, sparksConfig.sparkValueUsd);
+    }
     const breakdown = settled.breakdown;
 
     const run: ActionRunDoc = {
@@ -326,6 +354,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
         unfunded: breakdown?.unfundedSparks ?? 0,
         paidUsd: breakdown?.paidUsd ?? 0,
         byLotSource: breakdown?.freeBySource ?? {},
+        ...(args.printPrep ? { printPrep: settled.sparks > 0 ? printPrepSparks : 0 } : {}),
       },
       marginUsd: Math.round((chargedValueUsd - totals.totalUsd) * 10000) / 10000,
       durationMs,

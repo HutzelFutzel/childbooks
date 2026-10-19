@@ -18,7 +18,13 @@ import { backendPipelineEnv } from "./pipelineEnv";
 import { withUsage } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
 import { isClientMilestone, touchProject } from "./projects";
-import { ensureAffordAction, InsufficientSparks, referenceLimitsForAction } from "./sparks";
+import {
+  ensureAffordAction,
+  InsufficientSparks,
+  printPrepDue,
+  printPrepShare,
+  referenceLimitsForAction,
+} from "./sparks";
 import { hasLikenessPhotoForSubject } from "./likeness";
 import {
   plannedAnchorReferences,
@@ -1506,11 +1512,16 @@ export function registerAiRoutes(app: Express): void {
         { ...(options ?? {}), masked: Boolean(options?.mask), continuation: Boolean(coverContinuationBlobId) },
         await referenceLimitsForAction(action, tier),
       );
+      const printPrep = await printPrepDue(req.uid!, project, spreadId, action);
       const quotedSparks = await ensureAffordAction(req.uid!, action, tier, {
         noNegativeBuffer: guest,
         kind: renderKind,
         referenceCount,
+        printPrep,
       });
+      const printPrepSparks = printPrep
+        ? await printPrepShare(req.uid!, action, tier, renderKind, referenceCount, quotedSparks)
+        : 0;
       const [models, prompts, layouts, capabilities, generationTuning] = await Promise.all([
         resolveImageModels(cover ? "coverIllustration" : "pageIllustration", tier),
         loadPromptContext(),
@@ -1557,6 +1568,7 @@ export function registerAiRoutes(app: Express): void {
         targetId: spreadId,
         source: "sync",
         quotedSparks,
+        ...(printPrep ? { printPrep: { slotId: spreadId, sparks: printPrepSparks } } : {}),
         startedAt,
         models: { image: models.imageModel, text: models.textModel },
         generation: value?.generation,

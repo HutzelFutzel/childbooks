@@ -15,6 +15,9 @@
  *   POST /admin/orders/:key/sync          ask the printer for this order's status now
  *   POST /admin/orders/:key/ack           "I've handled this" (with a note)
  *
+ * Print-file actions (`rerun-print-prep`, `use-standard-files`) and the print
+ * preparation dashboard live with the pipeline, in `printPrep.ts`.
+ *
  * Every action is recorded on the order's timeline with who did it, and goes
  * through the same writer as everything else — so the queue and the Slack alert
  * can't disagree about whether something is still open.
@@ -43,6 +46,7 @@ import {
 import { checkPrinterLink } from "./printOrderWatchdog";
 import { ensurePrintOrdersBackfilled } from "./printOrderBackfill";
 import { fulfillPaidOrder, sendConfirmationIfPlaced } from "./stripe";
+import { readPrintPrepForAdmin } from "./printPrep";
 import { sendOrderConfirmationEmail, sendOrderFailedEmail, sendOrderShippedEmail } from "./email/triggers";
 import { toUsd } from "./finance";
 import { computeOrderAnalytics } from "../../books-frontend/src/core/orders/analytics";
@@ -217,13 +221,15 @@ export function registerPrintOrderAdminRoutes(app: Express): void {
     try {
       const record = await getPrintOrder(req.params.key);
       if (!record) return fail(res, 404, "That order doesn't exist.");
-      const [events, payment] = await Promise.all([
+      const [events, payment, printPrep] = await Promise.all([
         listOrderEvents(record.key),
         record.paymentId ? getAdminPayment(record.paymentId) : Promise.resolve(null),
+        record.paymentId ? readPrintPrepForAdmin(record.paymentId).catch(() => null) : Promise.resolve(null),
       ]);
       res.json({
         record,
         events,
+        printPrep,
         payment: payment
           ? {
               id: payment.id,
@@ -237,6 +243,9 @@ export function registerPrintOrderAdminRoutes(app: Express): void {
               attempts: payment.fulfillmentAttempts,
               lastError: payment.lastFulfillmentError,
               rejectedOrderIds: payment.rejectedOrderIds,
+              printPrepEligible: Boolean(payment.fulfillment?.printPrep),
+              checkoutFiles: payment.fulfillment?.sourceFileUrls ?? null,
+              placedFiles: payment.placedFileUrls,
             }
           : null,
       });

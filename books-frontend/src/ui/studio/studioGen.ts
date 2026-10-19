@@ -48,6 +48,7 @@ import {
   type AnchorPlanOptions,
   type IllustrationPlanOptions,
 } from "../../core/billing/referencePlan";
+import { slotHasArt } from "../../core/billing/printPrepCharge";
 import { CUSTOMER_IMAGE_TIER, type ImageTier } from "../../core/config/modelConfig";
 
 /** One unit of a batch, priced the way the server will settle it. */
@@ -56,6 +57,8 @@ export interface BatchUnit {
   kind?: CostSampleKind;
   /** Reference images it plans to send, priced in that group as the server will. */
   refs?: number;
+  /** The slot's first artwork: carries the print-prep surcharge, as the server will price it. */
+  prep?: boolean;
 }
 
 /** Sheets as a batch would draw them, for price labels (`batchItemsOf`). */
@@ -82,10 +85,12 @@ function anchorUnit(project: Project, anchorId: string, options: AnchorPlanOptio
 
 function illustrationUnit(project: Project, spreadId: string, options: IllustrationPlanOptions = {}): BatchUnit {
   const action = illustrationActionForId(spreadId);
+  const kind = generationRenderKindOf(options);
   return {
     action,
-    kind: generationRenderKindOf(options),
+    kind,
     refs: plannedIllustrationReferences(project, spreadId, options, clientReferenceLimits(action)),
+    ...(kind === "fresh" && !slotHasArt(project, spreadId) ? { prep: true } : {}),
   };
 }
 
@@ -136,8 +141,8 @@ function ensureBatchAffordable(units: BatchUnit[], tier: ImageTier): boolean {
 
   const overrides = usePriceOverridesStore.getState().actions;
   const priced = new Map<string, number>();
-  const priceOf = ({ action, kind = "fresh", refs }: BatchUnit): number => {
-    const key = `${action}:${kind}:${refs ?? ""}`;
+  const priceOf = ({ action, kind = "fresh", refs, prep = false }: BatchUnit): number => {
+    const key = `${action}:${kind}:${refs ?? ""}:${prep}`;
     const hit = priced.get(key);
     if (hit !== undefined) return hit;
     const multiplier =
@@ -152,6 +157,7 @@ function ensureBatchAffordable(units: BatchUnit[], tier: ImageTier): boolean {
       multiplier,
       kind,
       refs,
+      prep,
     );
     // No range means the economy can't price it here; fall back to the flat
     // configured estimate rather than quoting free.

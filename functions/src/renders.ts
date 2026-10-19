@@ -39,6 +39,7 @@ import {
   pdfBlob,
   type RasterPage,
 } from "../../books-frontend/src/core/print/assemble";
+import { mergeArtworkDemand, type ArtworkDemand } from "../../books-frontend/src/core/print/printPrep";
 
 /** Which document a raster belongs to. */
 export type RasterRole = "interior" | "ebook" | "cover-front" | "cover-back" | "spine";
@@ -63,6 +64,53 @@ interface RenderDoc {
   /** Retained cover panels, so a new spine width doesn't need a new render. */
   panels?: Record<string, RasterRecord>;
   interiorPageCount?: number;
+  /** The request each document was built from, keyed like `documents`, so it can be rebuilt. */
+  requests?: Record<string, DocumentRequest>;
+  /** How much each picture is enlarged on the page (see `core/print/printPrep`). */
+  artwork?: Record<string, Omit<ArtworkDemand, "blobId">>;
+  /** When `artwork` was measured. */
+  artworkAt?: number;
+}
+
+/** What print preparation needs to know about one render. */
+export interface RenderIndex {
+  projectId: string | null;
+  documents: Record<string, string>;
+  requests: Record<string, DocumentRequest>;
+  artwork: Record<string, Omit<ArtworkDemand, "blobId">> | null;
+}
+
+export async function readRenderIndex(uid: string, fingerprint: string): Promise<RenderIndex | null> {
+  if (!validFingerprint(fingerprint)) return null;
+  const data = (await docRef(uid, fingerprint).get()).data() as RenderDoc | undefined;
+  if (!data) return null;
+  return {
+    projectId: data.projectId ?? null,
+    documents: data.documents ?? {},
+    requests: data.requests ?? {},
+    artwork: data.artwork ?? null,
+  };
+}
+
+/**
+ * Record how the render page drew each picture. Measured on every render (it
+ * costs nothing there), so an order rarely needs a separate measuring pass.
+ */
+export async function recordArtworkDemand(
+  uid: string,
+  fingerprint: string,
+  demand: readonly ArtworkDemand[],
+): Promise<void> {
+  if (!validFingerprint(fingerprint)) return;
+  await getFirestore().runTransaction(async (tx) => {
+    const ref = docRef(uid, fingerprint);
+    const current = (await tx.get(ref)).data() as RenderDoc | undefined;
+    tx.set(
+      ref,
+      { artwork: mergeArtworkDemand(current?.artwork, demand), artworkAt: Date.now() },
+      { merge: true },
+    );
+  });
 }
 
 /**
@@ -286,7 +334,7 @@ export async function assembleDocument(
     const path = await assembleEbook(uid, fingerprint);
     const key = documentKey("ebook");
     await docRef(uid, fingerprint).set(
-      { documents: { [key]: path }, lastUsedAt: Date.now() },
+      { documents: { [key]: path }, requests: { [key]: request }, lastUsedAt: Date.now() },
       { merge: true },
     );
     await discardRasters(uid, fingerprint, ["ebook"]);
@@ -298,7 +346,12 @@ export async function assembleDocument(
     const { path, pageCount } = await assembleInterior(uid, fingerprint, pad);
     const key = documentKey("interior");
     await docRef(uid, fingerprint).set(
-      { documents: { [key]: path }, interiorPageCount: pageCount, lastUsedAt: Date.now() },
+      {
+        documents: { [key]: path },
+        requests: { [key]: { kind: "interior", padToPages: pad } },
+        interiorPageCount: pageCount,
+        lastUsedAt: Date.now(),
+      },
       { merge: true },
     );
     await discardRasters(uid, fingerprint, ["interior"]);
@@ -308,10 +361,14 @@ export async function assembleDocument(
   const path = await assembleCover(uid, fingerprint, request.cover);
   const key = documentKey("cover", { sku: request.sku, pages: request.padToPages });
   await docRef(uid, fingerprint).set(
-    { documents: { [key]: path }, lastUsedAt: Date.now() },
+    { documents: { [key]: path }, requests: { [key]: stripUndefined(request) }, lastUsedAt: Date.now() },
     { merge: true },
   );
   return { key };
+}
+
+function stripUndefined<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 async function readRaster(record: RasterRecord): Promise<RasterPage> {

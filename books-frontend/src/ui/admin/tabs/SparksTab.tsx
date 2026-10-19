@@ -199,6 +199,35 @@ export function SparksTab() {
 
       <PriceEstimationSection draft={draft} onChange={set} baseCurrency={baseCurrency} />
 
+      <Section
+        title="Print-resolution surcharge"
+        hint="Upscaling a picture to 300 DPI happens only if the book is ordered, but it is paid for up front: once, on the first render of each page and cover. Redraws and edits of a slot that already has art are not charged again, and nothing is charged at checkout."
+        action={
+          <Toggle
+            checked={draft.printPrep.enabled}
+            onChange={(v) => set({ printPrep: { ...draft.printPrep, enabled: v } })}
+            label="Charge surcharge"
+          />
+        }
+      >
+        <Grid cols={3}>
+          <NumberField
+            label="Upscale cost per picture"
+            value={draft.printPrep.usdPerImage}
+            step="0.001"
+            suffix={baseCurrency}
+            onChange={(n) => set({ printPrep: { ...draft.printPrep, usdPerImage: n } })}
+          />
+        </Grid>
+        <p className="text-[11px] text-ink-400">
+          Goes through the same markup as provider cost: ≈{" "}
+          {draft.sparkValueUsd > 0
+            ? `${((draft.printPrep.usdPerImage * draft.markupMultiplier) / draft.sparkValueUsd).toFixed(2)} ✦`
+            : "—"}{" "}
+          per first render. Compare with the actual spend per picture in Analysis → Orders → Print files, and adjust.
+        </p>
+      </Section>
+
       <p className="text-xs text-ink-400">
         Sanity check: a {fmtMoney(0.04, baseCurrency)} image would cost{" "}
         <span className="font-medium text-ink-600">{priceForAction({ ...draft, enabled: true }, "pageIllustration", 0.04)} ✦</span>{" "}

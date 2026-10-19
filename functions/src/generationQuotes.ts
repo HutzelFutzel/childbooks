@@ -10,7 +10,9 @@ import express, { type Express, type Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
 import type { AuthedRequest } from "./auth";
 import { ensureAdmin } from "./storage";
-import { estimateForUser, getBalance, referenceGroupFor } from "./sparks";
+import { estimateForUser, getBalance, printPrepDue, printPrepShare, referenceGroupFor } from "./sparks";
+import { readStoredProject } from "./projectStore";
+import { isPrintPrepAction, withPrintPrepKey } from "../../books-frontend/src/core/billing/printPrepCharge";
 import { resolveImageModels } from "./modelResolve";
 import { getGenerationTuningConfig } from "./appConfig";
 import { normalizeImageTier, type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
@@ -66,18 +68,27 @@ export function registerGenerationQuoteRoutes(app: Express): void {
         }
         const tier: ImageTier = normalizeImageTier(body.tier);
         const uid = req.uid!;
+        // A page or cover that is its slot's first render carries the print-prep
+        // surcharge. Decided here, from the saved book and the paid-slot ledger,
+        // so the quoted number already includes it.
+        const project = units.some((u) => isPrintPrepAction(u.action) && u.kind === "fresh")
+          ? await readStoredProject(uid, body.projectId).catch(() => null)
+          : null;
+        for (const u of units) {
+          if (u.kind === "fresh" && (await printPrepDue(uid, project, u.id, u.action))) u.prep = true;
+        }
         // A unit that names its reference count is priced in that count's group,
         // so two portraits of one batch can cost differently (three photos vs none).
         const unitKeys: Record<string, string> = Object.fromEntries(
           await Promise.all(
-            units.map(async (u) => [
-              u.id,
-              quoteUnitKey(
+            units.map(async (u) => {
+              const key = quoteUnitKey(
                 u.action,
                 u.kind,
                 u.refs === undefined ? undefined : await referenceGroupFor(u.action, tier, u.refs),
-              ),
-            ]),
+              );
+              return [u.id, u.prep ? withPrintPrepKey(key) : key];
+            }),
           ),
         );
         const keys = [...new Set(Object.values(unitKeys))];
@@ -88,14 +99,18 @@ export function registerGenerationQuoteRoutes(app: Express): void {
             keys.map(async (key) => {
               const unit = units.find((u) => unitKeys[u.id] === key)!;
               const [sparks, models] = await Promise.all([
-                estimateForUser(uid, unit.action, tier, unit.kind, unit.refs),
+                estimateForUser(uid, unit.action, tier, unit.kind, unit.refs, { printPrep: unit.prep }),
                 resolveImageModels(unit.action, tier),
               ]);
-              return { key, action: unit.action, sparks, model: models.imageModel };
+              const prep = unit.prep
+                ? await printPrepShare(uid, unit.action, tier, unit.kind, unit.refs, sparks)
+                : 0;
+              return { key, action: unit.action, sparks, prep, model: models.imageModel };
             }),
           ),
         ]);
         const byKey = Object.fromEntries(priced.map((p) => [p.key, p.sparks]));
+        const prepByKey = Object.fromEntries(priced.filter((p) => p.prep > 0).map((p) => [p.key, p.prep]));
         const maximumSparks = units.reduce((sum, u) => sum + (byKey[unitKeys[u.id]!] ?? 0), 0);
         const configRevision = createHash("sha256")
           .update(
@@ -120,6 +135,7 @@ export function registerGenerationQuoteRoutes(app: Express): void {
           units,
           byKey,
           unitKeys,
+          ...(Object.keys(prepByKey).length > 0 ? { prepByKey } : {}),
           maximumSparks,
           balanceBefore,
           balanceAfter: balanceBefore - maximumSparks,
@@ -176,7 +192,12 @@ export async function consumeQuote(
   jobId: string,
   projectId: string | undefined,
   taskIds: readonly string[],
-): Promise<{ byKey: Record<string, number>; unitKeys: Record<string, string>; units: GenerationQuoteUnit[] }> {
+): Promise<{
+  byKey: Record<string, number>;
+  unitKeys: Record<string, string>;
+  prepByKey: Record<string, number>;
+  units: GenerationQuoteUnit[];
+}> {
   ensureAdmin();
   const ref = quoteRef(uid, quoteId);
   return getFirestore().runTransaction(async (tx) => {
@@ -200,6 +221,11 @@ export async function consumeQuote(
       consumed[id] = jobId;
     }
     tx.update(ref, { consumed });
-    return { byKey: quote.byKey, unitKeys: quote.unitKeys ?? {}, units: quote.units };
+    return {
+      byKey: quote.byKey,
+      unitKeys: quote.unitKeys ?? {},
+      prepByKey: quote.prepByKey ?? {},
+      units: quote.units,
+    };
   });
 }

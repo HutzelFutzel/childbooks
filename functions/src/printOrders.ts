@@ -52,6 +52,7 @@ function db() {
 export type OrderEventSource =
   | "stripe"
   | "fulfillment"
+  | "print_prep"
   | "lulu_webhook"
   | "lulu_poll"
   | "email"
@@ -61,6 +62,10 @@ export type OrderEventSource =
 
 export type OrderEventType =
   | "paid"
+  | "files_preparing"
+  | "files_progress"
+  | "files_ready"
+  | "files_fallback"
   | "placing"
   | "placement_failed"
   | "placed"
@@ -395,9 +400,12 @@ export function patchFromPayment(payment: AdminPaymentRecord): PrintOrderPatch {
     patch.destinationCountry = plan.destinationCountry?.toUpperCase() ?? null;
     patch.recipientName = plan.recipient?.name ?? null;
     patch.recipientEmail = plan.recipient?.email ?? null;
+    // The files the printer actually got: print-resolution ones when they were
+    // ready in time, else the ones the customer checked out with.
+    const files = payment.placedFileUrls ?? plan.sourceFileUrls;
     patch.files = {
-      interior: plan.sourceFileUrls?.interior ?? null,
-      cover: plan.sourceFileUrls?.cover ?? null,
+      interior: files?.interior ?? null,
+      cover: files?.cover ?? null,
     };
     if (plan.estimatedCost) {
       patch.estimatedCost = { amount: plan.estimatedCost.amount, currency: plan.estimatedCost.currency };
@@ -521,6 +529,7 @@ export const JOB_HEARTBEATS: Record<string, { label: string; maxSilenceMs: numbe
   syncPrintOrders: { label: "Printer status sync", maxSilenceMs: 50 * 60_000 },
   retryFulfillments: { label: "Order placement retry", maxSilenceMs: 100 * 60_000 },
   orderWatchdog: { label: "Order watchdog", maxSilenceMs: 50 * 60_000 },
+  sweepPrintPrep: { label: "Print-file preparation", maxSilenceMs: 20 * 60_000 },
 };
 
 export interface Heartbeat {

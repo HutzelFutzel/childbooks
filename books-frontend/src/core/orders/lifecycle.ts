@@ -17,6 +17,7 @@
 /** Where an order stands, provider-neutral. */
 export type PrintOrderState =
   | "paid" // payment settled, nothing sent to the printer yet
+  | "preparing_files" // paid; the print-resolution files are being made
   | "placing" // a worker holds the placement claim right now
   | "retrying" // placement (or a replacement) failed and will be retried
   | "placed" // the printer has the job, not started
@@ -30,6 +31,7 @@ export type PrintOrderState =
 
 export const PRINT_ORDER_STATES: readonly PrintOrderState[] = [
   "paid",
+  "preparing_files",
   "placing",
   "retrying",
   "placed",
@@ -44,6 +46,7 @@ export const PRINT_ORDER_STATES: readonly PrintOrderState[] = [
 
 export const PRINT_ORDER_STATE_LABEL: Record<PrintOrderState, string> = {
   paid: "Paid",
+  preparing_files: "Preparing files",
   placing: "Placing",
   retrying: "Retrying",
   placed: "At printer",
@@ -65,6 +68,7 @@ export const TERMINAL_ORDER_STATES: ReadonlySet<PrintOrderState> = new Set<Print
 
 /** Why an order needs a human. Ordered by how early in the lifecycle it bites. */
 export type AttentionReason =
+  | "files_not_ready"
   | "not_placed"
   | "placement_failed"
   | "rejected"
@@ -75,6 +79,7 @@ export type AttentionReason =
   | "sync_stale";
 
 export const ATTENTION_REASON_LABEL: Record<AttentionReason, string> = {
+  files_not_ready: "Print files still not ready",
   not_placed: "Paid but not sent to the printer",
   placement_failed: "Printer placement failed",
   rejected: "Printer rejected the job",
@@ -87,6 +92,8 @@ export const ATTENTION_REASON_LABEL: Record<AttentionReason, string> = {
 
 /** What to do about each reason. Shown in the queue and in the Slack message. */
 export const ATTENTION_REASON_ACTION: Record<AttentionReason, string> = {
+  files_not_ready:
+    "The print-file preparation is past its deadline and did not fall back by itself. Open the order and choose \"Place with standard files\" — the book is printable as it is.",
   not_placed: "Open the order and retry placement. If it keeps failing, check the printer connection and the error below.",
   placement_failed: "Retries are exhausted. Fix the cause (see the error), then retry placement — or refund the customer.",
   rejected: "The printer will not make this book. Check the rejection reason: re-place it, or refund the customer.",
@@ -109,7 +116,54 @@ export const ATTENTION_THRESHOLDS = {
   stuckInProductionMs: 14 * 24 * 60 * 60 * 1000,
   /** No webhook and no poll touched an open placed order for this long. */
   syncStaleMs: 6 * 60 * 60 * 1000,
+  /**
+   * Preparation past its own deadline by this much. The sweep falls back to the
+   * standard files AT the deadline, so reaching this means the fallback itself
+   * did not run.
+   */
+  filesNotReadyGraceMs: 15 * 60 * 1000,
 } as const;
+
+/** Where the print-resolution preparation of a paid order stands. */
+export type PrintPrepStatus =
+  | "planning"
+  | "upscaling"
+  | "rendering"
+  | "verifying"
+  | "ready" // print-resolution files are in place
+  | "fallback" // placed (or placing) with the standard files
+  | "skipped"; // nothing to prepare (disabled, no cached render, already sharp)
+
+export const ACTIVE_PRINT_PREP_STATUSES: ReadonlySet<PrintPrepStatus> = new Set<PrintPrepStatus>([
+  "planning",
+  "upscaling",
+  "rendering",
+  "verifying",
+]);
+
+export const PRINT_PREP_STATUS_LABEL: Record<PrintPrepStatus, string> = {
+  planning: "Measuring pictures",
+  upscaling: "Upscaling pictures",
+  rendering: "Rendering at print resolution",
+  verifying: "Checking the files",
+  ready: "Print resolution",
+  fallback: "Standard files (fell back)",
+  skipped: "Standard files (not needed)",
+};
+
+/** The order record's view of its print-file preparation (`printPrep/{paymentId}` holds the rest). */
+export interface PrintOrderPrintPrep {
+  status: PrintPrepStatus;
+  startedAt: number;
+  deadlineAt: number;
+  finishedAt: number | null;
+  /** Why it fell back or was skipped, in plain words. */
+  reason: string | null;
+  images: { total: number; done: number; failed: number };
+  /** What the images were upscaled with: provider id → count. */
+  tiers: Record<string, number>;
+  costUsd: number;
+}
 
 /** Raw provider statuses (Lulu's names) the lifecycle understands. */
 export const PROVIDER_STATUS = {
@@ -191,6 +245,8 @@ export interface PrintOrderRecord {
   addressCorrected: boolean;
   shipments: PrintOrderShipment[];
   files: { interior: string | null; cover: string | null };
+  /** Absent on records written before print-file preparation existed. */
+  printPrep?: PrintOrderPrintPrep | null;
 
   // ---- Payment
   paymentStatus: string | null;
@@ -265,6 +321,7 @@ export function emptyPrintOrder(key: string, now: number): PrintOrderRecord {
     addressCorrected: false,
     shipments: [],
     files: { interior: null, cover: null },
+    printPrep: null,
     paymentStatus: null,
     amountPaid: null,
     currency: null,
@@ -300,7 +357,7 @@ export function emptyPrintOrder(key: string, now: number): PrintOrderRecord {
 
 type StateInputs = Pick<
   PrintOrderRecord,
-  "luluStatus" | "currentJobId" | "fulfillmentState" | "paymentStatus" | "autoReplacing"
+  "luluStatus" | "currentJobId" | "fulfillmentState" | "paymentStatus" | "autoReplacing" | "printPrep"
 >;
 
 /** Whether a provider status means the job is alive (could still be printed). */
@@ -347,7 +404,7 @@ export function deriveState(r: StateInputs): PrintOrderState {
     case "placed":
       return "placed";
     default:
-      return "paid";
+      return r.printPrep && ACTIVE_PRINT_PREP_STATUSES.has(r.printPrep.status) ? "preparing_files" : "paid";
   }
 }
 
@@ -377,6 +434,7 @@ type AttentionInputs = Pick<
   | "refundedAmount"
   | "ack"
   | "attention"
+  | "printPrep"
 >;
 
 /**
@@ -420,7 +478,20 @@ function firstReason(
     return { reason: "rejected", detail: `The printer rejected the job and it is not being re-placed.${error}` };
   }
 
-  if (r.state === "paid" || r.state === "placing" || r.state === "retrying") {
+  if (r.state === "preparing_files" && r.printPrep) {
+    const over = now - r.printPrep.deadlineAt;
+    if (over > t.filesNotReadyGraceMs) {
+      const { done, total, failed } = r.printPrep.images;
+      return {
+        reason: "files_not_ready",
+        detail: `Preparing the print files for ${ago(now - r.printPrep.startedAt)} (${r.printPrep.status}, ${done}/${total} pictures, ${failed} failed) — past the deadline and the fallback did not run.`,
+      };
+    }
+    // Waiting on its own (admin-set) deadline, which may be longer than `notPlacedMs`.
+    return null;
+  }
+
+  if (r.state === "paid" || r.state === "preparing_files" || r.state === "placing" || r.state === "retrying") {
     // A retry is measured from when it BEGAN: a job rejected on day three is a
     // fresh problem, not one already three days old.
     const basis = r.state === "retrying" ? (r.stageSince ?? r.paidAt ?? r.createdAt) : (r.paidAt ?? r.createdAt);

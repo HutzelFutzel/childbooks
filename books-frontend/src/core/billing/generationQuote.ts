@@ -23,6 +23,8 @@ export interface GenerationQuoteUnit {
   kind: CostSampleKind;
   /** Reference images the render will send (`referencePlan`). Absent prices from every count. */
   refs?: number;
+  /** Server-set: this unit is its slot's first render and carries the print-prep surcharge. */
+  prep?: boolean;
 }
 
 export interface GenerationQuote {
@@ -37,6 +39,11 @@ export interface GenerationQuote {
   byKey: Record<string, number>;
   /** Which `byKey` entry each unit settles against, by unit id. */
   unitKeys?: Record<string, string>;
+  /**
+   * The share of a `byKey` price that is the print-prep surcharge, for keys that
+   * carry it. Settlement drops it when the slot turns out to be paid already.
+   */
+  prepByKey?: Record<string, number>;
   maximumSparks: number;
   balanceBefore: number;
   balanceAfter: number;

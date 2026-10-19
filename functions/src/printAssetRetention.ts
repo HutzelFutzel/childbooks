@@ -61,7 +61,12 @@ async function pathsInUse(): Promise<Set<string>> {
   for (const order of await listOpenOrders()) {
     if (!order.paymentId) continue;
     const payment = await getAdminPayment(order.paymentId).catch(() => null);
-    for (const url of [payment?.fulfillment?.sourceFileUrls?.interior, payment?.fulfillment?.sourceFileUrls?.cover]) {
+    for (const url of [
+      payment?.fulfillment?.sourceFileUrls?.interior,
+      payment?.fulfillment?.sourceFileUrls?.cover,
+      payment?.placedFileUrls?.interior,
+      payment?.placedFileUrls?.cover,
+    ]) {
       const path = objectPathFromUrl(url ?? null);
       if (path) keep.add(path);
     }

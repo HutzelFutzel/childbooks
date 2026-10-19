@@ -95,6 +95,27 @@ export interface OrderAnalytics {
     costBasis: { actual: number; estimated: number; missing: number };
     byMarket: { country: string; orders: number; revenue: number; printCost: number; margin: number }[];
   };
+
+  /** Print-resolution file preparation, over the cohort that went through it. */
+  printFiles: {
+    /** Orders whose preparation finished (ready or fell back). */
+    finished: number;
+    /** Placed with print-resolution files. */
+    hires: number;
+    hiresRate: number | null;
+    fallback: number;
+    fallbackRate: number | null;
+    skipped: number;
+    /** Still preparing right now. */
+    active: number;
+    /** Paid → files settled (ready or fallback). */
+    duration: Percentiles;
+    fallbackReasons: { reason: string; count: number }[];
+    /** Images upscaled per provider tier (e.g. "esrgan" vs "lanczos"). */
+    tiers: Record<string, number>;
+    images: { total: number; failed: number };
+    costUsd: number;
+  };
 }
 
 export interface AnalyticsOptions {
@@ -258,6 +279,28 @@ export function computeOrderAnalytics(all: PrintOrderRecord[], opts: AnalyticsOp
     marketMoney.set(c, m);
   }
 
+  // ---- Print files
+  const prepped = cohort.filter((r) => r.printPrep);
+  const settled = prepped.filter((r) => r.printPrep!.status === "ready" || r.printPrep!.status === "fallback");
+  const hires = settled.filter((r) => r.printPrep!.status === "ready");
+  const fellBack = settled.filter((r) => r.printPrep!.status === "fallback");
+  const fallbackReasons = new Map<string, number>();
+  for (const r of fellBack) {
+    const k = normalizeError(r.printPrep!.reason ?? "unknown");
+    fallbackReasons.set(k, (fallbackReasons.get(k) ?? 0) + 1);
+  }
+  const tiers: Record<string, number> = {};
+  let prepImages = 0;
+  let prepFailed = 0;
+  let prepCost = 0;
+  for (const r of prepped) {
+    const p = r.printPrep!;
+    for (const [tier, n] of Object.entries(p.tiers ?? {})) tiers[tier] = (tiers[tier] ?? 0) + n;
+    prepImages += p.images?.total ?? 0;
+    prepFailed += p.images?.failed ?? 0;
+    prepCost += p.costUsd ?? 0;
+  }
+
   return {
     generatedAt: now,
     windowDays,
@@ -326,6 +369,27 @@ export function computeOrderAnalytics(all: PrintOrderRecord[], opts: AnalyticsOp
         }))
         .sort((a, b) => b.revenue - a.revenue)
         .slice(0, 25),
+    },
+    printFiles: {
+      finished: settled.length,
+      hires: hires.length,
+      hiresRate: rate(hires.length, settled.length),
+      fallback: fellBack.length,
+      fallbackRate: rate(fellBack.length, settled.length),
+      skipped: prepped.filter((r) => r.printPrep!.status === "skipped").length,
+      active: scoped.filter((r) => r.state === "preparing_files").length,
+      duration: percentiles(
+        settled
+          .map((r) => (r.printPrep!.finishedAt ?? 0) - r.printPrep!.startedAt)
+          .filter((ms) => ms > 0),
+      ),
+      fallbackReasons: [...fallbackReasons.entries()]
+        .map(([reason, count]) => ({ reason, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 6),
+      tiers,
+      images: { total: prepImages, failed: prepFailed },
+      costUsd: Math.round(prepCost * 10000) / 10000,
     },
   };
 }

@@ -398,11 +398,41 @@ export async function buildDailySummaryText(
     if (anomaly) lines.push(anomaly);
   }
 
+  const printFiles = await printFilesLine(from, to).catch(() => null);
+  if (printFiles) lines.push(printFiles);
+
   if (alertsToday.length > 0) {
     lines.push(`Alerts: ${alertsToday.length} (${unresolvedToday.length} unresolved)`);
   }
 
   return lines.join("\n");
+}
+
+/** How the day's orders got their print files — only when any went through preparation. */
+async function printFilesLine(from: number, to: number): Promise<string | null> {
+  ensureAdmin();
+  const snap = await getFirestore()
+    .collection("printPrep")
+    .where("finishedAt", ">=", from)
+    .where("finishedAt", "<", to)
+    .limit(2000)
+    .get();
+  if (snap.empty) return null;
+  let ready = 0;
+  let fallback = 0;
+  let skipped = 0;
+  let costUsd = 0;
+  for (const doc of snap.docs) {
+    const d = doc.data() as { status?: string; costUsd?: number };
+    if (d.status === "ready") ready += 1;
+    else if (d.status === "fallback") fallback += 1;
+    else if (d.status === "skipped") skipped += 1;
+    costUsd += typeof d.costUsd === "number" ? d.costUsd : 0;
+  }
+  const bits = [`${ready} at print resolution`];
+  if (fallback) bits.push(`${fallback} fell back to standard`);
+  if (skipped) bits.push(`${skipped} not needed`);
+  return `Print files: ${bits.join(" · ")} · upscaling $${costUsd.toFixed(2)}`;
 }
 
 /**

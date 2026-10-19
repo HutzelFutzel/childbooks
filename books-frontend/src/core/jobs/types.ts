@@ -85,6 +85,11 @@ export interface JobLease {
    */
   quotedByAction?: Record<string, number>;
   /**
+   * Server-written: for quote keys that carry the print-prep surcharge (a
+   * page/cover slot's first render), the surcharge's share of the price.
+   */
+  quotedPrepByKey?: Record<string, number>;
+  /**
    * A stored generation quote (`users/{uid}/generationQuotes/{id}`) this job was
    * confirmed against. When present, the quote's per-unit numbers are the
    * settlement cap instead of a fresh estimate, and the quote is consumed once.

@@ -27,8 +27,11 @@ import {
   placementKeyFor,
   providerJobIsLive,
   type PrintOrderPatch,
+  type PrintOrderPrintPrep,
   type PrintOrderRecord,
+  type PrintPrepStatus,
 } from "../books-frontend/src/core/orders/lifecycle";
+import { upscaleTargetFor } from "../books-frontend/src/core/print/printPrep";
 import { capabilityForFormat, normalizeProductCapability } from "../books-frontend/src/core/config/productCapability";
 import { normalizeMarketCapability } from "../books-frontend/src/core/config/marketCapability";
 import { createLuluProvider } from "../books-frontend/src/core/fulfillment/lulu/provider";
@@ -142,6 +145,41 @@ const quiet = order([
 ]);
 assert.equal(applyPatch(quiet, {}, T0 + 3 * H).needsAttention, false);
 assert.equal(applyPatch(quiet, {}, T0 + ATTENTION_THRESHOLDS.syncStaleMs + 2 * H).attention?.reason, "sync_stale", "An open order nobody has heard about for hours is flagged.");
+
+// --- Print-resolution files: waiting is bounded, never silent -----------------------
+
+const deadline = T0 + 3 * H;
+const prep = (status: PrintPrepStatus, finishedAt: number | null = null): PrintOrderPrintPrep => ({
+  status,
+  startedAt: T0,
+  deadlineAt: deadline,
+  finishedAt,
+  reason: null,
+  images: { total: 4, done: 1, failed: 0 },
+  tiers: {},
+  costUsd: 0,
+});
+const preparing = order([paid(), { at: T0 + 60_000, patch: { printPrep: prep("upscaling") } }]);
+assert.equal(preparing.state, "preparing_files", "A paid order waiting for its print files says so.");
+assert.equal(
+  applyPatch(preparing, {}, deadline - 60_000).needsAttention,
+  false,
+  "Inside its own deadline it is not 'not placed', even past the usual two hours.",
+);
+const filesStuck = applyPatch(preparing, {}, deadline + ATTENTION_THRESHOLDS.filesNotReadyGraceMs + 60_000);
+assert.equal(filesStuck.attention?.reason, "files_not_ready", "Past the deadline, the fallback didn't run: a person places it.");
+const fellBack = applyPatch(preparing, { printPrep: prep("fallback", T0 + H) }, T0 + H);
+assert.equal(fellBack.state, "paid", "A settled preparation hands the order back to placement.");
+
+const settings = { minUpscaleRatio: 1.15, maxUpscaleRatio: 6, maxOutputMegapixels: 24 };
+assert.equal(upscaleTargetFor({ scale: 1.1, naturalWidth: 1536, naturalHeight: 1024 }, settings), null, "Nearly sharp enough is left alone.");
+const t2 = upscaleTargetFor({ scale: 1.9, naturalWidth: 1536, naturalHeight: 1024 }, settings)!;
+assert.equal(t2.modelScale, 2);
+assert.equal(t2.width, Math.round(1536 * 1.9), "The target is exactly what the page needs.");
+const big = upscaleTargetFor({ scale: 5, naturalWidth: 2048, naturalHeight: 2048 }, settings)!;
+assert.ok(big.width * big.height <= 24_000_000 + 2 * big.width, "The megapixel budget caps a huge spread.");
+assert.equal(big.modelScale, 4);
+assert.equal(upscaleTargetFor({ scale: 9, naturalWidth: 100, naturalHeight: 100 }, settings)!.ratio, 6, "Enlargement is capped.");
 
 // --- The provider: recovery never returns a dead job; creation needs an email --------
 

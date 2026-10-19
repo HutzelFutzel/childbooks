@@ -145,6 +145,20 @@ export interface FulfillmentPlan {
   /** Public URLs of the already-uploaded print-ready files. */
   sourceFileUrls: { interior?: string; cover?: string };
   /**
+   * Where the checkout's files came from, when they came from the server render
+   * cache — what print preparation needs to rebuild them at print resolution.
+   * Absent for files that came from anywhere else (those are placed as they are).
+   */
+  printPrep?: {
+    fingerprint: string;
+    interiorKey: string;
+    coverKey: string;
+    /** Interior page count the order was checked against (padding included). */
+    pages: number;
+    printSku: string;
+    baseSku: string;
+  } | null;
+  /**
    * What the customer decided when the carrier suggested a different version of
    * the address: took the carrier's, or deliberately kept their own. Null when
    * no correction was on offer. Kept so a correction showing up after placement
@@ -325,6 +339,8 @@ export interface AdminPaymentRecord {
   rejectedOrderIds: string[];
   /** When Stripe first told us the payment settled (epoch ms), if recorded. */
   paidAt: number | null;
+  /** The files the printer was actually given, when they differ from the plan's (print-resolution ones). */
+  placedFileUrls: { interior?: string; cover?: string } | null;
 }
 
 /** Fetch the admin payment record (with the fulfillment plan) by our id. */
@@ -356,6 +372,10 @@ export async function getAdminPayment(paymentId: string): Promise<AdminPaymentRe
       ? (d.rejectedOrderIds as unknown[]).filter((x): x is string => typeof x === "string")
       : [],
     paidAt: paidAtFromEvents(d.events),
+    placedFileUrls:
+      d.placedFileUrls && typeof d.placedFileUrls === "object"
+        ? (d.placedFileUrls as { interior?: string; cover?: string })
+        : null,
   };
 }
 
@@ -587,6 +607,9 @@ export async function listStrandedPaidOrders(minAgeMs: number): Promise<AdminPay
   for (const doc of snap.docs) {
     const d = doc.data() as Record<string, unknown>;
     if ((d.kind as string) !== "order" || d.orderId || !d.fulfillment) continue;
+    // Waiting for its print files on purpose. Past this moment it counts again,
+    // and re-driving it makes the placement gate fall back to the standard files.
+    if (typeof d.printPrepUntil === "number" && d.printPrepUntil > Date.now()) continue;
     const rec = await getAdminPayment(doc.id);
     if (!rec) continue;
     // "How long has it been paid" — fall back to creation time for payments whose
@@ -685,6 +708,8 @@ export interface UpdatePaymentArgs {
   billingCountry?: string | null;
   /** Mirrored to the buyer's copy so they can see where their order stands. */
   fulfillmentState?: FulfillmentState;
+  /** Admin-only: the files the printer was given (see {@link AdminPaymentRecord.placedFileUrls}). */
+  placedFileUrls?: { interior?: string; cover?: string };
   event?: string;
 }
 
@@ -717,6 +742,7 @@ export async function updatePayment(args: UpdatePaymentArgs): Promise<void> {
   if (args.feeAmount !== undefined) adminPatch.feeAmount = args.feeAmount;
   if (args.netAmount !== undefined) adminPatch.netAmount = args.netAmount;
   if (args.billingCountry) adminPatch.billingCountry = args.billingCountry;
+  if (args.placedFileUrls) adminPatch.placedFileUrls = args.placedFileUrls;
   if (args.event) adminPatch.events = FieldValue.arrayUnion({ at: Date.now(), type: args.event });
 
   await Promise.all([

@@ -120,6 +120,21 @@ export interface SparksConfig {
   referral: ReferralSettings;
   /** How `derived` image prices are estimated from measured costs. */
   estimation: EstimationConfig;
+  /** The print-resolution surcharge folded into a page's or cover's first render. */
+  printPrep: PrintPrepPricing;
+}
+
+/**
+ * Making an ordered book print-ready upscales each page and cover picture once.
+ * That cost is folded into the FIRST render of each page/cover slot — never
+ * billed at checkout, never again on edits or redraws of a slot already paid for.
+ * It is added in USD before the price is rounded, so it moves a price by a
+ * fraction of a Spark on average rather than a whole one every time.
+ */
+export interface PrintPrepPricing {
+  enabled: boolean;
+  /** Expected cost of preparing one picture for print, USD (before markup). */
+  usdPerImage: number;
 }
 
 // ---- Defaults --------------------------------------------------------------
@@ -152,6 +167,7 @@ export function createDefaultSparksConfig(): SparksConfig {
     ],
     referral: { enabled: false, referrerSparks: 100, referredSparks: 50 },
     estimation: createDefaultEstimationConfig(),
+    printPrep: { enabled: false, usdPerImage: 0.003 },
   };
 }
 
@@ -240,7 +256,31 @@ export function normalizeSparksConfig(input: unknown): SparksConfig {
           : def.referral.referredSparks,
     },
     estimation: normalizeEstimationConfig(p.estimation),
+    printPrep: {
+      enabled: p.printPrep?.enabled === true,
+      usdPerImage: nonNegative(p.printPrep?.usdPerImage, def.printPrep.usdPerImage),
+    },
   };
+}
+
+/**
+ * USD the print-resolution surcharge adds to one page/cover render that is the
+ * first for its slot. 0 when the surcharge is off.
+ */
+export function printPrepSurchargeUsd(config: SparksConfig): number {
+  if (!config.enabled || !config.printPrep?.enabled) return 0;
+  return Math.max(0, config.printPrep.usdPerImage);
+}
+
+/**
+ * The surcharge for a `fixed`-priced action (which has no USD to fold it into):
+ * the same USD at the peg and markup, rounded on its own, × multiplier.
+ */
+export function printPrepFixedSparks(config: SparksConfig, multiplier = 1): number {
+  const usd = printPrepSurchargeUsd(config);
+  if (usd <= 0 || config.sparkValueUsd <= 0) return 0;
+  const m = multiplier > 0 ? multiplier : 1;
+  return Math.max(0, Math.round(((usd * config.markupMultiplier) / config.sparkValueUsd) * m));
 }
 
 // ---- Pricing calculator ----------------------------------------------------
@@ -404,4 +444,10 @@ export const sparksConfigSchema = z.object({
     })
     .optional(),
   estimation: estimationConfigSchema.optional(),
+  printPrep: z
+    .object({
+      enabled: z.boolean(),
+      usdPerImage: z.number().min(0).max(1),
+    })
+    .optional(),
 });

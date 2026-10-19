@@ -29,6 +29,7 @@ import { fulfillmentProvider } from "./lulu";
 import { persistCreatedOrder } from "./orders";
 import { placementKeyFor } from "../../books-frontend/src/core/orders/lifecycle";
 import { recordOrderEmail, syncOrderFromPayment } from "./printOrders";
+import { printFilesForPlacement } from "./printPrep";
 import { getAuth } from "firebase-admin/auth";
 import { ensureAdmin } from "./storage";
 import { getProductsConfig } from "./products";
@@ -819,6 +820,8 @@ interface PrintCheckoutArgs {
   /** Which way the customer decided it (see `FulfillmentPlan.addressChoice`). */
   addressChoice?: "suggested" | "entered";
   sourceFileUrls: { interior?: string; cover?: string };
+  /** How to rebuild the files at print resolution after payment (see `FulfillmentPlan.printPrep`). */
+  printPrep?: FulfillmentPlan["printPrep"];
   merchantReference: string | null;
   /** A coupon code the customer typed in the order dialog. */
   couponCode?: string | null;
@@ -1307,6 +1310,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     merchantReference: args.merchantReference,
     recipient: planRecipient(recipient),
     sourceFileUrls: args.sourceFileUrls,
+    printPrep: args.printPrep ?? null,
     // What the customer told us when the carrier offered a correction. It is
     // NOT derived from the live re-validation above: once they take the
     // suggestion the address is already corrected, so the carrier has nothing
@@ -1545,6 +1549,18 @@ export function registerStripeUserRoutes(app: Express): void {
         if (interior) sourceFileUrls.interior = interior;
         if (cover) sourceFileUrls.cover = cover;
       }
+      // Only files the server rendered can be re-rendered at print resolution.
+      const printPrep =
+        body.fingerprint && sourceFileUrls.interior && sourceFileUrls.cover && !(body.assets?.length)
+          ? {
+              fingerprint: body.fingerprint,
+              interiorKey: documentKey("interior"),
+              coverKey: documentKey("cover", { sku: printSku, pages }),
+              pages,
+              printSku,
+              baseSku: product.provider.sku,
+            }
+          : null;
 
       const host = createAdminAssetHost();
       for (const a of body.assets ?? []) {
@@ -1624,6 +1640,7 @@ export function registerStripeUserRoutes(app: Express): void {
             ? body.addressChoice
             : undefined,
         sourceFileUrls,
+        printPrep,
         merchantReference: body.merchantReference ?? null,
         couponCode: body.couponCode ?? null,
       });
@@ -2057,6 +2074,18 @@ export function registerStripeUserRoutes(app: Express): void {
         product.conditions.copies.min,
         Math.min(product.conditions.copies.max, Math.floor(rawCopies || plan.copies || 1)),
       );
+      // The files the first order was printed with, when they were print-resolution
+      // ones (they differ from the checked-out files only then). Otherwise the
+      // reorder gets its own chance at preparation, if the recipe still applies.
+      const placed = previous.placedFileUrls;
+      const reusePrinted =
+        Boolean(placed?.interior && placed.cover) &&
+        (placed!.interior !== plan.sourceFileUrls.interior || placed!.cover !== plan.sourceFileUrls.cover);
+      const reorderFiles = reusePrinted ? placed! : plan.sourceFileUrls;
+      const reorderPrep =
+        !reusePrinted && plan.printPrep && plan.printPrep.printSku === printSku && plan.printPrep.pages === plan.pageCount
+          ? plan.printPrep
+          : null;
       const result = await createPrintCheckout({
         uid,
         email: plan.recipient.email ?? req.authToken?.email ?? null,
@@ -2079,7 +2108,8 @@ export function registerStripeUserRoutes(app: Express): void {
         shippingMethod: plan.shippingMethod as ShippingMethod,
         destinationCountry: plan.destinationCountry,
         recipient: draftRecipient(plan.recipient),
-        sourceFileUrls: plan.sourceFileUrls,
+        sourceFileUrls: reorderFiles,
+        printPrep: reorderPrep,
         merchantReference: plan.merchantReference ?? null,
       });
       if (!result.ok) {
@@ -2639,6 +2669,12 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
   // Money already went back to the customer; never print a refunded order.
   if (payment.status === "refunded") return;
 
+  // Print-resolution files may still be on their way. Waiting is bounded by a
+  // deadline the gate enforces itself; past it (or on any doubt) this answers
+  // with the files verified at checkout. Never throws.
+  const files = await printFilesForPlacement(payment);
+  if (files.wait) return;
+
   const claimed = await claimFulfillment(paymentId);
   if (!claimed) return; // a concurrent/retry webhook already took it
 
@@ -2650,7 +2686,7 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
     recipient: draftRecipient(plan.recipient),
     shippingMethod: plan.shippingMethod as ShippingMethod,
     assets: [],
-    sourceFileUrls: plan.sourceFileUrls,
+    sourceFileUrls: files.files,
     destinationCountry: plan.destinationCountry,
     currency: plan.currency,
     merchantReference: plan.merchantReference ?? undefined,
@@ -2712,6 +2748,7 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
           orderId: recovered.id,
           event: "order.recovered",
           fulfillmentState: "placed",
+          placedFileUrls: files.files,
         });
         return;
       }
@@ -2768,8 +2805,9 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
       paymentId,
       uid: payment.ownerUid,
       orderId: order.id,
-      event: "order.placed",
+      event: files.printResolution ? "order.placed.print_resolution" : "order.placed",
       fulfillmentState: "placed",
+      placedFileUrls: files.files,
     });
     // A correction appearing HERE usually means something slipped through — the
     // provider may hold the job for manual confirmation while the customer is

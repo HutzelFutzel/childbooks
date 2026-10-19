@@ -10,7 +10,8 @@ import { create } from "zustand";
 import { backendFetch } from "../platform/backend";
 import { marketParam } from "./adminMarketStore";
 import type { OrderAnalytics } from "../core/orders/analytics";
-import type { PrintOrderRecord, PrintOrderState } from "../core/orders/lifecycle";
+import type { PrintOrderRecord, PrintOrderState, PrintPrepStatus } from "../core/orders/lifecycle";
+import type { PrintPrepSettings } from "../core/print/printPrep";
 
 export interface OrderEventView {
   id: string;
@@ -36,12 +37,108 @@ export interface OrderPaymentView {
   attempts: number;
   lastError: string | null;
   rejectedOrderIds: string[];
+  /** The checkout's files came from a server render, so they can be prepared at print resolution. */
+  printPrepEligible?: boolean;
+  checkoutFiles?: { interior?: string; cover?: string } | null;
+  placedFiles?: { interior?: string; cover?: string } | null;
+}
+
+export interface PrintPrepImageView {
+  blobId: string;
+  naturalWidth: number;
+  naturalHeight: number;
+  demand: number;
+  target: { ratio: number; width: number; height: number; modelScale: number };
+  status: "pending" | "done" | "failed";
+  attempts: number;
+  tier: string | null;
+  cached: boolean;
+  costUsd: number;
+  durationMs: number;
+  fallbacks: string[];
+  error: string | null;
+}
+
+export interface PrintPrepRunView {
+  paymentId: string;
+  status: PrintPrepStatus;
+  active: boolean;
+  startedAt: number;
+  deadlineAt: number;
+  finishedAt: number | null;
+  reason: string | null;
+  probeAttempts: number;
+  renderAttempts: number;
+  images: { total: number; done: number; failed: number };
+  tiers: Record<string, number>;
+  costUsd: number;
+  files: { interior: string; cover: string } | null;
+  timeline: { at: number; message: string }[];
 }
 
 export interface OrderDetail {
   record: PrintOrderRecord;
   events: OrderEventView[];
   payment: OrderPaymentView | null;
+  printPrep: { run: PrintPrepRunView; images: PrintPrepImageView[] } | null;
+}
+
+export interface PrintPrepDay {
+  day: string;
+  costUsd: number;
+  images: number;
+  tiers: Record<string, number>;
+  sparks: number;
+  collectedUsd: number;
+  slots: number;
+}
+
+/** The print-files dashboard: settings, upscaler health, active runs, money. */
+export interface PrintPrepOverview {
+  settings: PrintPrepSettings;
+  upscaler: {
+    configured: boolean;
+    consecutiveFailures?: number;
+    lastFailureAt?: number;
+    lastSuccessAt?: number;
+    firstFailureAt?: number | null;
+    lastError?: string;
+  };
+  sweep: { lastRunAt: number | null; ok: boolean | null; summary: string | null; stale: boolean };
+  active: {
+    paymentId: string;
+    status: PrintPrepStatus;
+    startedAt: number;
+    deadlineAt: number;
+    images: { total: number; done: number; failed: number };
+    note: string | null;
+  }[];
+  last24h: {
+    finished: number;
+    ready: number;
+    fallback: number;
+    skipped: number;
+    fallbacks: { paymentId: string; reason: string | null; finishedAt: number | null }[];
+  };
+  money: {
+    days: PrintPrepDay[];
+    spend7dUsd: number;
+    spend30dUsd: number;
+    collected7dUsd: number;
+    collected30dUsd: number;
+    images30d: number;
+    slots30d: number;
+  };
+}
+
+export interface UpscalerTestResult {
+  tier: string;
+  width: number;
+  height: number;
+  ms: number;
+  aiMs: number;
+  costUsd: number;
+  fallbacks: string[];
 }
 
 export interface PrinterConnection {
@@ -70,7 +167,15 @@ export interface PrinterConnection {
   }[];
 }
 
-export type OrderAction = "retry" | "replace" | "cancel" | "sync" | "ack" | "resend-email";
+export type OrderAction =
+  | "retry"
+  | "replace"
+  | "cancel"
+  | "sync"
+  | "ack"
+  | "resend-email"
+  | "rerun-print-prep"
+  | "use-standard-files";
 
 async function messageOf(res: Response, fallback: string): Promise<string> {
   try {
@@ -108,6 +213,10 @@ interface AdminOrdersState {
   actionError: string | null;
   notice: string | null;
 
+  printPrep: PrintPrepOverview | null;
+  printPrepError: string | null;
+  upscalerTest: UpscalerTestResult | null;
+
   setDays: (days: number) => void;
   setStateFilter: (state: PrintOrderState | "all") => void;
   setAttentionOnly: (on: boolean) => void;
@@ -117,6 +226,9 @@ interface AdminOrdersState {
   checkConnection: () => Promise<void>;
   open: (key: string | null) => Promise<void>;
   act: (key: string, action: OrderAction, body?: Record<string, unknown>) => Promise<boolean>;
+  loadPrintPrep: () => Promise<void>;
+  savePrintPrepSettings: (settings: PrintPrepSettings) => Promise<boolean>;
+  testUpscaler: () => Promise<void>;
 }
 
 export const useAdminOrders = create<AdminOrdersState>((set, get) => ({
@@ -139,6 +251,10 @@ export const useAdminOrders = create<AdminOrdersState>((set, get) => ({
   busyAction: null,
   actionError: null,
   notice: null,
+
+  printPrep: null,
+  printPrepError: null,
+  upscalerTest: null,
 
   setDays(days) {
     set({ days });
@@ -166,7 +282,7 @@ export const useAdminOrders = create<AdminOrdersState>((set, get) => ({
         getJson<PrinterConnection>("/admin/orders/connection"),
       ]);
       set({ analytics, connection, lastUpdated: Date.now() });
-      await get().refreshList();
+      await Promise.all([get().refreshList(), get().loadPrintPrep()]);
     } catch (err) {
       set({ error: (err as Error)?.message ?? "Failed to load orders." });
     } finally {
@@ -248,6 +364,52 @@ export const useAdminOrders = create<AdminOrdersState>((set, get) => ({
     } catch (err) {
       set({ actionError: (err as Error)?.message ?? "That didn't work." });
       return false;
+    } finally {
+      set({ busyAction: null });
+    }
+  },
+
+  async loadPrintPrep() {
+    try {
+      const printPrep = await getJson<PrintPrepOverview>("/admin/orders/print-prep/status");
+      set({ printPrep, printPrepError: null });
+    } catch (err) {
+      set({ printPrepError: (err as Error)?.message ?? "Could not load print preparation." });
+    }
+  },
+
+  async savePrintPrepSettings(settings) {
+    set({ busyAction: "print-prep-settings", printPrepError: null });
+    try {
+      const res = await backendFetch("/admin/orders/print-prep/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      if (!res.ok) throw new Error(await messageOf(res, "Couldn't save."));
+      await get().loadPrintPrep();
+      return true;
+    } catch (err) {
+      set({ printPrepError: (err as Error)?.message ?? "Couldn't save." });
+      return false;
+    } finally {
+      set({ busyAction: null });
+    }
+  },
+
+  async testUpscaler() {
+    set({ busyAction: "print-prep-test", printPrepError: null, upscalerTest: null });
+    try {
+      const res = await backendFetch("/admin/orders/print-prep/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (!res.ok) throw new Error(await messageOf(res, "The test failed."));
+      set({ upscalerTest: (await res.json()) as UpscalerTestResult });
+      await get().loadPrintPrep();
+    } catch (err) {
+      set({ printPrepError: (err as Error)?.message ?? "The test failed." });
     } finally {
       set({ busyAction: null });
     }

@@ -41,7 +41,8 @@ import type { Browser, Page } from "puppeteer-core";
 import { getBrandingConfig, getImageMasksConfig } from "./appConfig";
 import type { AuthedRequest } from "./auth";
 import { isEmulator, launchBrowser } from "./browser";
-import { downloadBlob, ensureAdmin } from "./storage";
+import { blobBucket, downloadBlob, ensureAdmin } from "./storage";
+import type { ArtworkDemand } from "../../books-frontend/src/core/print/printPrep";
 import { appBaseUrl } from "./stripeClient";
 import {
   BACK_COVER_LOGO_FIXED_CM,
@@ -51,13 +52,14 @@ import {
 import { COVER_BACK_ID, type Project } from "../../books-frontend/src/core/types";
 import {
   assembleDocument,
+  recordArtworkDemand,
   saveRasters,
   validFingerprint,
   type DocumentRequest,
   type RasterRole,
 } from "./renders";
 import { markFirstBookCompleted } from "./referrals";
-import { log } from "./logs";
+import { log, type LogHelperArgs } from "./logs";
 
 /** How long a job's page token stays usable. Renders take a minute, not an hour. */
 const TOKEN_TTL_MS = 30 * 60_000;
@@ -85,6 +87,76 @@ interface RenderJobDoc {
   error?: string;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Print preparation's renders. `probeOnly` loads the page to measure how the
+   * pictures are drawn and captures nothing; `blobOverrides` serves upscaled
+   * pictures in place of the originals (blob id → Storage path); `storeAs` files
+   * the rasters and documents under a separate fingerprint, so the standard
+   * render the order was quoted from is never overwritten. `fingerprint` stays
+   * the book's own, which the page checks the project against.
+   */
+  purpose?: "customer" | "printPrep";
+  probeOnly?: boolean;
+  blobOverrides?: Record<string, string>;
+  storeAs?: string;
+  /** The payment whose print preparation is waiting on this job. */
+  printPrepId?: string;
+}
+
+/** What print preparation reads back from one of its render jobs. */
+export interface PrintRenderJobStatus {
+  status: RenderJobDoc["status"];
+  step: string;
+  error: string | null;
+  updatedAt: number;
+}
+
+/**
+ * Start a render for print preparation. Same worker, same page, same checks as
+ * a customer render — only what it reads and where it files the result differ.
+ */
+export async function startPrintRenderJob(
+  uid: string,
+  args: {
+    projectId: string;
+    fingerprint: string;
+    documents: DocumentRequest[];
+    printPrepId: string;
+    probeOnly?: boolean;
+    blobOverrides?: Record<string, string>;
+    storeAs?: string;
+  },
+): Promise<string> {
+  ensureAdmin();
+  const jobId = crypto.randomUUID();
+  const now = Date.now();
+  const job: RenderJobDoc = {
+    projectId: args.projectId,
+    fingerprint: args.fingerprint,
+    documents: args.documents,
+    token: crypto.randomBytes(32).toString("hex"),
+    status: "pending",
+    step: args.probeOnly ? "Measuring the pictures…" : "Getting ready…",
+    done: 0,
+    total: 0,
+    createdAt: now,
+    updatedAt: now,
+    purpose: "printPrep",
+    printPrepId: args.printPrepId,
+    ...(args.probeOnly ? { probeOnly: true } : {}),
+    ...(args.blobOverrides ? { blobOverrides: args.blobOverrides } : {}),
+    ...(args.storeAs ? { storeAs: args.storeAs } : {}),
+  };
+  await jobRef(uid, jobId).set(job);
+  await dispatchRender(uid, jobId);
+  return jobId;
+}
+
+export async function readPrintRenderJob(uid: string, jobId: string): Promise<PrintRenderJobStatus | null> {
+  ensureAdmin();
+  const job = (await jobRef(uid, jobId).get()).data() as RenderJobDoc | undefined;
+  if (!job) return null;
+  return { status: job.status, step: job.step, error: job.error ?? null, updatedAt: job.updatedAt };
 }
 
 /**
@@ -116,6 +188,8 @@ interface RenderPageState {
   captures?: CaptureSpec[];
   /** Largest page in CSS pixels, so the viewport can hold one whole page. */
   viewport?: { width: number; height: number };
+  /** How large each picture is drawn relative to its own pixels. */
+  artwork?: ArtworkDemand[];
 }
 
 function jobRef(uid: string, jobId: string) {
@@ -316,6 +390,21 @@ export function registerRenderJobRoutes(app: Express): void {
         clientError(res, "Unknown render.", 404);
         return;
       }
+      const override = job.blobOverrides?.[blobId];
+      if (override) {
+        // An upscaled stand-in, written by print preparation under this user's
+        // own prefix. Served with its real type: it may be a JPEG.
+        if (!override.startsWith(`users/${uid}/upscaled/`)) {
+          clientError(res, "We couldn't load an illustration.", 404);
+          return;
+        }
+        const file = blobBucket().file(override);
+        const [[bytes], [meta]] = await Promise.all([file.download(), file.getMetadata()]);
+        res.setHeader("Content-Type", String(meta.contentType || "image/png"));
+        res.setHeader("Cache-Control", "private, max-age=600");
+        res.send(bytes);
+        return;
+      }
       const bytes = await downloadBlob(uid, blobId);
       res.setHeader("Content-Type", "image/png");
       res.setHeader("Cache-Control", "private, max-age=600");
@@ -375,8 +464,9 @@ async function dispatchRender(uid: string, jobId: string): Promise<void> {
 export const runRenderJob = onTaskDispatched<{ uid: string; jobId: string }>(
   {
     // Chrome plus a page-sized bitmap or two. Rendering is the heaviest thing
-    // the backend does and the least tolerant of being squeezed.
-    memory: "2GiB",
+    // the backend does and the least tolerant of being squeezed — and a print
+    // preparation render decodes upscaled pictures of up to ~24 MP each.
+    memory: "4GiB",
     cpu: 2,
     timeoutSeconds: 540,
     // ONE book per container. The default lets a 2nd-gen instance serve dozens
@@ -433,6 +523,39 @@ async function renderJob(uid: string, jobId: string): Promise<void> {
     const captures = state.captures ?? [];
     if (captures.length === 0) throw new Error("This book has no pages to render.");
 
+    // How the pictures are drawn is measured on the ORIGINALS only; a render
+    // with upscaled stand-ins would report their already-sufficient sizes.
+    if (!job.blobOverrides && Array.isArray(state.artwork)) {
+      try {
+        await recordArtworkDemand(uid, job.fingerprint, state.artwork);
+      } catch (err) {
+        logger.warn("[render] couldn't record artwork demand", { jobId, err: String(err) });
+      }
+    }
+    if (job.probeOnly) {
+      if (!Array.isArray(state.artwork)) throw new Error("The render page did not report its pictures.");
+      await browser.close();
+      browser = undefined;
+      await ref.set(
+        { status: "done", step: "Measured.", done: 0, total: 0, updatedAt: Date.now() },
+        { merge: true },
+      );
+      void log.info({
+        source: "worker",
+        domain: "print",
+        event: "print.prep.probe_completed",
+        message: `Measured ${state.artwork.length} picture(s) for print preparation in ${Math.round((Date.now() - started) / 1000)}s.`,
+        uid,
+        projectId: job.projectId,
+        jobId,
+        paymentId: job.printPrepId ?? null,
+        context: { pictures: state.artwork.length, durationMs: Date.now() - started },
+      });
+      if (job.printPrepId) await kickPrintPrep(job.printPrepId);
+      return;
+    }
+    const outFp = job.storeAs ?? job.fingerprint;
+
     // One whole page has to fit on screen: Chrome photographs what it can lay
     // out, and a page taller than the viewport would otherwise be captured in
     // pieces or scaled.
@@ -449,7 +572,7 @@ async function renderJob(uid: string, jobId: string): Promise<void> {
       }
       const spec = captures[i];
       const bytes = await capturePage(page, spec, backCoverLogoSizeCm);
-      await saveRasters(uid, job.fingerprint, job.projectId, [
+      await saveRasters(uid, outFp, job.projectId, [
         {
           id: spec.id,
           role: spec.role,
@@ -469,7 +592,7 @@ async function renderJob(uid: string, jobId: string): Promise<void> {
 
     await progress("Assembling your book…");
     for (const doc of job.documents) {
-      await assembleDocument(uid, job.fingerprint, doc);
+      await assembleDocument(uid, outFp, doc);
     }
 
     await ref.set(
@@ -489,33 +612,61 @@ async function renderJob(uid: string, jobId: string): Promise<void> {
         pages: captures.length,
         documents: job.documents.map((d) => d.kind),
         durationMs: Date.now() - started,
+        purpose: job.purpose ?? "customer",
       },
     });
-    // A rendered book is the most honest "they actually made something" signal we
-    // have, so it's what the referral program's activation trigger keys on. Only
-    // the first one counts (see markFirstBookCompleted); never throws.
-    await markFirstBookCompleted(uid);
+    if (job.printPrepId) {
+      await kickPrintPrep(job.printPrepId);
+    } else {
+      // A rendered book is the most honest "they actually made something" signal we
+      // have, so it's what the referral program's activation trigger keys on. Only
+      // the first one counts (see markFirstBookCompleted); never throws.
+      await markFirstBookCompleted(uid);
+    }
   } catch (err) {
     const message = (err as Error)?.message ?? "We couldn't render your book.";
     logger.error("[render] failed", { jobId, err: message });
-    void log.error({
+    // Print preparation falls back to the standard files on its own; its render
+    // failing is a warning for the operator, not an error the customer saw.
+    const entry: LogHelperArgs = {
       source: "worker",
-      domain: "studio",
-      event: "render.book.failed",
-      message: `Book PDF render failed: ${message}`,
+      domain: job.printPrepId ? "print" : "studio",
+      event: job.printPrepId ? "print.prep.render_failed" : "render.book.failed",
+      message: job.printPrepId
+        ? `Print-resolution render failed (the order will use its standard files): ${message}`
+        : `Book PDF render failed: ${message}`,
       uid,
       projectId: job.projectId,
       jobId,
+      paymentId: job.printPrepId ?? null,
       error: err,
       context: {
         fingerprint: job.fingerprint,
         documents: job.documents.map((d) => d.kind),
         durationMs: Date.now() - started,
+        purpose: job.purpose ?? "customer",
+        probeOnly: Boolean(job.probeOnly),
       },
-    });
+    };
+    void (job.printPrepId ? log.warn(entry) : log.error(entry));
     await ref.set({ status: "error", error: message, updatedAt: Date.now() }, { merge: true });
+    if (job.printPrepId) await kickPrintPrep(job.printPrepId);
   } finally {
     await browser?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Wake print preparation up when one of its renders ends, instead of waiting for
+ * its sweep. Loaded lazily: print preparation starts render jobs, so a static
+ * import would be a cycle. Never throws — the sweep is the backstop.
+ */
+async function kickPrintPrep(paymentId: string): Promise<void> {
+  try {
+    const { schedulePrintPrepStep } = await import("./printPrep");
+    await schedulePrintPrepStep(paymentId, 0);
+  } catch (err) {
+    logger.warn("[render] couldn't wake print preparation; its sweep will", { paymentId, err: String(err) });
   }
 }
 

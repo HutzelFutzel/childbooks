@@ -65,7 +65,20 @@ import {
 } from "./usage";
 import { errorText, meterAndSettle } from "./actionRun";
 import { featureAllowedForUser } from "./plans";
-import { ensureAfford, estimateForUser, referenceGroupFor, referenceLimitsForAction } from "./sparks";
+import {
+  ensureAfford,
+  estimateForUser,
+  printPrepDue,
+  printPrepShare,
+  referenceGroupFor,
+  referenceLimitsForAction,
+} from "./sparks";
+import { readStoredProject } from "./projectStore";
+import {
+  isPrintPrepAction,
+  keyCarriesPrintPrep,
+  withPrintPrepKey,
+} from "../../books-frontend/src/core/billing/printPrepCharge";
 import { quoteUnitKey } from "../../books-frontend/src/core/billing/generationQuote";
 import {
   cappedReferenceCount,
@@ -462,6 +475,12 @@ function quotedFor(
   );
 }
 
+/** The print-prep surcharge one task was quoted with, when its quote key carries it. */
+function printPrepFor(job: AnyJob, task: Pick<TaskDoc, "id" | "quoteKey">): { slotId: string; sparks: number } | undefined {
+  if (!keyCarriesPrintPrep(task.quoteKey)) return undefined;
+  return { slotId: task.id, sparks: job.quotedPrepByKey?.[task.quoteKey!] ?? 0 };
+}
+
 function isTerminal(status: JobStatus): boolean {
   return status === "done" || status === "error";
 }
@@ -683,6 +702,7 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
 
   let tier: ImageTier | undefined;
   let quotedByAction: Record<string, number> | undefined;
+  const quotedPrepByKey: Record<string, number> = {};
   const taskQuoteKeys = new Map<string, string>();
   if (job.kind !== "screenplay") {
     // All customer jobs render at production quality. Guests are constrained by
@@ -713,6 +733,7 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
         specs.map((spec) => spec.id),
       );
       quotes = { ...quote.byKey };
+      Object.assign(quotedPrepByKey, quote.prepByKey);
       for (const spec of specs) {
         const unit = quote.units.find((u) => u.id === spec.id);
         const key = quote.unitKeys[spec.id];
@@ -727,15 +748,32 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     } else if (job.kind === "portrait") {
       throw new Error("Portraits start from a confirmed estimate.");
     }
+    let book: Project | null | undefined = (job as { project?: Project }).project;
+    const bookForPrep = async (): Promise<Project | null> => {
+      if (book === undefined) {
+        book = job.projectId ? await readStoredProject(uid, job.projectId).catch(() => null) : null;
+      }
+      return book;
+    };
     for (const spec of specs) {
       if (taskQuoteKeys.has(spec.id)) continue;
       const action = taskAction(taskKindOf(job, spec), spec.id);
       const kind = taskQuoteKind(spec);
       const refs = planned.get(spec.id);
-      const key = quoteKey(action, kind, refs === undefined ? undefined : await referenceGroupFor(action, tier, refs));
+      const base = quoteKey(action, kind, refs === undefined ? undefined : await referenceGroupFor(action, tier, refs));
+      // A page/cover slot's first render carries its print preparation. The
+      // project snapshot answers "has art"; image jobs without one check the
+      // saved book.
+      const prep =
+        kind === "fresh" && isPrintPrepAction(action) && (await printPrepDue(uid, await bookForPrep(), spec.id, action));
+      const key = prep ? withPrintPrepKey(base) : base;
       taskQuoteKeys.set(spec.id, key);
       if (key in quotes) continue;
-      quotes[key] = await estimateForUser(uid, action, tier, kind, refs);
+      quotes[key] = await estimateForUser(uid, action, tier, kind, refs, { printPrep: prep });
+      if (prep) {
+        const share = await printPrepShare(uid, action, tier, kind, refs, quotes[key]);
+        if (share > 0) quotedPrepByKey[key] = share;
+      }
     }
     quotedByAction = quotes;
     const total = specs.reduce((sum, spec) => sum + (quotes[taskQuoteKeys.get(spec.id)!] ?? 0), 0);
@@ -777,6 +815,7 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     // Persist image billing/model choices only for image-bearing jobs.
     ...(tier ? { tier } : {}),
     ...(quotedByAction ? { quotedByAction } : {}),
+    ...(Object.keys(quotedPrepByKey).length > 0 ? { quotedPrepByKey } : {}),
     ...(frozen ? { frozen } : {}),
     // Persist the feature-gated snapshot so workers render against it.
     ...(job.kind !== "image"
@@ -1416,6 +1455,7 @@ async function runImageTask(args: {
   taskId: string;
   startedAt: number;
   quotedSparks?: number;
+  printPrep?: { slotId: string; sparks: number };
   /** References that are not blobs (a private likeness photo). Sent first. */
   inlineReferences?: ReferenceImage[];
   /** Provider calls made on this render's behalf before it (e.g. locating the part to edit). */
@@ -1591,6 +1631,7 @@ async function runImageTask(args: {
     targetId: taskId,
     source: "worker",
     quotedSparks: args.quotedSparks,
+    ...(args.printPrep ? { printPrep: args.printPrep } : {}),
     settleKey: taskSettleKey(jobId, taskId),
     startedAt,
     models: { image: model, quality: args.qualityModel },
@@ -2015,6 +2056,7 @@ async function renderTask(
       taskId: task.id,
       startedAt,
       quotedSparks: quotedFor(job, task, action, taskQuoteKind(task)),
+      printPrep: printPrepFor(job, task),
     });
     return {
       result: stampImageProvenance(
@@ -2083,6 +2125,7 @@ async function renderTask(
       targetId: task.id,
       source: "worker",
       quotedSparks: quotedFor(job, task, action, renderKind),
+      ...(printPrepFor(job, task) ? { printPrep: printPrepFor(job, task) } : {}),
       settleKey: taskSettleKey(jobId, task.id),
       startedAt,
       models: { image: models.imageModel, text: models.textModel },

@@ -68,6 +68,11 @@ export { cleanupPrintAssetsJob } from "./printAssetRetention";
 export { runRenderJob } from "./renderJobs";
 export { runStoryRevisionJob } from "./storyRevisionJobs";
 
+// Print-resolution files for paid orders: upscale the pictures, re-render, verify,
+// then place — or place with the standard files at the deadline. Never makes the
+// customer wait.
+export { runPrintPrepStep, runUpscaleImage, sweepPrintPrep } from "./printPrep";
+
 // Daily import of Firebase/GCP spend into the finance stream (BigQuery billing
 // export when configured, else a prorated monthly budget).
 export { importInfraCostsDaily } from "./infraCosts";

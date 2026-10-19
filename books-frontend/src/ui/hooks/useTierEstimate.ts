@@ -19,8 +19,14 @@ import {
   generationTuningFor,
   type GenerationTuningConfig,
 } from "../../core/config/generationTuning";
-import type { SparkEstimateRange, SparksConfig } from "../../core/config/sparks";
+import {
+  printPrepFixedSparks,
+  printPrepSurchargeUsd,
+  type SparkEstimateRange,
+  type SparksConfig,
+} from "../../core/config/sparks";
 import { derivedUnitPrice } from "../../core/billing/priceEstimation";
+import { isPrintPrepAction } from "../../core/billing/printPrepCharge";
 import { resolveImageModelClient } from "../../platform/aiResolve";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useCampaignMultiplier } from "../../state/priceOverridesStore";
@@ -42,22 +48,30 @@ export function tierSparkRange(
   kind: CostSampleKind = "fresh",
   /** Reference images the render plans to send (`referencePlan`); absent prices from every count. */
   referenceCount?: number,
+  /** This render is its slot's first and carries the print-prep surcharge (`printPrepCharge`). */
+  printPrep = false,
 ): SparkEstimateRange | null {
   if (!sparks.enabled) return null;
   const m = planMultiplier > 0 ? planMultiplier : 1;
+  const prepUsd = printPrep && isPrintPrepAction(action) ? printPrepSurchargeUsd(sparks) : 0;
+  const prepFlat = prepUsd > 0 ? printPrepFixedSparks(sparks, planMultiplier) : 0;
   const applyM = (r: SparkEstimateRange): SparkEstimateRange => ({
     minSparks: Math.max(0, Math.round(r.minSparks * m)),
     maxSparks: Math.max(0, Math.round(r.maxSparks * m)),
   });
+  const withPrep = (r: SparkEstimateRange): SparkEstimateRange =>
+    r.maxSparks > 0 && prepFlat > 0
+      ? { minSparks: r.minSparks + prepFlat, maxSparks: r.maxSparks + prepFlat }
+      : r;
   const rule = sparks.actions[action];
   if (rule?.mode === "free") return { minSparks: 0, maxSparks: 0 };
   if (rule?.mode === "fixed") {
-    return applyM({ minSparks: rule.fixedSparks, maxSparks: rule.fixedSparks });
+    return withPrep(applyM({ minSparks: rule.fixedSparks, maxSparks: rule.fixedSparks }));
   }
   const sel = resolveImageModelClient(action, tier);
   if (!sel) {
     const flat = rule?.estimatedSparks ?? 0;
-    return applyM({ minSparks: flat, maxSparks: flat });
+    return withPrep(applyM({ minSparks: flat, maxSparks: flat }));
   }
   const rateUsd = costForUsage(modelCosts.models[costKey(sel.provider, sel.id)], PUBLIC_IMAGE_ESTIMATE_USAGE);
   const profile = estimateProfileForAction({
@@ -68,7 +82,10 @@ export function tierSparkRange(
     kind,
     referenceCount,
   });
-  const { sparks: price } = derivedUnitPrice({ stats, sparks, action, tier, profile, rateUsd }, planMultiplier);
+  const { sparks: price } = derivedUnitPrice(
+    { stats, sparks, action, tier, profile, rateUsd, extraUsd: prepUsd },
+    planMultiplier,
+  );
   return { minSparks: price, maxSparks: price };
 }
 

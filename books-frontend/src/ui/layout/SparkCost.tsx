@@ -32,6 +32,8 @@ export function useImageActionRange(
   kind: CostSampleKind = "fresh",
   /** Reference images the render plans to send (`referencePlan`), so the chip matches the charge. */
   referenceCount?: number,
+  /** The slot has no artwork yet, so this render carries the print-prep surcharge. */
+  printPrep = false,
 ): SparkEstimateRange | null {
   const tiers = customerPreviewTiers();
   const sparks = useAppConfigStore((s) => s.sparks);
@@ -55,6 +57,7 @@ export function useImageActionRange(
         multiplier * campaignMultiplierFor(overrides, action, t),
         kind,
         referenceCount,
+        printPrep,
       ),
     ),
   );
@@ -66,19 +69,23 @@ export interface ImageBatchItem {
   count: number;
   kind?: CostSampleKind;
   refs?: number;
+  /** First artwork for these slots: priced with the print-prep surcharge. */
+  prep?: boolean;
 }
 
 /**
  * Group planned units into batch lines, so renders sending different numbers
  * of reference images are each priced in their own group.
  */
-export function batchItemsOf(units: { action: ImageActionId; kind?: CostSampleKind; refs?: number }[]): ImageBatchItem[] {
+export function batchItemsOf(
+  units: { action: ImageActionId; kind?: CostSampleKind; refs?: number; prep?: boolean }[],
+): ImageBatchItem[] {
   const lines = new Map<string, ImageBatchItem>();
   for (const unit of units) {
-    const key = `${unit.action}:${unit.kind ?? "fresh"}:${unit.refs ?? ""}`;
+    const key = `${unit.action}:${unit.kind ?? "fresh"}:${unit.refs ?? ""}:${unit.prep ? 1 : 0}`;
     const line = lines.get(key);
     if (line) line.count += 1;
-    else lines.set(key, { action: unit.action, count: 1, kind: unit.kind, refs: unit.refs });
+    else lines.set(key, { action: unit.action, count: 1, kind: unit.kind, refs: unit.refs, prep: unit.prep });
   }
   return [...lines.values()];
 }
@@ -116,6 +123,7 @@ export function useImageBatchRange(
             m * campaignMultiplierFor(overrides, it.action, t),
             it.kind,
             it.refs,
+            it.prep,
           ),
         ),
       );

@@ -21,6 +21,7 @@ import { useJobsStore } from "../../state/jobsStore";
 import { useImageActionRange } from "../layout/SparkCost";
 import { clientReferenceLimits } from "../../state/referenceLimits";
 import { plannedIllustrationReferences } from "../../core/billing/referencePlan";
+import { slotHasArt } from "../../core/billing/printPrepCharge";
 import { notify } from "../lib/notify";
 import {
   illustrationMatchesLayout,
@@ -96,6 +97,7 @@ export function usePageIllustration(pageId: string) {
     imageAction,
     "fresh",
     plannedIllustrationReferences(project, unitId, {}, limits),
+    !slotHasArt(project, unitId),
   );
   const editSparkRange = useImageActionRange(
     imageAction,

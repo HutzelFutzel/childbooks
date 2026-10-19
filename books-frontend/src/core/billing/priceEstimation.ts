@@ -155,6 +155,11 @@ export interface UnitEstimateInput {
   /** The model's current per-image rate from the cost table (USD). */
   rateUsd: number | null;
   now?: number;
+  /**
+   * Cost on top of the render itself that this unit carries (the print-prep
+   * surcharge), added before rounding so the price moves by its real size.
+   */
+  extraUsd?: number;
 }
 
 export interface UnitEstimate {
@@ -358,5 +363,6 @@ export function unitPriceSparks(
  */
 export function derivedUnitPrice(input: UnitEstimateInput, multiplier = 1): { sparks: number; estimate: UnitEstimate } {
   const estimate = estimateUnitCost(input);
-  return { sparks: unitPriceSparks(input.sparks, input.action, estimate.usd, multiplier), estimate };
+  const extra = input.extraUsd && input.extraUsd > 0 ? input.extraUsd : 0;
+  return { sparks: unitPriceSparks(input.sparks, input.action, estimate.usd + extra, multiplier), estimate };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Search, XCircle } from "lucide-react";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import type { OrderAnalytics, TimingBucket } from "../../../core/orders/analytics";
@@ -9,16 +9,19 @@ import {
   ATTENTION_REASON_LABEL,
   PRINT_ORDER_STATES,
   PRINT_ORDER_STATE_LABEL,
+  PRINT_PREP_STATUS_LABEL,
   providerJobIsLive,
   type PrintOrderRecord,
   type PrintOrderState,
 } from "../../../core/orders/lifecycle";
+import type { PrintPrepSettings } from "../../../core/print/printPrep";
 import { useAdminMarket } from "../../../state/adminMarketStore";
 import {
   useAdminOrders,
   type OrderAction,
   type OrderDetail,
   type PrinterConnection,
+  type PrintPrepOverview,
 } from "../../../state/adminOrdersStore";
 import { Button } from "../../components/Button";
 import { ConfirmModal } from "../../components/ConfirmModal";
@@ -35,6 +38,7 @@ const WINDOWS = [
 
 const STATE_TONE: Record<PrintOrderState, string> = {
   paid: "bg-amber-100 text-amber-700",
+  preparing_files: "bg-violet-100 text-violet-700",
   placing: "bg-amber-100 text-amber-700",
   retrying: "bg-amber-100 text-amber-700",
   placed: "bg-sky-100 text-sky-700",
@@ -122,6 +126,7 @@ export function OrdersAnalysis() {
         <>
           <NeedsAttention analytics={analytics} />
           <ConnectionCard />
+          <PrintFilesCard analytics={analytics} />
           <Pipeline analytics={analytics} />
           <Throughput analytics={analytics} />
           <div className="grid gap-5 lg:grid-cols-2">
@@ -308,6 +313,368 @@ function connectionRows(c: PrinterConnection): { label: string; detail: string; 
     });
   }
   return rows;
+}
+
+// ---- Print files ------------------------------------------------------------------------
+
+/** Upscaling costs fractions of a cent per picture; two decimals would show $0.00 everywhere. */
+function fmtSmallUsd(n: number): string {
+  if (n === 0) return "$0";
+  return n < 1 ? `$${n.toFixed(4)}` : fmtUsd(n);
+}
+
+const TIER_LABEL: Record<string, string> = {
+  esrgan: "AI",
+  lanczos: "Lanczos",
+  "esrgan:cached": "AI (reused)",
+  "lanczos:cached": "Lanczos (reused)",
+};
+
+function tierLine(tiers: Record<string, number>): string {
+  const parts = Object.entries(tiers)
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([t, n]) => `${TIER_LABEL[t] ?? t} ${fmtNumber(n)}`);
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+function upscalerRow(p: PrintPrepOverview): { detail: string; tone: "ok" | "warn" | "bad" } {
+  const u = p.upscaler;
+  if (!u.configured) return { detail: "No AI service set — pictures are enlarged with Lanczos only", tone: "warn" };
+  const fails = u.consecutiveFailures ?? 0;
+  if (fails >= 5) {
+    return {
+      detail: `Failing (${fails}× in a row${u.firstFailureAt ? ` since ${fmtRelative(u.firstFailureAt)}` : ""}): ${u.lastError ?? "unknown"}`,
+      tone: "bad",
+    };
+  }
+  if (fails > 0) return { detail: `${fails} recent failure(s): ${u.lastError ?? "unknown"}`, tone: "warn" };
+  return { detail: u.lastSuccessAt ? `Answering · last success ${fmtRelative(u.lastSuccessAt)}` : "Not used yet", tone: u.lastSuccessAt ? "ok" : "warn" };
+}
+
+function PrintFilesCard({ analytics }: { analytics: OrderAnalytics }) {
+  const p = useAdminOrders((s) => s.printPrep);
+  const error = useAdminOrders((s) => s.printPrepError);
+  const busy = useAdminOrders((s) => s.busyAction);
+  const test = useAdminOrders((s) => s.testUpscaler);
+  const result = useAdminOrders((s) => s.upscalerTest);
+  const open = useAdminOrders((s) => s.open);
+  const [editing, setEditing] = useState(false);
+  const f = analytics.printFiles;
+
+  if (!p) {
+    return error ? (
+      <div className="rounded-2xl border border-ink-100 bg-white p-4 text-xs text-rose-600">Print files: {error}</div>
+    ) : null;
+  }
+  const upscaler = upscalerRow(p);
+  const net = p.money.collected30dUsd - p.money.spend30dUsd;
+  const rows: { label: string; detail: string; tone: "ok" | "warn" | "bad" }[] = [
+    {
+      label: "Preparation",
+      detail: p.settings.enabled ? `On · placed with standard files after ${p.settings.deadlineMinutes} min at the latest` : "Off — every order is placed with the standard files",
+      tone: p.settings.enabled ? "ok" : "warn",
+    },
+    { label: "AI upscaler", ...upscaler },
+    {
+      label: "Sweep",
+      detail: p.sweep.lastRunAt
+        ? `${fmtRelative(p.sweep.lastRunAt)}${p.sweep.ok === false ? " · last run FAILED" : ""}${p.sweep.summary ? ` · ${p.sweep.summary}` : ""}`
+        : "Hasn't run yet",
+      tone: p.sweep.stale || p.sweep.ok === false ? (p.settings.enabled ? "bad" : "warn") : "ok",
+    },
+  ];
+  const bad = p.settings.enabled && rows.some((r) => r.tone === "bad");
+
+  return (
+    <div className="rounded-2xl border border-ink-100 bg-white p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-ink-800">Print files</h3>
+          <p className={`text-xs ${bad ? "text-rose-600" : "text-ink-500"}`}>
+            {bad
+              ? "Something is broken — orders still go out, but with standard-resolution files."
+              : "Pictures are upscaled to 300 DPI after payment. A failure never blocks an order: it is placed with the files checked at checkout."}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="secondary" size="sm" loading={busy === "print-prep-test"} onClick={() => void test()}>
+            Test upscaler
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setEditing((v) => !v)}>
+            {editing ? "Close settings" : "Settings"}
+          </Button>
+        </div>
+      </div>
+      {error && <p className="mb-2 text-xs text-rose-600">{error}</p>}
+      {result && (
+        <p className={`mb-3 rounded-lg px-3 py-2 text-xs ${result.tier === "esrgan" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
+          Test: {result.tier === "esrgan" ? "AI service" : "Lanczos fallback"} produced {result.width}×{result.height} in{" "}
+          {fmtDuration(result.ms)} ({fmtSmallUsd(result.costUsd)})
+          {result.fallbacks.length > 0 ? ` — ${result.fallbacks.join("; ")}` : ""}
+        </p>
+      )}
+
+      <dl className="mb-4 grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+        {rows.map((r) => (
+          <div key={r.label} className="flex items-start gap-2">
+            {r.tone === "ok" ? (
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+            ) : r.tone === "warn" ? (
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+            ) : (
+              <XCircle className="mt-0.5 size-4 shrink-0 text-rose-500" />
+            )}
+            <div className="min-w-0">
+              <dt className="text-xs font-medium text-ink-500">{r.label}</dt>
+              <dd className="truncate text-sm text-ink-800" title={r.detail}>
+                {r.detail}
+              </dd>
+            </div>
+          </div>
+        ))}
+      </dl>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Print resolution" value={fmtPct(f.hiresRate)} good={(f.hiresRate ?? 1) >= 0.95} bad={f.finished > 3 && (f.hiresRate ?? 1) < 0.8} />
+        <Stat label="Fell back" value={`${fmtNumber(f.fallback)} (${fmtPct(f.fallbackRate)})`} bad={(f.fallbackRate ?? 0) > 0.1} />
+        <Stat label="Paid → files ready" value={f.duration.n ? `${fmtDuration(f.duration.p50)} / ${fmtDuration(f.duration.p90)}` : "—"} />
+        <Stat label="Preparing now" value={fmtNumber(p.active.length)} />
+        <Stat label="Upscale spend (30d)" value={fmtSmallUsd(p.money.spend30dUsd)} />
+        <Stat label="Surcharge collected (30d)" value={fmtSmallUsd(p.money.collected30dUsd)} />
+        <Stat label="Net (30d)" value={fmtSmallUsd(Math.abs(net)).replace("$", net < 0 ? "−$" : "$")} good={net >= 0} bad={net < 0} />
+        <Stat label="Pictures (30d)" value={`${fmtNumber(p.money.images30d)} · ${fmtNumber(p.money.slots30d)} paid slots`} />
+      </div>
+      <p className="mt-2 text-xs text-ink-500">
+        Upscaled with (this period): {tierLine(f.tiers)}
+        {f.images.failed > 0 ? ` · ${fmtNumber(f.images.failed)} picture(s) kept their original resolution` : ""}
+      </p>
+
+      {f.fallbackReasons.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-ink-400">Why orders fell back</p>
+          <ul className="space-y-1">
+            {f.fallbackReasons.map((e) => (
+              <li key={e.reason} className="flex items-start gap-2 text-xs text-ink-600">
+                <span className="w-6 shrink-0 text-right font-semibold tabular-nums text-ink-800">{e.count}</span>
+                <span className="min-w-0 break-words">{e.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {p.active.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-ink-400">Preparing now</p>
+          <ul className="divide-y divide-ink-50">
+            {p.active.map((a) => (
+              <li key={a.paymentId}>
+                <button
+                  type="button"
+                  onClick={() => void open(a.paymentId)}
+                  className="flex w-full flex-wrap items-center gap-x-3 gap-y-0.5 py-1.5 text-left text-xs hover:bg-ink-50"
+                >
+                  <span className="font-medium text-ink-800">{PRINT_PREP_STATUS_LABEL[a.status]}</span>
+                  <span className="text-ink-500">
+                    {a.images.done}/{a.images.total} pictures · started {fmtRelative(a.startedAt)} · falls back in{" "}
+                    {fmtDuration(Math.max(0, a.deadlineAt - Date.now()))}
+                  </span>
+                  <span className="ml-auto text-brand-600">Open →</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {editing && <PrintPrepSettingsForm initial={p.settings} onSaved={() => setEditing(false)} />}
+    </div>
+  );
+}
+
+function PrintPrepSettingsForm({ initial, onSaved }: { initial: PrintPrepSettings; onSaved: () => void }) {
+  const save = useAdminOrders((s) => s.savePrintPrepSettings);
+  const busy = useAdminOrders((s) => s.busyAction === "print-prep-settings");
+  const [s, setS] = useState<PrintPrepSettings>(initial);
+  const num = (v: string) => (v.trim() === "" ? 0 : Number(v));
+  const input = "h-9 w-full rounded-lg bg-white px-2.5 text-sm ring-1 ring-inset ring-ink-200 focus:outline-none focus:ring-2 focus:ring-brand-400";
+  const field = (label: string, hint: string, el: ReactNode) => (
+    <label className="block">
+      <span className="text-xs font-medium text-ink-600">{label}</span>
+      {el}
+      <span className="mt-0.5 block text-[11px] text-ink-400">{hint}</span>
+    </label>
+  );
+
+  return (
+    <form
+      className="mt-4 space-y-4 border-t border-ink-100 pt-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save(s).then((ok) => ok && onSaved());
+      }}
+    >
+      <label className="flex items-center gap-2 text-sm text-ink-800">
+        <input
+          type="checkbox"
+          checked={s.enabled}
+          onChange={(e) => setS({ ...s, enabled: e.target.checked })}
+          className="size-4 rounded border-ink-300 text-brand-500"
+        />
+        Prepare print-resolution files for paid orders
+      </label>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {field("Deadline (minutes)", "After this, the order is placed with the standard files.",
+          <input type="number" min={5} max={1440} value={s.deadlineMinutes} onChange={(e) => setS({ ...s, deadlineMinutes: num(e.target.value) })} className={input} />)}
+        {field("Upscale from", "A picture enlarged less than this is left alone.",
+          <input type="number" step={0.05} min={1} max={3} value={s.minUpscaleRatio} onChange={(e) => setS({ ...s, minUpscaleRatio: num(e.target.value) })} className={input} />)}
+        {field("Upscale at most", "Past this factor upscaling invents detail.",
+          <input type="number" step={0.5} min={1} max={8} value={s.maxUpscaleRatio} onChange={(e) => setS({ ...s, maxUpscaleRatio: num(e.target.value) })} className={input} />)}
+        {field("Largest picture (MP)", "Memory ceiling for one upscaled picture.",
+          <input type="number" min={4} max={48} value={s.maxOutputMegapixels} onChange={(e) => setS({ ...s, maxOutputMegapixels: num(e.target.value) })} className={input} />)}
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="sm:col-span-2">
+          {field("AI upscaler URL", "Cloud Run service with POST /upscale?scale=2|4. Empty = Lanczos only.",
+            <input value={s.upscaler.url} placeholder="https://upscaler-….run.app" onChange={(e) => setS({ ...s, upscaler: { ...s.upscaler, url: e.target.value } })} className={input} />)}
+        </div>
+        {field("Auth", "IAM: this project's service account must be allowed to invoke it.",
+          <select value={s.upscaler.auth} onChange={(e) => setS({ ...s, upscaler: { ...s.upscaler, auth: e.target.value === "none" ? "none" : "iam" } })} className={input}>
+            <option value="iam">IAM identity token</option>
+            <option value="none">None</option>
+          </select>)}
+        {field("Timeout (s)", "One call, cold start included.",
+          <input type="number" min={10} max={540} value={s.upscaler.timeoutSeconds} onChange={(e) => setS({ ...s, upscaler: { ...s.upscaler, timeoutSeconds: num(e.target.value) } })} className={input} />)}
+        {field("Service cost per second ($)", "GPU price ÷ 3600, for cost tracking.",
+          <input type="number" step={0.00001} min={0} max={1} value={s.upscaler.costPerSecondUsd} onChange={(e) => setS({ ...s, upscaler: { ...s.upscaler, costPerSecondUsd: num(e.target.value) } })} className={input} />)}
+        {field("Base cost per picture ($)", "Resampling, storage and re-render share.",
+          <input type="number" step={0.0001} min={0} max={1} value={s.baseCostPerImageUsd} onChange={(e) => setS({ ...s, baseCostPerImageUsd: num(e.target.value) })} className={input} />)}
+      </div>
+      <div>
+        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-400">Slack alerts (#ops)</p>
+        <div className="grid gap-4 sm:grid-cols-3">
+          {field("Upscaler down for (min)", "Every AI call failing this long pages.",
+            <input type="number" min={5} max={1440} value={s.alerts.outageMinutes} onChange={(e) => setS({ ...s, alerts: { ...s.alerts, outageMinutes: num(e.target.value) } })} className={input} />)}
+          {field("Fallbacks per hour", "This many orders on standard files within an hour pages.",
+            <input type="number" min={1} max={1000} value={s.alerts.fallbacksPerHour} onChange={(e) => setS({ ...s, alerts: { ...s.alerts, fallbacksPerHour: num(e.target.value) } })} className={input} />)}
+          {field("Daily spend above ($)", "0 turns the cost alert off.",
+            <input type="number" min={0} value={s.alerts.dailyCostUsd} onChange={(e) => setS({ ...s, alerts: { ...s.alerts, dailyCostUsd: num(e.target.value) } })} className={input} />)}
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <Button type="submit" size="sm" loading={busy}>
+          Save
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function PrintFilesPanel({ detail }: { detail: OrderDetail }) {
+  const { record: r, payment, printPrep } = detail;
+  const act = useAdminOrders((s) => s.act);
+  const busy = useAdminOrders((s) => s.busyAction);
+  if (!printPrep && !payment?.printPrepEligible) return null;
+  const run = printPrep?.run ?? null;
+  const unplaced = !r.currentJobId && payment?.status === "paid";
+  const canPlaceStandard = unplaced && Boolean(run?.active);
+  const canRerun = unplaced && Boolean(payment?.printPrepEligible) && !run?.active && run?.status !== "ready";
+  const files = payment?.placedFiles ?? payment?.checkoutFiles ?? null;
+
+  return (
+    <div className="rounded-xl border border-ink-100 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-ink-400">Print files</p>
+        <div className="flex gap-2">
+          {canPlaceStandard && (
+            <Button size="sm" variant="secondary" loading={busy === "use-standard-files"} onClick={() => void act(r.key, "use-standard-files")}>
+              Place with standard files
+            </Button>
+          )}
+          {canRerun && (
+            <Button size="sm" variant="ghost" loading={busy === "rerun-print-prep"} onClick={() => void act(r.key, "rerun-print-prep")}>
+              Prepare again
+            </Button>
+          )}
+        </div>
+      </div>
+      {!run ? (
+        <p className="mt-1 text-sm text-ink-600">Not prepared — placed with the files checked at checkout.</p>
+      ) : (
+        <>
+          <p className={`mt-1 text-sm font-medium ${run.status === "fallback" ? "text-amber-700" : run.status === "ready" ? "text-emerald-700" : "text-ink-800"}`}>
+            {PRINT_PREP_STATUS_LABEL[run.status]}
+            {run.active ? ` · falls back in ${fmtDuration(Math.max(0, run.deadlineAt - Date.now()))}` : ""}
+          </p>
+          {run.reason && <p className="text-xs text-ink-600">{run.reason}</p>}
+          <p className="mt-1 text-xs text-ink-500">
+            {run.images.done}/{run.images.total} pictures upscaled
+            {run.images.failed ? ` · ${run.images.failed} kept original` : ""} · {tierLine(run.tiers)} · {fmtSmallUsd(run.costUsd)} ·{" "}
+            {run.finishedAt ? `took ${fmtDuration(run.finishedAt - run.startedAt)}` : `started ${fmtRelative(run.startedAt)}`}
+          </p>
+          {printPrep && printPrep.images.length > 0 && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs text-brand-600">Pictures ({printPrep.images.length})</summary>
+              <table className="mt-1.5 w-full text-xs">
+                <thead>
+                  <tr className="text-left text-ink-400">
+                    <th className="py-1 font-medium">Enlarged</th>
+                    <th className="py-1 font-medium">Size</th>
+                    <th className="py-1 font-medium">With</th>
+                    <th className="py-1 font-medium">Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {printPrep.images.map((img) => (
+                    <tr key={img.blobId} className="border-t border-ink-50 align-top">
+                      <td className="py-1 tabular-nums text-ink-700">{img.demand.toFixed(2)}×</td>
+                      <td className="py-1 tabular-nums text-ink-600">
+                        {img.naturalWidth}×{img.naturalHeight} → {img.target.width}×{img.target.height}
+                      </td>
+                      <td className="py-1 text-ink-600">{img.tier ? `${TIER_LABEL[img.tier] ?? img.tier}${img.cached ? " (reused)" : ""}` : "—"}</td>
+                      <td className={`py-1 ${img.status === "failed" ? "text-rose-600" : "text-ink-600"}`} title={[img.error, ...img.fallbacks].filter(Boolean).join("\n")}>
+                        {img.status === "done" ? `${fmtDuration(img.durationMs)}` : img.status}
+                        {img.error ? ` · ${img.error}` : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </details>
+          )}
+          {run.timeline.length > 0 && (
+            <details className="mt-1">
+              <summary className="cursor-pointer text-xs text-brand-600">Steps</summary>
+              <ul className="mt-1 space-y-0.5">
+                {run.timeline.map((t, i) => (
+                  <li key={i} className="text-xs text-ink-600">
+                    <span className="text-ink-400">{fmtDateTime(t.at)}</span> · {t.message}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </>
+      )}
+      {files?.interior && (
+        <p className="mt-2 text-xs text-ink-500">
+          {payment?.placedFiles ? "Sent to printer" : "Checkout files"}:{" "}
+          <a href={files.interior} target="_blank" rel="noreferrer" className="text-brand-600 underline">
+            interior
+          </a>
+          {files.cover && (
+            <>
+              {" · "}
+              <a href={files.cover} target="_blank" rel="noreferrer" className="text-brand-600 underline">
+                cover
+              </a>
+            </>
+          )}
+        </p>
+      )}
+    </div>
+  );
 }
 
 // ---- Pipeline & throughput --------------------------------------------------------------
@@ -789,6 +1156,8 @@ function OrderDetailView({ detail }: { detail: OrderDetail }) {
           </Button>
         </div>
       )}
+
+      <PrintFilesPanel detail={detail} />
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
         <Field label="Payment" value={payment ? `${payment.status} · ${fmtMoney(payment.amount, payment.currency)}` : "—"} />
