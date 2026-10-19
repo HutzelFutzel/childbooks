@@ -213,7 +213,7 @@ export function AdminSidebarNav({
             )}
           </div>
 
-          <nav className="space-y-2" aria-label="Admin workspaces">
+          <nav className="space-y-3" aria-label="Admin workspaces">
             {domainGroups.map((group) => (
               <DomainGroup
                 key={group.id}
@@ -268,10 +268,8 @@ function DomainGroup({
   return (
     <div
       className={cn(
-        "rounded-xl border transition-colors",
-        containsActive
-          ? "border-ink-200/90 bg-ink-50/40"
-          : "border-transparent bg-transparent hover:border-ink-100",
+        "overflow-hidden rounded-xl border bg-white shadow-2xs transition-colors",
+        containsActive ? "border-brand-200" : "border-ink-200",
       )}
     >
       <button
@@ -279,8 +277,11 @@ function DomainGroup({
         onClick={onToggle}
         aria-expanded={open}
         className={cn(
-          "flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left text-xs font-semibold transition-colors",
-          containsActive ? "text-ink-900" : "text-ink-700 hover:bg-ink-50/80 hover:text-ink-900",
+          "flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-[13px] font-bold tracking-tight transition-colors",
+          open && "border-b",
+          containsActive
+            ? "border-brand-100 bg-brand-50 text-brand-900 hover:bg-brand-100/70"
+            : "border-ink-100 bg-ink-100/70 text-ink-900 hover:bg-ink-100",
         )}
       >
         <span className="flex min-w-0 items-center gap-2">
@@ -290,7 +291,7 @@ function DomainGroup({
                 "flex size-5 shrink-0 items-center justify-center rounded-md",
                 containsActive
                   ? "bg-brand-100 text-brand-700"
-                  : "bg-ink-100/80 text-ink-500",
+                  : "bg-white text-ink-600 shadow-2xs",
               )}
             >
               {group.icon}
@@ -314,7 +315,7 @@ function DomainGroup({
       </button>
 
       {open && (
-        <div className="space-y-2 px-1.5 pb-2 pt-0.5">
+        <div className="space-y-2.5 px-2 py-2">
           {group.children.map((child) =>
             child.kind === "leaf" ? (
               <SidebarLeaf
@@ -352,21 +353,23 @@ function SubGroup({
   onNavigate?: () => void;
 }) {
   return (
-    <div className="space-y-0.5 pt-1 first:pt-0">
+    <div className="space-y-0.5">
       <p className="px-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
         {group.label}
       </p>
-      {group.children.map((child) =>
-        child.kind === "leaf" ? (
-          <SidebarLeaf
-            key={child.id}
-            leaf={child}
-            pathname={pathname}
-            catalogSegment={catalogSegment}
-            onNavigate={onNavigate}
-          />
-        ) : null,
-      )}
+      <div className="ml-2.5 space-y-0.5 border-l border-ink-100 pl-1.5">
+        {group.children.map((child) =>
+          child.kind === "leaf" ? (
+            <SidebarLeaf
+              key={child.id}
+              leaf={child}
+              pathname={pathname}
+              catalogSegment={catalogSegment}
+              onNavigate={onNavigate}
+            />
+          ) : null,
+        )}
+      </div>
     </div>
   );
 }

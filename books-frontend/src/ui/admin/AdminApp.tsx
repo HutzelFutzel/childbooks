@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowLeft, Eye, FlaskConical, Loader2, Menu, Rocket, Search, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Eye, FlaskConical, Loader2, Menu, Search, ShieldAlert } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Drawer } from "@/ui/components/Drawer";
 import { TopBar } from "@/ui/layout/TopBar";
@@ -144,22 +144,18 @@ function BillingEnvBadge({ onOpenSystemHealth }: { onOpenSystemHealth: () => voi
   }, []);
 
   if (!runtime) return null;
-  const isLive = runtime.env === "live";
+  // Live is the normal state — only flag sandbox.
+  if (runtime.env === "live") return null;
 
   return (
     <button
       type="button"
       onClick={onOpenSystemHealth}
-      title="Sandbox/live billing mode — click to manage in System health"
-      className={cn(
-        "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold transition-colors",
-        isLive
-          ? "bg-rose-100 text-rose-700 hover:bg-rose-200"
-          : "bg-sky-100 text-sky-700 hover:bg-sky-200",
-      )}
+      title="Sandbox billing mode — click to manage in System health"
+      className="flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-200"
     >
-      {isLive ? <Rocket className="size-3.5" /> : <FlaskConical className="size-3.5" />}
-      <span className="hidden sm:inline">{isLive ? "Live billing" : "Sandbox billing"}</span>
+      <FlaskConical className="size-3.5" />
+      <span className="hidden sm:inline">Sandbox</span>
     </button>
   );
 }
