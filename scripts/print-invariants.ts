@@ -59,11 +59,14 @@ import { validateTreatments } from "../books-frontend/src/core/book/treatments";
 import { bindingSideFor } from "../books-frontend/src/core/book/pageLayout";
 import {
   computePageGuides,
+  computeSpineBrandLayout,
   coverSafetyMarginIn,
   nominalCoverExtensionIn,
   resolveFormatCapabilities,
   CASEWRAP_COVER_EXTENSION_IN,
   SAFETY_MARGIN_IN,
+  SPINE_BRAND_BAND_CM,
+  SPINE_BRAND_BAND_IN,
 } from "../books-frontend/src/core/book/format";
 import { checkPrintFiles } from "../books-frontend/src/core/print/fileCheck";
 import { chooseImageSize, renderAspect } from "../books-frontend/src/core/pipeline/illustration";
@@ -1970,6 +1973,38 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
 
     check("a hardcover cover keeps art further from the edge", coverSafetyMarginIn("casewrap") > coverSafetyMarginIn("perfect-bound"));
     check("a softcover cover keeps the standard margin", coverSafetyMarginIn("perfect-bound") === SAFETY_MARGIN_IN);
+
+    // Spine brand band: 1 cm visible above the bottom trim/fold across every format.
+    check("the spine brand band is 1 cm", SPINE_BRAND_BAND_CM === 1 && near(SPINE_BRAND_BAND_IN, 1 / 2.54));
+    const hardSpine = computeSpineBrandLayout({
+      heightPx: cover.heightPx,
+      bleedPx: cover.bleedPx,
+      dpi: DPI,
+    });
+    const softCover = pageGeometry({ trim: soft.trim, bleedIn: soft.bleedIn }, { dpi: DPI, bleed: true });
+    const softSpine = computeSpineBrandLayout({
+      heightPx: softCover.heightPx,
+      bleedPx: softCover.bleedPx,
+      dpi: DPI,
+    });
+    check(
+      "hardcover and paperback spines show the exact same 1 cm visible brand band on the shelf",
+      hardSpine.bandVisibleHeightPx === softSpine.bandVisibleHeightPx &&
+        hardSpine.bandVisibleHeightPx === Math.round(SPINE_BRAND_BAND_IN * DPI),
+      `${hardSpine.bandVisibleHeightPx}px vs ${softSpine.bandVisibleHeightPx}px`,
+    );
+    check(
+      "the painted spine brand band includes the bottom bleed/wrap so no white sliver appears at the bottom edge",
+      hardSpine.bandTotalHeightPx === Math.round(cover.bleedPx + hardSpine.bandVisibleHeightPx) &&
+        softSpine.bandTotalHeightPx === Math.round(softCover.bleedPx + softSpine.bandVisibleHeightPx),
+      `hard ${hardSpine.bandTotalHeightPx}px, soft ${softSpine.bandTotalHeightPx}px`,
+    );
+    check(
+      "the spine title area sits cleanly between the top wrap/bleed and the bottom brand band",
+      hardSpine.titleAreaTopPx === Math.round(cover.bleedPx) &&
+        hardSpine.titleAreaTopPx + hardSpine.titleAreaHeightPx + hardSpine.bandTotalHeightPx === cover.heightPx &&
+        near(hardSpine.titleCenterYPx, hardSpine.titleAreaTopPx + hardSpine.titleAreaHeightPx / 2),
+    );
   }
 }
 

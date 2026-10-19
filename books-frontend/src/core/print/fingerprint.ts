@@ -66,9 +66,9 @@ function illustrationInputs(project: Project): Record<string, string> {
 }
 
 /** Version tag, so a change to the renderer itself invalidates old renders. */
-// 6: cover panels are laid out to the provider's cover height, so a hardcover's
-// wrap is no longer drawn as a paperback's bleed.
-const RENDERER_VERSION = "6";
+// 7: spine carries a 1 cm primary-brand-color band at the foot of the standing
+// spine (including the bottom bleed/wrap extension) across every book format.
+const RENDERER_VERSION = "7";
 
 export function renderFingerprint(project: Project, design: BookDesign): string {
   const screenplay = project.screenplay ? getCursor(project.screenplay) : null;

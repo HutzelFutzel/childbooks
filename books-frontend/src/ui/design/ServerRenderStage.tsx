@@ -88,10 +88,12 @@ interface RenderState {
   spine?: {
     widthPx: number;
     heightPx: number;
+    bleedPx: number;
     text: string;
     fontFamily: string;
     background: string;
     color: string;
+    brandColor: string | null;
   };
 }
 
@@ -189,10 +191,12 @@ export function ServerRenderStage() {
           id={SPINE_CAPTURE_ID}
           widthPx={state.spine.widthPx}
           heightPx={state.spine.heightPx}
+          bleedPx={state.spine.bleedPx}
           text={state.spine.text}
           fontFamily={state.spine.fontFamily}
           background={state.spine.background}
           color={state.spine.color}
+          brandColor={state.spine.brandColor}
         />
       )}
     </div>
@@ -273,6 +277,7 @@ async function prepare(): Promise<RenderState> {
     backCoverLogoUrl: string | null;
     backCoverLogoAspect: number | null;
     backCoverLogoSizeCm: number | null;
+    brandPrimaryColor?: string | null;
   };
 
   const project = payload.project;
@@ -326,10 +331,12 @@ async function prepare(): Promise<RenderState> {
         spineRequest = {
           widthPx: Math.max(1, Math.round(spineWidthIn * EXPORT_DPI)),
           heightPx: Math.round(doc.cover.heightIn * EXPORT_DPI),
+          bleedPx: cover.geometry.bleedPx,
           text,
           fontFamily: fontStack(design.defaultFontFamily),
           background: "#e8e2d6",
           color: "#1f2933",
+          brandColor: payload.brandPrimaryColor ?? null,
         };
         spineFromBlobId = pages.find((p) => p.id === COVER_FRONT_ID)?.blobId;
         captures.push({

@@ -1,4 +1,10 @@
-import { backCoverLogoSizeIn, SAFETY_MARGIN_IN } from "../../core/book/format";
+import {
+  backCoverLogoSizeIn,
+  computeSpineBrandLayout,
+  SAFETY_MARGIN_IN,
+  SPINE_BRAND_BAND_CM,
+} from "../../core/book/format";
+import { createDefaultBrandingConfig } from "../../core/config/branding";
 import { EXPORT_DPI } from "../../core/config/options";
 import { COVER_BACK_ID, COVER_FRONT_ID, type BookDesign, type PageDesign } from "../../core/types";
 import { mergePairDesign, withFacingOverflow } from "../../core/book/pairSurface";
@@ -301,19 +307,38 @@ export function PrintSpine({
   id,
   widthPx,
   heightPx,
+  bleedPx = 0,
   text,
   fontFamily,
   background,
   color,
+  brandColor,
+  brandBandCm = SPINE_BRAND_BAND_CM,
 }: {
   id: string;
   widthPx: number;
   heightPx: number;
+  /** Top/bottom cover extension (bleed on paperback, board wrap on hardcover) in device pixels. */
+  bleedPx?: number;
   text: string;
   fontFamily: string;
   background: string;
   color: string;
+  /** Primary brand color (Marketing → Branding) for the bottom spine band. */
+  brandColor?: string | null;
+  /** Visible height (cm) of the bottom brand band above the trim/fold edge. */
+  brandBandCm?: number;
 }) {
+  const layout = computeSpineBrandLayout({
+    heightPx,
+    bleedPx,
+    bandCm: brandBandCm,
+    dpi: EXPORT_DPI,
+  });
+  const resolvedBrandColor =
+    brandColor && brandColor.trim()
+      ? brandColor.trim()
+      : createDefaultBrandingConfig().colors.primary;
   return (
     <div
       data-export-page={id}
@@ -328,17 +353,17 @@ export function PrintSpine({
         WebkitPrintColorAdjust: "exact",
       }}
     >
-      {text.trim() && (
+      {text.trim() && layout.titleAreaHeightPx > 0 && (
         <div
           style={{
             position: "absolute",
-            top: "50%",
+            top: layout.titleCenterYPx,
             left: "50%",
             // Rotated to read top-to-bottom, the convention for English-language
-            // spines. Sized against the band width so it can't touch the edges.
+            // spines. Centered in the usable area above the bottom brand band.
             transform: "translate(-50%, -50%) rotate(90deg)",
             transformOrigin: "center",
-            width: heightPx * 0.86,
+            width: layout.titleAreaHeightPx * 0.86,
             textAlign: "center",
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -352,6 +377,20 @@ export function PrintSpine({
         >
           {text}
         </div>
+      )}
+      {layout.bandTotalHeightPx > 0 && (
+        <div
+          data-spine-brand-band
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: layout.bandTotalHeightPx,
+            background: resolvedBrandColor,
+            pointerEvents: "none",
+          }}
+        />
       )}
     </div>
   );

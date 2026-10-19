@@ -367,6 +367,7 @@ export function registerRenderJobRoutes(app: Express): void {
         backCoverLogoUrl: logo?.imageUrl ?? null,
         backCoverLogoAspect: typeof logo?.aspect === "number" ? logo.aspect : null,
         backCoverLogoSizeCm: branding.backCoverLogoSizeCm,
+        brandPrimaryColor: branding.colors.primary,
       });
     } catch (err) {
       logger.error("[render] payload failed", err);

@@ -75,6 +75,72 @@ export const BACK_COVER_LOGO_FIXED_CM = 2;
 /** {@link BACK_COVER_LOGO_FIXED_CM} expressed in inches. */
 export const BACK_COVER_LOGO_FIXED_IN = cmToIn(BACK_COVER_LOGO_FIXED_CM);
 
+/**
+ * Visible height of the permanent brand-color band at the foot of every
+ * printed spine, in centimetres. Standing on a shelf, every book — regardless
+ * of trim size or binding — shows this 1 cm band at the bottom of its spine.
+ */
+export const SPINE_BRAND_BAND_CM = 1;
+/** {@link SPINE_BRAND_BAND_CM} expressed in inches. */
+export const SPINE_BRAND_BAND_IN = cmToIn(SPINE_BRAND_BAND_CM);
+
+export interface SpineBrandLayout {
+  /** Total painted height from the bottom of the cover canvas (includes bottom bleed/wrap). */
+  bandTotalHeightPx: number;
+  /** Visible height on the finished spine above the bottom trim / board fold. */
+  bandVisibleHeightPx: number;
+  /** Top of the usable spine area (below the top bleed/wrap). */
+  titleAreaTopPx: number;
+  /** Height of the usable spine area between top bleed/wrap and the brand band. */
+  titleAreaHeightPx: number;
+  /** Vertical center (`top` in px) for the rotated spine title within the usable area. */
+  titleCenterYPx: number;
+}
+
+/**
+ * Compute pixel geometry for the spine's bottom brand band and the remaining
+ * title area above it.
+ *
+ * The painted band extends from `bottom: 0` through the bottom cover extension
+ * (`bleedPx`: 0.125" trim bleed on paperbacks, 0.875" board wrap on hardcovers)
+ * plus the visible `bandCm` height above the trim/fold line. That guarantees:
+ *   1. Every book standing on a shelf shows the exact same 1 cm band height
+ *      above its bottom edge, regardless of format or binding.
+ *   2. The color continues seamlessly around the bottom board fold / past the
+ *      trim knife with no white sliver at the bottom of the spine.
+ *   3. The spine title is centered in the remaining space above the band and
+ *      never collides with it.
+ */
+export function computeSpineBrandLayout(input: {
+  heightPx: number;
+  bleedPx?: number;
+  bandCm?: number;
+  dpi?: number;
+}): SpineBrandLayout {
+  const heightPx = Math.max(0, Math.round(input.heightPx));
+  const bleedPx = Math.max(0, input.bleedPx ?? 0);
+  const dpi = input.dpi && input.dpi > 0 ? input.dpi : 300;
+  const bandCm =
+    typeof input.bandCm === "number" && Number.isFinite(input.bandCm) && input.bandCm >= 0
+      ? input.bandCm
+      : SPINE_BRAND_BAND_CM;
+  const bandVisibleHeightPx = Math.round(cmToIn(bandCm) * dpi);
+  const bandTotalHeightPx =
+    bandVisibleHeightPx > 0
+      ? Math.min(heightPx, Math.max(0, Math.round(bleedPx + bandVisibleHeightPx)))
+      : 0;
+  const titleAreaTopPx = Math.min(heightPx, Math.round(bleedPx));
+  const titleAreaHeightPx = Math.max(0, heightPx - titleAreaTopPx - bandTotalHeightPx);
+  const titleCenterYPx = titleAreaTopPx + titleAreaHeightPx / 2;
+  return {
+    bandTotalHeightPx,
+    bandVisibleHeightPx: Math.min(bandVisibleHeightPx, Math.max(0, heightPx - Math.round(bleedPx))),
+    titleAreaTopPx,
+    titleAreaHeightPx,
+    titleCenterYPx,
+  };
+}
+
 /** Paperback spine width formula: `(pages / 444) + 0.06 in`. */
 const PAPERBACK_SPINE_PER_PAGE_IN = 1 / 444;
 const PAPERBACK_SPINE_BASE_IN = 0.06;

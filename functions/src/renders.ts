@@ -29,6 +29,7 @@ import express, { type Express, type Response } from "express";
 import { FieldPath, FieldValue, getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { getBrandingConfig } from "./appConfig";
 import type { AuthedRequest } from "./auth";
 import { createAdminAssetHost, publicUrlForPath } from "./assets";
 import { ensureAdmin, storageBucketName } from "./storage";
@@ -70,6 +71,8 @@ interface RenderDoc {
   artwork?: Record<string, Omit<ArtworkDemand, "blobId">>;
   /** When `artwork` was measured. */
   artworkAt?: number;
+  /** Primary brand color baked into the spine when the cover was assembled. */
+  brandPrimaryColor?: string;
 }
 
 /** What print preparation needs to know about one render. */
@@ -358,10 +361,18 @@ export async function assembleDocument(
     return { key, pageCount };
   }
 
-  const path = await assembleCover(uid, fingerprint, request.cover);
+  const [path, branding] = await Promise.all([
+    assembleCover(uid, fingerprint, request.cover),
+    getBrandingConfig(),
+  ]);
   const key = documentKey("cover", { sku: request.sku, pages: request.padToPages });
   await docRef(uid, fingerprint).set(
-    { documents: { [key]: path }, requests: { [key]: stripUndefined(request) }, lastUsedAt: Date.now() },
+    {
+      documents: { [key]: path },
+      requests: { [key]: stripUndefined(request) },
+      brandPrimaryColor: branding.colors.primary,
+      lastUsedAt: Date.now(),
+    },
     { merge: true },
   );
   return { key };
@@ -498,7 +509,10 @@ export function registerRenderRoutes(app: Express): void {
         clientError(res, "Unknown render.", 404);
         return;
       }
-      const snap = await docRef(req.uid!, fingerprint).get();
+      const [snap, branding] = await Promise.all([
+        docRef(req.uid!, fingerprint).get(),
+        getBrandingConfig(),
+      ]);
       const data = snap.data() as RenderDoc | undefined;
       const recorded = data?.documents ?? {};
       // A document counts only while its file still exists. Retention removes
@@ -511,10 +525,14 @@ export function registerRenderRoutes(app: Express): void {
       );
       const documents: Record<string, string> = {};
       for (const key of present) if (key) documents[key] = recorded[key];
+      // Changing the primary brand color in Admin → Branding invalidates cached
+      // covers so the spine's 1 cm brand band re-renders in the new color.
+      const brandColorMatches =
+        !data?.brandPrimaryColor || data.brandPrimaryColor === branding.colors.primary;
       res.json({
         ebook: Boolean(documents[documentKey("ebook")]),
         interior: Boolean(documents[documentKey("interior")]),
-        covers: Object.keys(documents).filter((k) => k.startsWith("cover:")),
+        covers: brandColorMatches ? Object.keys(documents).filter((k) => k.startsWith("cover:")) : [],
         // Panels survive their cover, so a new page count only costs a spine.
         hasCoverPanels: Boolean(data?.panels && Object.keys(data.panels).length > 0),
         interiorPageCount: data?.interiorPageCount ?? null,
