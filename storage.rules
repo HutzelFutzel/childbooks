@@ -71,6 +71,14 @@ service firebase.storage {
       allow write: if false;
     }
 
+    // Admin-managed landing-page images (hero, showcase, share card). World-
+    // readable so the public pages render them; written only by the backend
+    // (Admin SDK) after `requireAdmin`.
+    match /public/landing/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // The QR code library's rendered images and centre-logo copies. World-
     // readable — a code baked into a printed book has to keep resolving for
     // anyone who scans it, indefinitely; written only by the backend (Admin

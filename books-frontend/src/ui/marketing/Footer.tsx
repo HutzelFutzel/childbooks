@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Sparkles } from "lucide-react";
 import { CookieSettingsButton } from "../consent/CookieSettingsButton";
 import { visibleLegalLinks, type LegalConfig } from "../../core/config/legal";
+import { getLandingFooterLinks } from "../../server/landingPages";
 
 // Root-relative hashes (`/#…`) so they work from any page, not just the landing.
 const COLUMNS = [
@@ -27,8 +28,13 @@ const COLUMNS = [
   },
 ];
 
-/** Site footer with brand + navigation columns, plus admin-managed legal links. */
-export function Footer({
+/**
+ * Site footer with brand + navigation columns, plus admin-managed legal links.
+ * Async so it can list the live landing pages: a published page that nothing
+ * links to is an orphan search engines rank poorly, so every page's footer
+ * links to it the moment it goes live.
+ */
+export async function Footer({
   siteName,
   logoUrl,
   legal,
@@ -39,10 +45,15 @@ export function Footer({
 }) {
   const year = new Date().getFullYear();
   const legalLinks = legal ? visibleLegalLinks(legal, "footer") : [];
+  const landingLinks = await getLandingFooterLinks();
 
   return (
     <footer className="border-t border-ink-100 bg-white">
-      <div className="mx-auto grid max-w-6xl gap-10 px-6 py-14 md:grid-cols-[2fr_1fr_1fr_1fr]">
+      <div
+        className={`mx-auto grid max-w-6xl gap-10 px-6 py-14 ${
+          landingLinks.length > 0 ? "md:grid-cols-[2fr_1fr_1fr_1fr_1fr]" : "md:grid-cols-[2fr_1fr_1fr_1fr]"
+        }`}
+      >
         <div>
           <Link href="/" className="flex items-center gap-2 font-bold text-ink-900" aria-label={siteName}>
             {logoUrl ? (
@@ -76,6 +87,21 @@ export function Footer({
             </ul>
           </div>
         ))}
+
+        {landingLinks.length > 0 && (
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-400">Explore</h3>
+            <ul className="mt-4 space-y-2.5">
+              {landingLinks.map((l) => (
+                <li key={l.href}>
+                  <Link href={l.href} className="text-sm text-ink-600 transition-colors hover:text-ink-900">
+                    {l.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-400">Legal</h3>

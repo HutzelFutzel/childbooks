@@ -596,6 +596,8 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/blog\/stats$/, gate: key("marketing.blog", "read") },
   { test: /^\/admin\/blog\/[^/]+\/stats$/, gate: key("marketing.blog", "read") },
   { test: /^\/admin\/blog(\/|$)/, gate: key("marketing.blog") },
+  // GETs (list, stats) need read, everything else write — the default per method.
+  { test: /^\/admin\/landing-pages(\/|$)/, gate: key("marketing.landingPages") },
   { test: /^\/admin\/branding(\/|$)/, gate: key("marketing.branding") },
   { test: /^\/admin\/site-images?(\/|$)/, gate: key("marketing.branding") },
   { test: /^\/admin\/site-content(\/|$)/, gate: key("marketing.branding") },

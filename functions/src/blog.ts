@@ -152,7 +152,7 @@ export async function deleteBlogPost(slug: string): Promise<{ index: BlogIndex }
  * revalidate route and its URL + shared secret are configured — so it never
  * breaks a save if the two services aren't wired together.
  */
-async function triggerRevalidate(paths: string[]): Promise<void> {
+export async function triggerRevalidate(paths: string[]): Promise<void> {
   const url = process.env.FRONTEND_REVALIDATE_URL;
   const secret = process.env.REVALIDATE_SECRET;
   if (!url || !secret) return;

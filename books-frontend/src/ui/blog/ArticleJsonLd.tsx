@@ -1,3 +1,4 @@
+import { jsonLdHtml } from "../marketing/jsonLdHtml";
 import type { BlogPost } from "@/core/config/blog";
 import type { SeoConfig } from "@/core/config/seo";
 import type { BrandingConfig } from "@/core/config/branding";
@@ -43,7 +44,7 @@ export function ArticleJsonLd({
     <script
       // eslint-disable-next-line react/no-danger
       type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }}
+      dangerouslySetInnerHTML={{ __html: jsonLdHtml(data) }}
     />
   );
 }

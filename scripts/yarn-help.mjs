@@ -26,6 +26,7 @@ const ROOT_DESCRIPTIONS = {
   "check:print": "Quote every catalog SKU against the provider (needs credentials)",
   "check:pricing": "Assert the pricing/margin/shipping invariants hold (offline)",
   "check:geo": "Assert country inference does not stamp English-UI visitors as US (offline)",
+  "check:landing": "Assert landing-page routing, redirect, sitemap and link-safety invariants hold (offline)",
   "check:coupons": "Assert the coupon restriction/cap/stacking invariants hold (offline)",
   "check:story-analysis": "Assert story-analysis merge/scope invariants hold (offline)",
   "check:guide": "Assert the Chat studio settings, engine and interpreter invariants hold (offline)",

@@ -312,6 +312,11 @@ export const MARKETING_TAB_META: Record<MarketingTabId, TabMeta> = {
     icon: <Newspaper className="size-4" />,
     description: "Public articles and readership stats.",
   },
+  landingPages: {
+    label: "Landing pages",
+    icon: <LayoutTemplate className="size-4" />,
+    description: "Campaign and SEO pages built from one template, with their own slug and status.",
+  },
   branding: {
     label: "Branding",
     icon: <Stamp className="size-4" />,
@@ -585,6 +590,7 @@ export const NAV_TREE: NavNode[] = [
         children: [
           marketingLeaf("announcements"),
           marketingLeaf("blog"),
+          marketingLeaf("landingPages"),
           marketingLeaf("seo"),
           marketingLeaf("branding"),
           marketingLeaf("qrCodes"),

@@ -492,6 +492,22 @@ export async function uploadBlogImage(
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }
 
+/**
+ * Upload an admin-managed landing-page image (hero, showcase, share card) to the
+ * world-readable `public/landing/{slug}-...` space and return its path + public
+ * URL. `slug` only shapes the filename (sanitized), never the ACL.
+ */
+export async function uploadLandingImage(
+  slug: string,
+  buf: Buffer,
+  contentType: string,
+): Promise<{ storagePath: string; publicUrl: string }> {
+  const safeSlug = slug.replace(/[^a-z0-9-]/gi, "").slice(0, 60) || "page";
+  const storagePath = `public/landing/${safeSlug}-${randomUUID()}.${extForMime(contentType)}`;
+  await blobBucket().file(storagePath).save(buf, { contentType: contentType || "image/png", resumable: false });
+  return { storagePath, publicUrl: publicMediaUrl(storagePath) };
+}
+
 /** Delete a previously uploaded object (best-effort). */
 export async function deletePublicObject(storagePath: string): Promise<void> {
   try {

@@ -1,0 +1,136 @@
+/*
+  Landing-page look & feel.
+
+  Everything visual about the landing template that you might want to restyle —
+  palette, heading face, corner radius, shadows — is a variable in the first
+  block, scoped to `.lp` so nothing leaks into the rest of the site. The defaults
+  are derived from the site's own tokens, so the pages follow the admin Branding
+  colours automatically; override a variable to give landing pages their own look.
+
+  The second block names the visual primitives (`lp-heading`, `lp-cta`,
+  `lp-card`, …) the template composes. Layout and spacing stay in the component
+  as Tailwind utilities.
+
+  To change the LAYOUT, edit `templates/StoryV1.tsx`. To add a different layout
+  beside it, add a template id (see `core/config/landingPages.ts`) and a component
+  in `templates/` — no page needs migrating.
+*/
+.lp {
+  --lp-bg: var(--color-canvas);
+  --lp-surface: var(--color-surface);
+  --lp-heading: var(--color-ink-900);
+  --lp-text: var(--color-ink-600);
+  --lp-muted: var(--color-ink-500);
+  --lp-rule: var(--color-ink-100);
+
+  --lp-cta: var(--color-brand-600);
+  --lp-cta-hover: var(--color-brand-700);
+  --lp-cta-text: var(--color-brand-foreground, #fff);
+
+  /* The full-bleed benefits band. */
+  --lp-band: var(--color-ink-900);
+  --lp-band-text: var(--color-ink-100);
+  --lp-band-muted: var(--color-ink-300);
+  --lp-band-accent: var(--color-accent-300);
+
+  --lp-font-heading: "Fraunces", Georgia, "Times New Roman", serif;
+  --lp-radius: 1.5rem;
+  --lp-shadow: 0 1px 2px color-mix(in srgb, var(--color-ink-900) 5%, transparent),
+    0 18px 40px -18px color-mix(in srgb, var(--color-ink-900) 28%, transparent);
+
+  background-color: var(--lp-bg);
+  color: var(--lp-text);
+}
+
+/* ---- Type ---------------------------------------------------------------- */
+.lp .lp-heading {
+  font-family: var(--lp-font-heading);
+  color: var(--lp-heading);
+  letter-spacing: -0.01em;
+}
+.lp .lp-eyebrow {
+  color: var(--lp-cta);
+}
+.lp .lp-body {
+  color: var(--lp-text);
+}
+.lp .lp-muted {
+  color: var(--lp-muted);
+}
+
+/* ---- Surfaces ------------------------------------------------------------ */
+.lp .lp-card {
+  background-color: var(--lp-surface);
+  border-radius: var(--lp-radius);
+  box-shadow: var(--lp-shadow);
+}
+.lp .lp-media {
+  border-radius: var(--lp-radius);
+  box-shadow: var(--lp-shadow);
+  background-color: var(--lp-rule);
+  overflow: hidden;
+}
+.lp .lp-rule {
+  border-color: var(--lp-rule);
+}
+.lp .lp-step-number {
+  background-color: var(--lp-cta);
+  color: var(--lp-cta-text);
+}
+
+/* ---- Call to action ------------------------------------------------------ */
+.lp .lp-cta {
+  background-color: var(--lp-cta);
+  color: var(--lp-cta-text);
+  box-shadow: 0 10px 24px -12px color-mix(in srgb, var(--lp-cta) 70%, transparent);
+  transition: background-color 150ms ease, transform 150ms ease;
+}
+.lp .lp-cta:hover {
+  background-color: var(--lp-cta-hover);
+}
+.lp .lp-cta:active {
+  transform: scale(0.98);
+}
+.lp .lp-cta:focus-visible,
+.lp summary:focus-visible {
+  outline: 2px solid var(--lp-cta);
+  outline-offset: 3px;
+}
+
+/* ---- Benefits band ------------------------------------------------------- */
+.lp .lp-band {
+  background-color: var(--lp-band);
+  color: var(--lp-band-text);
+}
+.lp .lp-band .lp-heading {
+  color: #fff;
+}
+.lp .lp-band-title {
+  font-family: var(--lp-font-heading);
+  color: var(--lp-band-accent);
+}
+.lp .lp-band-muted {
+  color: var(--lp-band-muted);
+}
+
+/* ---- FAQ: native <details>, so every answer is in the server-rendered HTML.
+        The default marker is replaced by a rotating chevron. ------------------ */
+.lp details > summary {
+  list-style: none;
+}
+.lp details > summary::-webkit-details-marker {
+  display: none;
+}
+.lp details > summary .lp-chevron {
+  transition: transform 150ms ease;
+}
+.lp details[open] > summary .lp-chevron {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp .lp-cta,
+  .lp details > summary .lp-chevron {
+    transition: none;
+  }
+}

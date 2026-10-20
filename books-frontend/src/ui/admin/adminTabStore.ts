@@ -128,6 +128,7 @@ export type MarketingTabId =
   | "announcements"
   | "seo"
   | "blog"
+  | "landingPages"
   | "branding"
   | "qrCodes";
 
@@ -152,8 +153,9 @@ export const MARKETING_GROUPS: {
   {
     id: "site",
     label: "Site & content",
-    description: "How the brand shows up on the public site: announcements, SEO, blog, branding and QR codes.",
-    tabs: ["announcements", "seo", "blog", "branding", "qrCodes"],
+    description:
+      "How the brand shows up on the public site: announcements, SEO, blog, landing pages, branding and QR codes.",
+    tabs: ["announcements", "seo", "blog", "landingPages", "branding", "qrCodes"],
   },
 ];
 

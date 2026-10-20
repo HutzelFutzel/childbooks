@@ -2,6 +2,9 @@ import type { MetadataRoute } from "next";
 import { getSeoConfig } from "../server/seo";
 import { getPublishedPosts } from "../server/blog";
 import { getPublicProducts } from "../server/products";
+import { getLandingIndex } from "../server/landingPages";
+import { landingSitemapEntries } from "../core/config/landingPages";
+import { publishedLocales } from "../core/i18n/publish";
 import { formatSlug, offerablePublicProducts } from "../core/config/products";
 
 // Reflects the admin SEO config (base URL + last edit time), the published blog
@@ -12,10 +15,11 @@ import { formatSlug, offerablePublicProducts } from "../core/config/products";
 export const dynamic = "force-dynamic";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const [seo, posts, catalog] = await Promise.all([
+  const [seo, posts, catalog, landingIndex] = await Promise.all([
     getSeoConfig(),
     getPublishedPosts(),
     getPublicProducts(),
+    getLandingIndex(),
   ]);
   // Use the admin's last SEO/content edit as the change signal instead of
   // "now" on every crawl — a stable lastModified is what tells crawlers a page
@@ -36,6 +40,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       lastModified,
       changeFrequency: "monthly" as const,
       priority: 0.6,
+    })),
+    // Only published, indexable pages in a live locale — a draft, a retired page
+    // or a `noindex` campaign page must never be advertised to crawlers.
+    ...landingSitemapEntries(seo.siteUrl, landingIndex, publishedLocales()).map((entry) => ({
+      url: entry.url,
+      lastModified: entry.lastModified,
+      changeFrequency: "monthly" as const,
+      priority: 0.7,
+      ...(entry.languages ? { alternates: { languages: entry.languages } } : {}),
     })),
     ...posts.map((post) => ({
       url: `${seo.siteUrl}/blog/${post.slug}`,

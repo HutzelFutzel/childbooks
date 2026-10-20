@@ -269,6 +269,16 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Landing pages. Same shape as the blog: only PUBLISHED pages are
+    // world-readable; drafts and retired pages stay hidden (a retired page's
+    // redirect target lives in the `appConfig/landingPagesIndex` projection,
+    // already covered by the appConfig rule above). Writes only ever happen
+    // through the admin-gated backend (Admin SDK).
+    match /landingPages/{id} {
+      allow read: if resource.data.status == 'published';
+      allow write: if false;
+    }
+
     // Blog analytics aggregates (cookieless, first-party). Written only by the
     // backend (Admin SDK) from the tokenless `/blog-track` beacon; read only by
     // the admin dashboard via the admin-gated backend. Never client-accessible

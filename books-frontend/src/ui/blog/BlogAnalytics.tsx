@@ -87,7 +87,9 @@ export function BlogAnalytics({ slug }: { slug: string }) {
       const anchor = el?.closest("a");
       if (!anchor) return;
       const href = anchor.getAttribute("href") || "";
-      if (/\/studio(\/|$|\?|#)/.test(href) || href === "/studio") {
+      // `data-cta` marks a button an admin chose to point somewhere other than
+      // the studio (landing pages), so it still counts as a conversion.
+      if (anchor.hasAttribute("data-cta") || /\/studio(\/|$|\?|#)/.test(href) || href === "/studio") {
         send({ ...base, type: "cta", target: href.slice(0, 200) });
       }
     };

@@ -3,6 +3,8 @@
  * a breadcrumb trail under the result. Server-rendered into the raw HTML.
  * Reusable across child pages (e.g. /contact, future blog/landing pages).
  */
+import { jsonLdHtml } from "./jsonLdHtml";
+
 export function BreadcrumbJsonLd({ items }: { items: { name: string; url: string }[] }) {
   if (items.length === 0) return null;
 
@@ -21,7 +23,7 @@ export function BreadcrumbJsonLd({ items }: { items: { name: string; url: string
     <script
       // eslint-disable-next-line react/no-danger
       type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }}
+      dangerouslySetInnerHTML={{ __html: jsonLdHtml(data) }}
     />
   );
 }

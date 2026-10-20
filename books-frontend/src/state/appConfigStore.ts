@@ -308,6 +308,7 @@ import {
 } from "../core/config/announcements";
 import type { BlogImage, BlogIndex, BlogPost } from "../core/config/blog";
 import type { BlogStats, BlogStatsListItem } from "../core/config/blogStats";
+import type { LandingImage, LandingPage, LandingPagesIndex } from "../core/config/landingPages";
 import type { SlackChannel } from "../core/notify/registry";
 import type { EmailTemplateId } from "../core/email/types";
 import type { ActionCostReport, CostGranularity } from "../core/analytics/types";
@@ -955,6 +956,28 @@ interface AppConfigState {
   loadBlogStats: (slug: string) => Promise<BlogStats>;
   /** Lightweight per-post totals for the admin list. */
   loadAllBlogStats: () => Promise<BlogStatsListItem[]>;
+
+  // Landing pages (admin). Full pages live in the `landingPages` collection;
+  // the public projection is read server-side. Like the blog, every write goes
+  // through the admin-gated backend. `originalId` is the doc id the editor
+  // opened, so a rename moves the document rather than duplicating it.
+  loadAdminLandingPages: () => Promise<LandingPage[]>;
+  saveLandingPage: (
+    page: LandingPage,
+    originalId?: string,
+  ) => Promise<{ page: LandingPage; index: LandingPagesIndex }>;
+  deleteLandingPage: (id: string) => Promise<LandingPagesIndex>;
+  seedLandingPages: () => Promise<{ added: number }>;
+  uploadLandingImage: (
+    slug: string,
+    base64: string,
+    mimeType: string,
+    alt?: string,
+  ) => Promise<LandingImage>;
+  /** Analytics aggregate for one page (keyed by `landingStatsKey`). */
+  loadLandingStats: (key: string) => Promise<BlogStats>;
+  /** Per-page totals for the admin list, keyed by `landingStatsKey`. */
+  loadAllLandingStats: () => Promise<BlogStatsListItem[]>;
 
   /** Ask the server to read the provider's pricing docs and suggest a cost. */
   suggestCost: (
@@ -2323,6 +2346,58 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load stats.");
     const json = (await res.json()) as { stats: BlogStatsListItem[] };
     return json.stats;
+  },
+
+  async loadAdminLandingPages() {
+    const res = await backendFetch("/admin/landing-pages");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load landing pages.");
+    return ((await res.json()) as { pages: LandingPage[] }).pages;
+  },
+
+  async saveLandingPage(page, originalId) {
+    const res = await backendFetch("/admin/landing-pages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...page, originalId }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not save the landing page.");
+    return (await res.json()) as { page: LandingPage; index: LandingPagesIndex };
+  },
+
+  async deleteLandingPage(id) {
+    const res = await backendFetch(`/admin/landing-pages/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not delete the landing page.");
+    return ((await res.json()) as { index: LandingPagesIndex }).index;
+  },
+
+  async seedLandingPages() {
+    const res = await backendFetch("/admin/landing-pages/seed", { method: "POST" });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not seed landing pages.");
+    return (await res.json()) as { added: number };
+  },
+
+  async uploadLandingImage(slug, base64, mimeType, alt) {
+    const res = await backendFetch("/admin/landing-pages/image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug, base64, mimeType, alt }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
+    return (await res.json()) as LandingImage;
+  },
+
+  async loadLandingStats(key) {
+    const res = await backendFetch(`/admin/landing-pages/stats/${encodeURIComponent(key)}`);
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load stats.");
+    return (await res.json()) as BlogStats;
+  },
+
+  async loadAllLandingStats() {
+    const res = await backendFetch("/admin/landing-pages/stats");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load stats.");
+    return ((await res.json()) as { stats: BlogStatsListItem[] }).stats;
   },
 
   async suggestCost(provider, modelId, modality) {

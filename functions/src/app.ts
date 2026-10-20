@@ -55,6 +55,7 @@ import { registerEmailWebhookRoute } from "./email/webhook";
 import { registerContactAdminRoutes, registerContactRoutes } from "./contact/routes";
 import { registerBlogRoutes } from "./blog";
 import { registerBlogStatsAdminRoutes, registerBlogTrackingRoute } from "./blogStats";
+import { registerLandingPageRoutes } from "./landingPages";
 import { registerSessionRoutes } from "./deviceStats";
 import { registerReferralPublicRoutes, registerReferralUserRoutes } from "./referrals/routes";
 import { registerCampaignUserRoutes } from "./campaigns/routes";
@@ -219,6 +220,7 @@ export function createApp(): Express {
   registerContactAdminRoutes(app);
   registerBlogRoutes(app);
   registerBlogStatsAdminRoutes(app);
+  registerLandingPageRoutes(app);
   registerSessionRoutes(app);
   registerGdprRoutes(app);
   registerHealthRoutes(app);

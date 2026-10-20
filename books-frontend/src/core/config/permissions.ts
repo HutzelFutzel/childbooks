@@ -96,6 +96,7 @@ const MARKETING_TAB_EXHAUSTIVE: Record<MarketingTabId, true> = {
   announcements: true,
   seo: true,
   blog: true,
+  landingPages: true,
   branding: true,
   qrCodes: true,
 };

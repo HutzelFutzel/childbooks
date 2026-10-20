@@ -71,6 +71,7 @@ const SurveysTab = dynamic(() => import("./tabs/SurveysTab").then((m) => m.Surve
 const SystemHealthTab = dynamic(() => import("./tabs/SystemHealthTab").then((m) => m.SystemHealthTab), { loading: TabLoader });
 const SeoTab = dynamic(() => import("./tabs/marketing/SeoTab").then((m) => m.SeoTab), { loading: TabLoader });
 const BlogTab = dynamic(() => import("./tabs/marketing/BlogTab").then((m) => m.BlogTab), { loading: TabLoader });
+const LandingPagesTab = dynamic(() => import("./tabs/marketing/LandingPagesTab").then((m) => m.LandingPagesTab), { loading: TabLoader });
 const BrandingTab = dynamic(() => import("./tabs/marketing/BrandingTab").then((m) => m.BrandingTab), { loading: TabLoader });
 const QrCodesTab = dynamic(() => import("./tabs/marketing/QrCodesTab").then((m) => m.QrCodesTab), { loading: TabLoader });
 const AnnouncementsTab = dynamic(() => import("./tabs/marketing/AnnouncementsTab").then((m) => m.AnnouncementsTab), { loading: TabLoader });
@@ -407,6 +408,7 @@ export default function AdminApp() {
                     {marketingTab === "announcements" && <AnnouncementsTab />}
                     {marketingTab === "seo" && <SeoTab />}
                     {marketingTab === "blog" && <BlogTab />}
+                    {marketingTab === "landingPages" && <LandingPagesTab />}
                     {marketingTab === "branding" && <BrandingTab />}
                     {marketingTab === "qrCodes" && <QrCodesTab />}
                   </SectionGate>

@@ -63,8 +63,16 @@ function shortDate(key: string): string {
  * a daily views chart and coarse breakdowns (country, channel, device, referrer,
  * scroll-depth funnel). Read-only.
  */
-export function BlogStatsPanel({ slug }: { slug: string }) {
-  const loadBlogStats = useAppConfigStore((s) => s.loadBlogStats);
+export function BlogStatsPanel({
+  slug,
+  load,
+}: {
+  slug: string;
+  /** Override the data source (landing pages share this panel, with their own key space). */
+  load?: (key: string) => Promise<BlogStats>;
+}) {
+  const storeLoad = useAppConfigStore((s) => s.loadBlogStats);
+  const loadBlogStats = load ?? storeLoad;
   const [stats, setStats] = useState<BlogStats>(() => createDefaultBlogStats(slug));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

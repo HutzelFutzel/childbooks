@@ -1,3 +1,4 @@
+import { jsonLdHtml } from "./jsonLdHtml";
 import type { SeoConfig } from "../../core/config/seo";
 import type { BrandingConfig } from "../../core/config/branding";
 import type { PublicPlansConfig } from "../../core/config/plans";
@@ -94,7 +95,7 @@ export function JsonLd({
           // eslint-disable-next-line react/no-danger
           key={i}
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(block) }}
+          dangerouslySetInnerHTML={{ __html: jsonLdHtml(block) }}
         />
       ))}
     </>
