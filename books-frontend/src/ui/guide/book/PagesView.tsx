@@ -11,11 +11,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, Maximize2, SquareDashedMousePointer } from "lucide-react";
 import { sameTarget } from "../../../core/guide/target";
 import type { Project } from "../../../core/types";
+import { getCursor } from "../../../core/versioning";
+import { prefetchBlob } from "../../../state/blobs";
 import { illustrationActionFor, redrawUnits, startRedraw } from "../../../state/chatGeneration";
 import { useChatStudio } from "../../../state/chatStudio";
 import { useJobsStore } from "../../../state/jobsStore";
 import { PreviewSpread } from "../../studio/BookPreview";
-import { dispAspect, type DisplaySpread } from "../../studio/spreadModel";
+import { dispAspect, displayEntries, type DisplaySpread } from "../../studio/spreadModel";
 import { useStudio } from "../../studio/StudioContext";
 import { cn } from "../../lib/cn";
 import { useGuideLabel, useGuideT } from "../intl";
@@ -56,6 +58,19 @@ export function PagesView({
   const [marking, setMarking] = useState<string | null>(null);
   // Marking belongs to the picture it started on; turning the page ends it.
   useEffect(() => setMarking(null), [index]);
+
+  // Prefetch adjacent spreads' web blobs so turning a page renders from memory.
+  useEffect(() => {
+    for (const neighborIdx of [at - 1, at + 1]) {
+      const neighbor = displays[neighborIdx];
+      if (!neighbor) continue;
+      for (const { entry } of displayEntries(neighbor)) {
+        const tree = project.illustrations?.[entry.page.id];
+        const blobId = (tree ? getCursor(tree).content.blobId : undefined) ?? entry.page.blobId;
+        prefetchBlob(blobId, "web");
+      }
+    }
+  }, [at, displays, project.illustrations]);
 
   const stageRef = useRef<HTMLDivElement>(null);
   const aspect = disp ? dispAspect(disp) : 1;
@@ -116,13 +131,13 @@ export function PagesView({
           className="relative max-h-full max-w-full"
           style={fitBox ? { width: fitBox.w, height: fitBox.h } : { width: "100%", aspectRatio: String(aspect) }}
         >
-          <AnimatePresence mode="wait" initial={false}>
+          <AnimatePresence initial={false}>
             <motion.div
               key={disp.id}
-              initial={{ opacity: 0, scale: 0.99 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.99 }}
-              transition={{ duration: 0.18 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.12 }}
               className="relative size-full"
             >
               <PreviewSpread disp={disp} />

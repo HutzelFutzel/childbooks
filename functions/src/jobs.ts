@@ -1085,8 +1085,20 @@ async function finalizeIfComplete(
   });
   const uid = ref.parent.parent?.id;
   if (!next || !uid) return;
-  if (next.step === "retry") await retryFailedTasks(ref, uid, next.kind);
-  else await afterJobFinished(ref, uid);
+  if (next.step === "retry") {
+    await retryFailedTasks(ref, uid, next.kind);
+  } else {
+    await afterJobFinished(ref, uid);
+    // Drop the embedded project/models snapshot once the job is terminal and
+    // notification is settled, so opening a book doesn't download hundreds of KB
+    // of historical project snapshots per past job.
+    await ref
+      .update({
+        project: FieldValue.delete(),
+        models: FieldValue.delete(),
+      })
+      .catch(() => {});
+  }
 }
 
 /**
@@ -2763,6 +2775,12 @@ async function forceFinalize(ref: DocumentReference, uid: string, reason?: strin
     logger.warn("[fan] could not bank failed-unit cost", { jobId: ref.id, err: String(err) });
   });
   await afterJobFinished(ref, uid);
+  await ref
+    .update({
+      project: FieldValue.delete(),
+      models: FieldValue.delete(),
+    })
+    .catch(() => {});
 }
 
 /**

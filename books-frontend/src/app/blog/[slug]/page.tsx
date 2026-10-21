@@ -8,6 +8,7 @@ import { getBrandingConfig } from "../../../server/branding";
 import { getLegalConfig } from "../../../server/legal";
 import { getSiteContentConfig } from "../../../server/siteContent";
 import { getPostBySlug, getPublishedPosts } from "../../../server/blog";
+import { getLandingFooterLinks } from "../../../server/landingPages";
 import { Nav } from "../../../ui/marketing/Nav";
 import { Footer } from "../../../ui/marketing/Footer";
 import { CtaBand } from "../../../ui/marketing/CtaBand";
@@ -82,6 +83,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
     getLegalConfig(),
     getSiteContentConfig(),
     getPublishedPosts(),
+    getLandingFooterLinks(),
   ]);
   if (!post) notFound();
 

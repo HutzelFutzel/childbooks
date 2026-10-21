@@ -209,8 +209,14 @@ interface AuthState {
   /** Forces the dialog's initial tab; null lets it pick (guests → sign up). */
   authDialogMode: "signin" | "signup" | null;
 
-  /** Attach the auth-state listener (idempotent). Call once on app mount. */
-  init: () => void;
+  /**
+   * Attach the auth-state listener (idempotent).
+   * When `autoGuest` is false (e.g. on passive marketing pages), existing sessions
+   * are restored immediately without minting a new anonymous account on first
+   * visit; calling `init({ autoGuest: true })` later (e.g. entering `/studio`)
+   * upgrades to guest-first and mints a guest if still signed out.
+   */
+  init: (opts?: { autoGuest?: boolean }) => void;
   signInEmail: (email: string, password: string) => Promise<void>;
   signUpEmail: (email: string, password: string, consent?: SignupConsent) => Promise<void>;
   signInGoogle: (consent?: SignupConsent) => Promise<void>;
@@ -266,10 +272,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   authDialogReason: null,
   authDialogMode: null,
 
-  init() {
-    if (get().initialized) return;
-    set({ initialized: true });
+  init(opts) {
+    const autoGuest = opts?.autoGuest ?? true;
     const auth = getFirebaseAuth();
+    if (get().initialized) {
+      if (autoGuest && GUEST_FIRST && get().ready && !get().user && !auth.currentUser) {
+        void mintGuest(auth).catch((err) => {
+          console.error(
+            "[auth] Guest sign-in failed — is Anonymous auth enabled in the Firebase console?",
+            err,
+          );
+        });
+      }
+      return;
+    }
+    set({ initialized: true });
     onAuthStateChanged(auth, (user) => {
       const checkAdmin = Boolean(user && !user.isAnonymous);
       set({
@@ -279,7 +296,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         adminReady: !checkAdmin,
         ...(checkAdmin ? {} : { isAdmin: false }),
       });
-      if (!user && GUEST_FIRST) {
+      if (!user && GUEST_FIRST && autoGuest) {
         // The listener won't re-fire on failure, so this can't loop — but a
         // failure (e.g. anonymous auth disabled in the Firebase console) must
         // not be silent: without a session the studio can never save or
@@ -439,7 +456,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
  * reading a half-initialized `accessLevel`. Gives up after `timeoutMs`.
  */
 export function whenAuthReady(timeoutMs = 6000): Promise<void> {
-  if (useAuthStore.getState().accessLevel !== "loading") return Promise.resolve();
+  const state = useAuthStore.getState();
+  if (state.accessLevel !== "loading" || state.ready) return Promise.resolve();
   return new Promise((resolve) => {
     const finish = () => {
       unsubscribe();
@@ -448,7 +466,7 @@ export function whenAuthReady(timeoutMs = 6000): Promise<void> {
     };
     const timer = setTimeout(finish, timeoutMs);
     const unsubscribe = useAuthStore.subscribe((s) => {
-      if (s.accessLevel !== "loading") finish();
+      if (s.accessLevel !== "loading" || s.ready) finish();
     });
   });
 }

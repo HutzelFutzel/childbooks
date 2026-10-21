@@ -222,6 +222,12 @@ interface ProjectsState {
   retrySave: (id: string) => Promise<void>;
 
   load: () => Promise<void>;
+  /**
+   * Fetch a single project directly by id so a direct `/studio/{bookId}` entry
+   * can mount the book workspace immediately while the full library list loads
+   * in the background.
+   */
+  loadSingleProject: (id: string) => Promise<Project | null>;
   /** Re-fetch a project from storage, replacing the in-memory copy and clearing its stale flag. */
   reloadProject: (id: string) => Promise<void>;
   /** Create a project; `open` (default true) also makes it the current one. */
@@ -337,9 +343,41 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     });
     const { projects } = await getRepos();
     const list = await projects.list();
-    for (const project of list) savedBase.set(project.id, project);
     if (generation !== projectLoadGeneration) return;
-    set({ projects: list, loaded: true });
+    // Preserve any fresher in-memory copy of a project that was already opened
+    // via `loadSingleProject` and edited while the full library list was in flight.
+    const existingById = new Map(get().projects.map((p) => [p.id, p]));
+    const merged: Project[] = [];
+    for (const p of list) {
+      if (!savedBase.has(p.id)) savedBase.set(p.id, p);
+      const existing = existingById.get(p.id);
+      if (existing && (existing.updatedAt > p.updatedAt || (existing.rev ?? 0) >= (p.rev ?? 0))) {
+        merged.push(existing);
+      } else {
+        savedBase.set(p.id, p);
+        merged.push(p);
+      }
+      existingById.delete(p.id);
+    }
+    for (const remaining of existingById.values()) {
+      merged.unshift(remaining);
+    }
+    set({ projects: merged, loaded: true });
+  },
+
+  async loadSingleProject(id) {
+    const existing = get().projects.find((p) => p.id === id);
+    if (existing) return existing;
+    const generation = projectLoadGeneration;
+    const { projects } = await getRepos();
+    const project = await projects.get(id);
+    if (!project || generation !== projectLoadGeneration) return null;
+    savedBase.set(project.id, project);
+    set((state) => {
+      if (state.projects.some((p) => p.id === project.id)) return {};
+      return { projects: [project, ...state.projects] };
+    });
+    return project;
   },
 
   async settleBookConflict(keep) {
@@ -912,6 +950,54 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
 
 // The cover-word helpers live in core so skills can run them on a copy of the book.
 export { applyBookTitle, applyCoverLine };
+
+// Sync diagnostic breadcrumbs and save-health warnings whenever the active
+// project or save status changes. Kept inside projectsStore so the root layout
+// does not need to import the studio's project state graph.
+if (typeof window !== "undefined") {
+  void import("../platform/clientLogger").then(
+    ({ clientLog, recordBreadcrumb, setClientLogProjectId }) => {
+      let prevCurrentId: string | null = useProjectsStore.getState().currentId;
+      let prevSaveFailedId: string | null = useProjectsStore.getState().saveFailedProjectId;
+      let prevStaleId: string | null = useProjectsStore.getState().staleProjectId;
+      if (prevCurrentId) {
+        setClientLogProjectId(prevCurrentId);
+        recordBreadcrumb("studio", "open_project", prevCurrentId);
+      }
+      useProjectsStore.subscribe((state) => {
+        if (state.currentId !== prevCurrentId) {
+          prevCurrentId = state.currentId;
+          setClientLogProjectId(state.currentId);
+          if (state.currentId) {
+            recordBreadcrumb("studio", "open_project", state.currentId);
+          }
+        }
+        if (state.saveFailedProjectId !== prevSaveFailedId) {
+          prevSaveFailedId = state.saveFailedProjectId;
+          if (state.saveFailedProjectId) {
+            clientLog.warn({
+              domain: "studio",
+              event: "project.save.failed",
+              message: "Saving book changes to storage failed transiently; retrying in background.",
+              projectId: state.saveFailedProjectId,
+            });
+          }
+        }
+        if (state.staleProjectId !== prevStaleId) {
+          prevStaleId = state.staleProjectId;
+          if (state.staleProjectId) {
+            clientLog.warn({
+              domain: "studio",
+              event: "project.save.conflict",
+              message: "Book was modified on another device or tab (version conflict).",
+              projectId: state.staleProjectId,
+            });
+          }
+        }
+      });
+    },
+  );
+}
 
 type ProjectsGet = () => ProjectsState;
 type ProjectsSet = (fn: (state: ProjectsState) => Partial<ProjectsState>) => void;

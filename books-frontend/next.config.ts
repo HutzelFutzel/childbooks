@@ -9,6 +9,11 @@ const nextConfig: NextConfig = {
   // Monorepo: pin the file-tracing root to the repo root so Next doesn't guess
   // it from a stray lockfile elsewhere.
   outputFileTracingRoot: path.join(import.meta.dirname, ".."),
+  // Tree-shake barrel-exported icon/animation/chart packages so routes only
+  // bundle the symbols they actually import.
+  experimental: {
+    optimizePackageImports: ["lucide-react", "framer-motion", "recharts"],
+  },
   // The heavy editor (Konva, pdf-lib, html-to-image) is mounted client-only via
   // `next/dynamic({ ssr: false })`, so it never runs during SSR.
   eslint: { ignoreDuringBuilds: true },

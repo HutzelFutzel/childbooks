@@ -25,7 +25,7 @@ import { getAdminSettings, saveAdminSettings } from "./adminSettings";
 import { getSparksConfig } from "./appConfig";
 import { getPlansConfig } from "./plans";
 import { adminAdjustSparks } from "./sparks";
-import { financeSummary, type FinanceCategory } from "./finance";
+import { financeSummaryCached, invalidateFinanceSummaries, type FinanceCategory } from "./finance";
 import { listAlerts, resolveAlert } from "./alerts";
 import { retryFailedFulfillments } from "./stripe";
 import { printCostCalibration } from "./orders";
@@ -2419,19 +2419,23 @@ export function registerAnalyticsRoutes(app: Express): void {
       const settings = await getAdminSettings();
       const country = parseCountry(req);
       res.json(
-        await financeSummary({
-          fromMs: from,
-          toMs: to,
-          category,
-          uid,
-          projectId,
-          productId,
-          country: country ?? undefined,
-          groupLimit,
-          timezone: country
-            ? timezoneForCountry(country, settings.timezone)
-            : settings.timezone,
-        }),
+        await financeSummaryCached(
+          {
+            fromMs: from,
+            toMs: to,
+            category,
+            uid,
+            projectId,
+            productId,
+            country: country ?? undefined,
+            groupLimit,
+            timezone: country
+              ? timezoneForCountry(country, settings.timezone)
+              : settings.timezone,
+          },
+          // `?fresh=1` is the Refresh button: an explicit ask never gets a cached answer.
+          { fresh: req.query.fresh === "1" },
+        ),
       );
     } catch (err) {
       handleError(res, err);
@@ -2655,6 +2659,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       // Book any already-due periods right away so the dashboard reflects the
       // new/edited cost without waiting for the nightly sweep.
       const sweep = await sweepCustomCosts();
+      invalidateFinanceSummaries();
       res.json({ cost, sweep });
     } catch (err) {
       handleError(res, err);
@@ -2664,6 +2669,7 @@ export function registerAnalyticsRoutes(app: Express): void {
   app.delete("/admin/finance/custom-costs/:id", async (req: Request, res: Response) => {
     try {
       await deleteCustomCost(String(req.params.id));
+      invalidateFinanceSummaries();
       res.json({ ok: true });
     } catch (err) {
       handleError(res, err);

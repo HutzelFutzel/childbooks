@@ -27,6 +27,7 @@ import { Button } from "../../components/Button";
 import { ConfirmModal } from "../../components/ConfirmModal";
 import { Drawer } from "../../components/Drawer";
 import { Tabs } from "../../components/Tabs";
+import { useAdminBusy } from "../LoadingState";
 import { fmtDateTime, fmtDuration, fmtMoney, fmtNumber, fmtPct, fmtRelative, fmtUsd } from "./format";
 
 const WINDOWS = [
@@ -75,6 +76,7 @@ export function OrdersAnalysis() {
   const refresh = useAdminOrders((s) => s.refresh);
   const open = useAdminOrders((s) => s.open);
   const country = useAdminMarket((s) => s.country);
+  useAdminBusy(loading);
 
   // Re-fetch when the market filter changes (the Analysis shell only handles the
   // sections it knows about).
@@ -101,7 +103,7 @@ export function OrdersAnalysis() {
             variant="secondary"
             size="sm"
             leftIcon={<RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />}
-            onClick={() => void refresh()}
+            onClick={() => void refresh({ force: true })}
             disabled={loading}
           >
             Refresh

@@ -18,6 +18,7 @@
  * both the main stage and the filmstrip share.
  */
 import { useMemo } from "react";
+import type { BlobSize } from "../../core/storage/blobVariants";
 import { useJobsStore } from "../../state/jobsStore";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { mergePairDesign } from "../../core/book/pairSurface";
@@ -99,11 +100,11 @@ export function HalfFrame({
  * editor, but no Konva transformers/selection. Still shows the live
  * generation overlay so filmstrip thumbnails reflect in-flight renders.
  */
-export function PagePreview({ entry }: { entry: Entry }) {
+export function PagePreview({ entry, size = "thumb" }: { entry: Entry; size?: BlobSize }) {
   const { pageDesign } = useStudio();
   const page = entry.page;
   const blank = isBlankEntry(entry);
-  const url = useBlobUrl(page.blobId);
+  const url = useBlobUrl(page.blobId, size);
   return (
     <PageStage
       pageDesign={pageDesign(page.id)}
@@ -123,7 +124,15 @@ export function PagePreview({ entry }: { entry: Entry }) {
  * Static facing pair: the same merged surface the live editor uses, so an
  * element that crosses the fold is visible on both leaves here too.
  */
-export function PairPreview({ left, right }: { left: Entry; right: Entry }) {
+export function PairPreview({
+  left,
+  right,
+  size = "thumb",
+}: {
+  left: Entry;
+  right: Entry;
+  size?: BlobSize;
+}) {
   const { project, pageDesign } = useStudio();
   const leftPd = pageDesign(left.page.id);
   const rightPd = pageDesign(right.page.id);
@@ -132,10 +141,10 @@ export function PairPreview({ left, right }: { left: Entry; right: Entry }) {
   const rightBlank = isBlankEntry(right);
   const leftTree = project.illustrations?.[left.page.id];
   const leftCursor = leftTree ? getCursor(leftTree).content : null;
-  const leftUrl = useBlobUrl(leftCursor?.blobId ?? left.page.blobId);
+  const leftUrl = useBlobUrl(leftCursor?.blobId ?? left.page.blobId, size);
   const rightTree = project.illustrations?.[right.page.id];
   const rightCursor = rightTree ? getCursor(rightTree).content : null;
-  const rightUrl = useBlobUrl(rightCursor?.blobId ?? right.page.blobId);
+  const rightUrl = useBlobUrl(rightCursor?.blobId ?? right.page.blobId, size);
   const aspect = (left.page.aspect || right.page.aspect || 1) * 2;
   return (
     <PageStage

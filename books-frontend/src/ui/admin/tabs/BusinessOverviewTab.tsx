@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -36,6 +36,10 @@ import {
 import { freezeTerms, inviteTeaser } from "../../../core/config/referral";
 import type { ProductDefinition } from "../../../core/config/products";
 import { cn } from "../../lib/cn";
+import { Skeleton } from "../../components/Skeleton";
+import { fmtRelative } from "../analysis/format";
+import { useConfigDocsStatus } from "../ConfigReady";
+import { InlineError, PanelSkeleton, useAdminBusy } from "../LoadingState";
 import {
   filterNavTree,
   MODE_BADGE_META,
@@ -48,6 +52,36 @@ import { ConfigHealthPanel } from "./ConfigHealthPanel";
 import { fmtMoney } from "./products/parts";
 
 type OverviewSection = "all" | "directory" | "business";
+
+/** The saved config docs the pricing / health panels below are computed from. */
+const OVERVIEW_CONFIG_DOCS = ["pricingSettings", "sparks", "plans", "products", "referral"] as const;
+
+/** How many contact messages are waiting — null when it couldn't be read (non-fatal). */
+async function fetchNewInboxCount(): Promise<number | null> {
+  try {
+    const res = await backendFetch("/admin/contact/messages?status=new");
+    if (!res.ok) return null;
+    const json = (await res.json()) as { messages?: unknown[] };
+    return json.messages ? json.messages.length : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run `fn` once the browser has painted and has a spare moment, so deferred
+ * work never competes with the first render. Returns a cancel function.
+ * (Safari has no `requestIdleCallback`; a short timeout does the same job.)
+ */
+function afterFirstPaint(fn: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  if (typeof window.requestIdleCallback === "function") {
+    const id = window.requestIdleCallback(fn, { timeout: 400 });
+    return () => window.cancelIdleCallback(id);
+  }
+  const id = window.setTimeout(fn, 60);
+  return () => window.clearTimeout(id);
+}
 
 /**
  * The Admin Control Center (`/admin/configuration/overview`).
@@ -82,67 +116,158 @@ export function BusinessOverviewTab() {
 
   // Live operational state (loaded only for sections the admin has permission to read)
   const runtime = useAdminHealth((s) => s.runtime);
+  const runtimeError = useAdminHealth((s) => s.modeError);
   const loadRuntime = useAdminHealth((s) => s.loadRuntime);
 
   const orderAnalytics = useAdminOrders((s) => s.analytics);
   const ordersLoading = useAdminOrders((s) => s.loading);
-  const refreshOrders = useAdminOrders((s) => s.refresh);
+  const ordersError = useAdminOrders((s) => s.error);
+  const ordersUpdatedAt = useAdminOrders((s) => s.lastUpdated);
+  // The overview only needs the headline report — not the printer link, the
+  // order list or the print-file dashboard the full Orders view loads.
+  const loadOrdersOverview = useAdminOrders((s) => s.loadOverview);
 
   const financeSummary = useAdminFinance((s) => s.summary);
   const financeAlerts = useAdminFinance((s) => s.alerts);
   const financeLoading = useAdminFinance((s) => s.loading);
+  const financeError = useAdminFinance((s) => s.error);
+  const financeUpdatedAt = useAdminFinance((s) => s.lastUpdated);
   const refreshFinance = useAdminFinance((s) => s.refresh);
   const loadAlerts = useAdminFinance((s) => s.loadAlerts);
 
   const [newInboxCount, setNewInboxCount] = useState<number | null>(null);
+  /** The unread-count read has finished (ok or not), so "Open inbox" is the real fallback, not a placeholder. */
+  const [inboxSettled, setInboxSettled] = useState(false);
   const [adminProducts, setAdminProducts] = useState<ProductDefinition[]>([]);
+  /** The catalog read has finished (successfully or not) — until then `adminProducts` is just `[]`. */
+  const [productsSettled, setProductsSettled] = useState(false);
+  const [productsError, setProductsError] = useState(false);
+  /** Saved config docs the pricing/health panels read; until they arrive those fields are defaults. */
+  const { ready: configReady, failed: configFailed } = useConfigDocsStatus(OVERVIEW_CONFIG_DOCS);
+  const panelsReady = configReady && productsSettled;
+  /**
+   * The aggregate cards (orders, finance) are queued but haven't started or
+   * finished their first load. Lets them read "Loading…" from the first paint
+   * instead of flashing a call-to-action and then switching.
+   */
+  const [pulsePending, setPulsePending] = useState(true);
 
-  useEffect(() => {
+  // Load in tiers so the page is usable immediately and the expensive numbers
+  // fill in after:
+  //   1. cheap single reads (config, environment, unread count) — right away;
+  //   2. aggregate reports (orders scan, finance scan, alerts) — once the first
+  //      paint is out, so they never delay it. Anything loaded within the last
+  //      30s is reused, and what's already on screen stays visible while it
+  //      revalidates.
+  const loadProducts = useCallback(() => {
+    let cancelled = false;
+    setProductsError(false);
     void loadAdminProducts()
-      .then((config) => setAdminProducts(config.products))
+      .then((config) => {
+        if (cancelled) return;
+        setAdminProducts(config.products);
+        setProductsSettled(true);
+      })
       .catch(() => {
-        /* non-fatal */
+        if (cancelled) return;
+        // Not fatal to the page, but the pricing checks below are incomplete without it — say so.
+        setProductsError(true);
+        setProductsSettled(true);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [loadAdminProducts]);
 
+  useEffect(() => loadProducts(), [loadProducts]);
+
   useEffect(() => {
+    let cancelled = false;
+    // Tier 1.
     if (!runtime) void loadRuntime();
-    if (canRead("analysis.orders") && !orderAnalytics && !ordersLoading) {
-      void refreshOrders();
-    }
-    if (canRead("analysis.finance") && !financeSummary && !financeLoading) {
-      void refreshFinance();
-      void loadAlerts();
-    }
     if (canRead("communication.contact")) {
-      void backendFetch("/admin/contact/messages?status=new")
-        .then((res) => (res.ok ? (res.json() as Promise<{ messages?: unknown[] }>) : null))
-        .then((json) => {
-          if (json?.messages) setNewInboxCount(json.messages.length);
-        })
-        .catch(() => {
-          /* ignore */
-        });
+      void fetchNewInboxCount().then((n) => {
+        if (cancelled) return;
+        if (n !== null) setNewInboxCount(n);
+        setInboxSettled(true);
+      });
     }
+    // Tier 2.
+    const cancelIdle = afterFirstPaint(() => {
+      const pending: Promise<unknown>[] = [];
+      if (canRead("analysis.orders")) pending.push(loadOrdersOverview());
+      if (canRead("analysis.finance")) {
+        pending.push(refreshFinance(), loadAlerts());
+      }
+      void Promise.allSettled(pending).then(() => {
+        if (!cancelled) setPulsePending(false);
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelIdle();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canRead]);
 
   const refreshPulse = () => {
+    // An explicit refresh skips the freshness window (and the server's cache).
     void loadRuntime();
-    if (canRead("analysis.orders")) void refreshOrders();
+    if (canRead("analysis.orders")) void loadOrdersOverview({ force: true });
     if (canRead("analysis.finance")) {
-      void refreshFinance();
-      void loadAlerts();
+      void refreshFinance({ force: true });
+      void loadAlerts({ force: true });
     }
     if (canRead("communication.contact")) {
-      void backendFetch("/admin/contact/messages?status=new")
-        .then((res) => (res.ok ? (res.json() as Promise<{ messages?: unknown[] }>) : null))
-        .then((json) => {
-          if (json?.messages) setNewInboxCount(json.messages.length);
-        })
-        .catch(() => {});
+      void fetchNewInboxCount().then((n) => {
+        if (n !== null) setNewInboxCount(n);
+      });
     }
   };
+
+  // ---- Loading feedback ----------------------------------------------------
+  const wantsOrders = canRead("analysis.orders");
+  const wantsFinance = canRead("analysis.finance");
+  const refreshing =
+    pulsePending || (wantsOrders && ordersLoading) || (wantsFinance && financeLoading) || !productsSettled;
+  // Light the page-wide progress bar for as long as anything here is still loading.
+  useAdminBusy(refreshing);
+
+  // Re-render every half minute so "Updated 2m ago" keeps telling the truth.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  const pulseUpdatedAt = Math.max(
+    wantsOrders ? (ordersUpdatedAt ?? 0) : 0,
+    wantsFinance ? (financeUpdatedAt ?? 0) : 0,
+  );
+
+  /** Per-card state: skeleton while the first load runs, an error if it failed and nothing is cached. */
+  const ordersCardState: PulseState = orderAnalytics
+    ? "ready"
+    : ordersLoading || pulsePending
+      ? "loading"
+      : ordersError
+        ? "error"
+        : "ready";
+  const financeCardState: PulseState = financeSummary
+    ? "ready"
+    : financeLoading || pulsePending
+      ? "loading"
+      : financeError
+        ? "error"
+        : "ready";
+  // A refresh that failed while older numbers are still on screen.
+  const pulseRefreshError: string | null =
+    pulsePending || ordersLoading || financeLoading
+      ? null
+      : wantsOrders && orderAnalytics && ordersError
+        ? ordersError
+        : wantsFinance && financeSummary && financeError
+          ? financeError
+          : null;
 
   const base = pricing.baseCurrency;
   const ebook = pricing.ebook;
@@ -231,27 +356,55 @@ export function BusinessOverviewTab() {
             ))}
           </div>
 
-          <button
-            type="button"
-            onClick={refreshPulse}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-ink-600 ring-1 ring-inset ring-ink-200 transition hover:bg-ink-50 hover:text-ink-900"
-          >
-            <RefreshCw
-              className={cn(
-                "size-3.5",
-                (ordersLoading || financeLoading) && "animate-spin text-brand-500",
-              )}
-            />
-            <span>Refresh pulse</span>
-          </button>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-ink-400" aria-live="polite">
+              {refreshing
+                ? "Refreshing…"
+                : pulseUpdatedAt > 0
+                  ? `Updated ${fmtRelative(pulseUpdatedAt)}`
+                  : null}
+            </span>
+            <button
+              type="button"
+              onClick={refreshPulse}
+              disabled={refreshing}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-ink-600 ring-1 ring-inset ring-ink-200 transition hover:bg-ink-50 hover:text-ink-900 disabled:cursor-wait disabled:opacity-70"
+            >
+              <RefreshCw className={cn("size-3.5", refreshing && "animate-spin text-brand-500")} />
+              <span>Refresh pulse</span>
+            </button>
+          </div>
         </div>
 
-        <ConfigHealthPanel
-          settings={pricing}
-          sparks={sparks}
-          products={adminProducts}
-          plans={plans}
-        />
+        {pulseRefreshError && (
+          <InlineError
+            message={`Couldn't refresh the latest numbers (${pulseRefreshError}). Showing what was loaded earlier.`}
+            onRetry={refreshPulse}
+          />
+        )}
+        {productsError && (
+          <InlineError
+            message="The product catalog couldn't be loaded, so the pricing checks below may be incomplete."
+            onRetry={loadProducts}
+          />
+        )}
+        {configFailed && (
+          <InlineError
+            message="Some saved settings couldn't be loaded, so the pricing figures below may be defaults. Reload to try again."
+            onRetry={() => window.location.reload()}
+          />
+        )}
+
+        {panelsReady ? (
+          <ConfigHealthPanel
+            settings={pricing}
+            sparks={sparks}
+            products={adminProducts}
+            plans={plans}
+          />
+        ) : (
+          <Skeleton className="h-20" />
+        )}
       </div>
 
       {/* 1. Live Operational Pulse & Needs Attention */}
@@ -267,15 +420,16 @@ export function BusinessOverviewTab() {
             {/* Print Orders Card */}
             {canRead("analysis.orders") && (
               <PulseCard
-                onClick={() => openAnalysis("orders")}
+                state={ordersCardState}
+                onClick={ordersCardState === "error" ? refreshPulse : () => openAnalysis("orders")}
                 tone={attentionCount > 0 ? "amber" : "default"}
                 icon={<Truck className="size-4" />}
                 label="Print Orders (30d)"
                 value={
                   orderAnalytics
                     ? `${orderAnalytics.orders.toLocaleString()} orders`
-                    : ordersLoading
-                      ? "Loading…"
+                    : ordersCardState === "error"
+                      ? "Couldn't load"
                       : "View orders"
                 }
                 badge={
@@ -296,7 +450,9 @@ export function BusinessOverviewTab() {
                 detail={
                   orderAnalytics
                     ? `${orderAnalytics.pipeline.shipped} shipped · ${orderAnalytics.open} open`
-                    : "Track print fulfillment and printer health"
+                    : ordersCardState === "error"
+                      ? "Click to try again"
+                      : "Track print fulfillment and printer health"
                 }
               />
             )}
@@ -304,15 +460,16 @@ export function BusinessOverviewTab() {
             {/* Finance & P&L Card */}
             {canRead("analysis.finance") && (
               <PulseCard
-                onClick={() => openAnalysis("finance")}
+                state={financeCardState}
+                onClick={financeCardState === "error" ? refreshPulse : () => openAnalysis("finance")}
                 tone={unresolvedAlerts.length > 0 ? "amber" : "default"}
                 icon={<Coins className="size-4" />}
                 label="Net Contribution (30d)"
                 value={
                   financeSummary
                     ? fmtMoney(financeSummary.netUsd, "USD")
-                    : financeLoading
-                      ? "Loading…"
+                    : financeCardState === "error"
+                      ? "Couldn't load"
                       : "View P&L"
                 }
                 badge={
@@ -326,7 +483,9 @@ export function BusinessOverviewTab() {
                 detail={
                   financeSummary
                     ? `Revenue ${fmtMoney(financeSummary.totalRevenueUsd, "USD")} · Cost ${fmtMoney(financeSummary.totalCostUsd, "USD")}`
-                    : "Revenue, provider costs, and operating margins"
+                    : financeCardState === "error"
+                      ? "Click to try again"
+                      : "Revenue, provider costs, and operating margins"
                 }
               />
             )}
@@ -334,6 +493,7 @@ export function BusinessOverviewTab() {
             {/* Contact Inbox Card */}
             {canRead("communication.contact") && (
               <PulseCard
+                state={newInboxCount === null && !inboxSettled ? "loading" : "ready"}
                 onClick={() => openCommunicationTab("contact")}
                 tone={newInboxCount && newInboxCount > 0 ? "brand" : "default"}
                 icon={<Inbox className="size-4" />}
@@ -358,28 +518,39 @@ export function BusinessOverviewTab() {
 
             {/* Studio & Billing Mode Card */}
             <PulseCard
-              onClick={() =>
-                canRead("configuration.guide")
-                  ? setConfigTab("guide")
-                  : setConfigTab("system")
+              // Until the environment has loaded, `isLive` is false — without this the
+              // card would claim "Sandbox Mode" for a moment on a live system.
+              state={runtime ? "ready" : runtimeError ? "error" : "loading"}
+              onClick={
+                runtime
+                  ? () => (canRead("configuration.guide") ? setConfigTab("guide") : setConfigTab("system"))
+                  : () => void loadRuntime()
               }
               tone="default"
               icon={isLive ? <Rocket className="size-4" /> : <FlaskConical className="size-4" />}
               label="Studio & Environment"
-              value={isLive ? "Live Billing" : "Sandbox Mode"}
+              value={runtime ? (isLive ? "Live Billing" : "Sandbox Mode") : "Couldn't load"}
               badge={
-                <span
-                  className={cn(
-                    "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    isLive
-                      ? "bg-rose-100 text-rose-700"
-                      : "bg-sky-100 text-sky-700",
-                  )}
-                >
-                  {isLive ? "Real charges" : "Test mode"}
-                </span>
+                runtime ? (
+                  <span
+                    className={cn(
+                      "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                      isLive
+                        ? "bg-rose-100 text-rose-700"
+                        : "bg-sky-100 text-sky-700",
+                    )}
+                  >
+                    {isLive ? "Real charges" : "Test mode"}
+                  </span>
+                ) : null
               }
-              detail={isLive ? "Payments are charged for real" : "Payments run against test cards"}
+              detail={
+                !runtime
+                  ? "Click to try again"
+                  : isLive
+                    ? "Payments are charged for real"
+                    : "Payments run against test cards"
+              }
             />
           </div>
         </section>
@@ -409,7 +580,8 @@ export function BusinessOverviewTab() {
       )}
 
       {/* 3. Business Model & Pricing Map */}
-      {view !== "directory" && (
+      {view !== "directory" && !panelsReady && <PanelSkeleton rows={2} />}
+      {view !== "directory" && panelsReady && (
         <section className="space-y-4">
           <div>
             <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
@@ -667,6 +839,14 @@ export function BusinessOverviewTab() {
   );
 }
 
+/**
+ * `loading` — first load in progress: the value and detail are skeletons, so the
+ * layout doesn't shift when the numbers land. `error` — the load failed and
+ * nothing is cached: the card says so and a click retries (the card is one big
+ * button, so the retry is the card itself rather than a nested control).
+ */
+type PulseState = "ready" | "loading" | "error";
+
 function PulseCard({
   icon,
   label,
@@ -674,6 +854,7 @@ function PulseCard({
   badge,
   detail,
   tone = "default",
+  state = "ready",
   onClick,
 }: {
   icon: React.ReactNode;
@@ -682,19 +863,26 @@ function PulseCard({
   badge?: React.ReactNode;
   detail: string;
   tone?: "default" | "amber" | "brand";
+  state?: PulseState;
   onClick: () => void;
 }) {
+  const loading = state === "loading";
+  const failed = state === "error";
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={loading}
+      aria-busy={loading}
       className={cn(
-        "group flex flex-col justify-between rounded-2xl border p-4 text-left transition hover:shadow-soft",
-        tone === "amber"
+        "group flex flex-col justify-between rounded-2xl border p-4 text-left transition hover:shadow-soft disabled:cursor-progress disabled:hover:shadow-none",
+        failed
           ? "border-amber-200 bg-amber-50/40 hover:border-amber-300"
-          : tone === "brand"
-            ? "border-brand-200 bg-brand-50/30 hover:border-brand-300"
-            : "border-ink-100 bg-white hover:border-ink-200",
+          : tone === "amber"
+            ? "border-amber-200 bg-amber-50/40 hover:border-amber-300"
+            : tone === "brand"
+              ? "border-brand-200 bg-brand-50/30 hover:border-brand-300"
+              : "border-ink-100 bg-white hover:border-ink-200",
       )}
     >
       <div className="w-full space-y-2">
@@ -703,13 +891,23 @@ function PulseCard({
             <span className="text-ink-400 group-hover:text-ink-700">{icon}</span>
             <span>{label}</span>
           </span>
-          {badge}
+          {loading ? null : badge}
         </div>
-        <div className="text-lg font-bold tracking-tight text-ink-900">{value}</div>
+        {loading ? (
+          <Skeleton className="h-7 w-28" rounded="lg" />
+        ) : (
+          <div className={cn("text-lg font-bold tracking-tight", failed ? "text-amber-800" : "text-ink-900")}>
+            {value}
+          </div>
+        )}
       </div>
       <div className="mt-3 flex w-full items-center justify-between gap-2 border-t border-ink-100/80 pt-2.5 text-[11px] text-ink-500">
-        <span className="truncate">{detail}</span>
-        <ArrowRight className="size-3.5 shrink-0 text-ink-300 transition-transform group-hover:translate-x-0.5 group-hover:text-ink-700" />
+        {loading ? <Skeleton className="h-3 w-40" rounded="lg" /> : <span className="truncate">{detail}</span>}
+        {failed ? (
+          <RefreshCw className="size-3.5 shrink-0 text-amber-600" />
+        ) : (
+          <ArrowRight className="size-3.5 shrink-0 text-ink-300 transition-transform group-hover:translate-x-0.5 group-hover:text-ink-700" />
+        )}
       </div>
     </button>
   );

@@ -6,6 +6,7 @@ import { getPricingSettings, getPublicProducts } from "../server/products";
 import { getSiteImagesConfig } from "../server/siteImages";
 import { getSiteContentConfig } from "../server/siteContent";
 import { getLegalConfig } from "../server/legal";
+import { getLandingFooterLinks } from "../server/landingPages";
 import { buildLandingPrintPricing } from "../ui/marketing/printOffers";
 import { Nav } from "../ui/marketing/Nav";
 import { Hero } from "../ui/marketing/Hero";
@@ -92,6 +93,7 @@ export default async function Home() {
     getLegalConfig(),
     getPublicProducts(),
     getPricingSettings(),
+    getLandingFooterLinks(),
   ]);
   const logoUrl = branding.logo?.imageUrl ?? null;
   const images = siteImages.images;

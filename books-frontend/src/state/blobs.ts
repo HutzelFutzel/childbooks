@@ -186,6 +186,16 @@ export async function getBlobUrl(id: string, size: BlobSize = "web"): Promise<st
   return blob ? URL.createObjectURL(blob) : null;
 }
 
+/**
+ * Warm the in-memory and disk blob caches for a picture without creating an
+ * object URL. Used to prefetch neighboring spreads so turning the page hits
+ * memory immediately.
+ */
+export function prefetchBlob(id: string | undefined, size: BlobSize = "web"): void {
+  if (!id) return;
+  void fetchBlob(id, size).catch(() => {});
+}
+
 /** Forget everything fetched this session and on this device (sign-out, account switch). */
 export async function clearBlobCaches(): Promise<void> {
   blobCache.clear();

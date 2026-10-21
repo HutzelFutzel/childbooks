@@ -115,7 +115,7 @@ export default function AccountApp() {
   const stopSubscriptions = useSubscriptionStore((s) => s.stop);
 
   useEffect(() => {
-    subscribeConfig();
+    subscribeConfig("account");
   }, [subscribeConfig]);
 
   useEffect(() => {

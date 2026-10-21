@@ -9,7 +9,6 @@
  * which is what makes them indexable and what lets a visitor see a number before
  * any JavaScript runs. Mirrors {@link getPublicPlans}.
  */
-import { cache } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseDb } from "../lib/firebase";
 import {
@@ -24,30 +23,34 @@ import {
   normalizeCatalogMediaConfig,
   type CatalogMediaConfig,
 } from "../core/config/catalogMedia";
+import { cachedServerRead } from "./cachedRead";
 
 /** Fetch the public product projection, or an empty catalog when unset/unreadable. */
-export const getPublicProducts = cache(async (): Promise<PublicProductsConfig> => {
-  try {
-    const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "products"));
-    const config = normalizePublicProductsConfig(snap.exists() ? snap.data() : undefined);
-    // An empty result here reads to a visitor as "our catalog is being
-    // updated," which is indistinguishable from a genuinely empty catalog. Log
-    // which one it actually was, so "why is nothing showing" is a server-log
-    // lookup instead of a guess — see `isOfferable` for the usual real cause
-    // (a product that's Active but hasn't been Verified/priced/measured yet).
-    if (config.products.length === 0) {
-      console.warn(
-        snap.exists()
-          ? "getPublicProducts: appConfig/products exists but projected zero products (none are status=active AND offerable — check Admin \u2192 Products)."
-          : "getPublicProducts: appConfig/products does not exist yet.",
-      );
+export const getPublicProducts = cachedServerRead(
+  "appConfig/products",
+  async (): Promise<PublicProductsConfig> => {
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "products"));
+      const config = normalizePublicProductsConfig(snap.exists() ? snap.data() : undefined);
+      // An empty result here reads to a visitor as "our catalog is being
+      // updated," which is indistinguishable from a genuinely empty catalog. Log
+      // which one it actually was, so "why is nothing showing" is a server-log
+      // lookup instead of a guess — see `isOfferable` for the usual real cause
+      // (a product that's Active but hasn't been Verified/priced/measured yet).
+      if (config.products.length === 0) {
+        console.warn(
+          snap.exists()
+            ? "getPublicProducts: appConfig/products exists but projected zero products (none are status=active AND offerable — check Admin \u2192 Products)."
+            : "getPublicProducts: appConfig/products does not exist yet.",
+        );
+      }
+      return config;
+    } catch (err) {
+      console.error("getPublicProducts: failed to read appConfig/products, falling back to an empty catalog.", err);
+      return { version: 1, products: [], projectedAt: 0 };
     }
-    return config;
-  } catch (err) {
-    console.error("getPublicProducts: failed to read appConfig/products, falling back to an empty catalog.", err);
-    return { version: 1, products: [], projectedAt: 0 };
-  }
-});
+  },
+);
 
 /**
  * Fetch the catalog-wide pricing settings, falling back to the defaults.
@@ -57,14 +60,17 @@ export const getPublicProducts = cache(async (): Promise<PublicProductsConfig> =
  * behaviour, and a product's own tier prices — the numbers a customer actually
  * pays — come from the catalog either way.
  */
-export const getPricingSettings = cache(async (): Promise<PricingSettings> => {
-  try {
-    const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "pricingSettings"));
-    return normalizePricingSettings(snap.exists() ? snap.data() : undefined);
-  } catch {
-    return createDefaultPricingSettings();
-  }
-});
+export const getPricingSettings = cachedServerRead(
+  "appConfig/pricingSettings",
+  async (): Promise<PricingSettings> => {
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "pricingSettings"));
+      return normalizePricingSettings(snap.exists() ? snap.data() : undefined);
+    } catch {
+      return createDefaultPricingSettings();
+    }
+  },
+);
 
 /**
  * Fetch the catalog photography (product and print-option pictures).
@@ -72,11 +78,14 @@ export const getPricingSettings = cache(async (): Promise<PricingSettings> => {
  * Passed down to the pickers as a prop so a public page can show real
  * photographs without subscribing to the whole live config store.
  */
-export const getCatalogMedia = cache(async (): Promise<CatalogMediaConfig> => {
-  try {
-    const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "catalogMedia"));
-    return normalizeCatalogMediaConfig(snap.exists() ? snap.data() : undefined);
-  } catch {
-    return createDefaultCatalogMediaConfig();
-  }
-});
+export const getCatalogMedia = cachedServerRead(
+  "appConfig/catalogMedia",
+  async (): Promise<CatalogMediaConfig> => {
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "catalogMedia"));
+      return normalizeCatalogMediaConfig(snap.exists() ? snap.data() : undefined);
+    } catch {
+      return createDefaultCatalogMediaConfig();
+    }
+  },
+);

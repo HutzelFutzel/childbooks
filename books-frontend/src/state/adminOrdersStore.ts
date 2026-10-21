@@ -192,6 +192,68 @@ async function getJson<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+/**
+ * How long loaded data counts as current. Within this window re-opening the
+ * dashboard or switching tabs reuses what's in memory instead of re-running the
+ * server-side order scan; "Refresh" always bypasses it.
+ */
+const FRESH_FOR_MS = 30_000;
+
+/** Calls sharing one in-flight request instead of racing each other. */
+let analyticsInFlight: { key: string; promise: Promise<void>; token: object } | null = null;
+let fullInFlight: { key: string; promise: Promise<void>; token: object } | null = null;
+
+interface RefreshOpts {
+  /** Skip the freshness window (an explicit "Refresh", or after a write that changes the numbers). */
+  force?: boolean;
+}
+
+/** What a loaded report is "for": the window and the market filter. */
+function windowKey(days: number): string {
+  return `${days}|${marketParam()}`;
+}
+
+/** `loading` stays true until EVERY overlapping load has finished. */
+let activeLoads = 0;
+function beginLoad(): void {
+  activeLoads += 1;
+  useAdminOrders.setState({ loading: true });
+}
+function endLoad(): void {
+  activeLoads = Math.max(0, activeLoads - 1);
+  if (activeLoads === 0) useAdminOrders.setState({ loading: false });
+}
+
+/**
+ * Make sure the headline report is loaded and current. Reuses a fresh copy,
+ * joins one already in flight, otherwise fetches. Throws on failure.
+ */
+function ensureAnalytics(force: boolean): Promise<void> {
+  const { days, analytics, analyticsKey, analyticsAt } = useAdminOrders.getState();
+  const key = windowKey(days);
+  if (!force && analytics && analyticsKey === key && analyticsAt && Date.now() - analyticsAt < FRESH_FOR_MS) {
+    return Promise.resolve();
+  }
+  if (!force && analyticsInFlight?.key === key) return analyticsInFlight.promise;
+
+  const token = {};
+  const promise: Promise<void> = (async () => {
+    try {
+      const data = await getJson<OrderAnalytics>(
+        `/admin/orders/analytics?days=${days}${marketParam()}${force ? "&fresh=1" : ""}`,
+      );
+      // The admin changed the window while this was in flight — don't show the wrong one.
+      if (useAdminOrders.getState().days !== days) return;
+      const now = Date.now();
+      useAdminOrders.setState({ analytics: data, analyticsKey: key, analyticsAt: now, lastUpdated: now });
+    } finally {
+      if (analyticsInFlight?.token === token) analyticsInFlight = null;
+    }
+  })();
+  analyticsInFlight = { key, promise, token };
+  return promise;
+}
+
 interface AdminOrdersState {
   days: number;
   stateFilter: PrintOrderState | "all";
@@ -205,6 +267,12 @@ interface AdminOrdersState {
   loading: boolean;
   error: string | null;
   lastUpdated: number | null;
+  /** What `analytics` was loaded for (window + market) and when. */
+  analyticsKey: string | null;
+  analyticsAt: number | null;
+  /** When the FULL view (analytics + connection + list + print prep) was last loaded, and for what. */
+  fullKey: string | null;
+  fullAt: number | null;
 
   selectedKey: string | null;
   detail: OrderDetail | null;
@@ -221,8 +289,11 @@ interface AdminOrdersState {
   setStateFilter: (state: PrintOrderState | "all") => void;
   setAttentionOnly: (on: boolean) => void;
   setQuery: (q: string) => void;
-  refresh: () => Promise<void>;
-  refreshList: () => Promise<void>;
+  /** The whole Orders view: report, printer link, list, print files. */
+  refresh: (opts?: RefreshOpts) => Promise<void>;
+  /** Just the headline report — all the dashboard overview needs, in one request. */
+  loadOverview: (opts?: RefreshOpts) => Promise<void>;
+  refreshList: (opts?: { fresh?: boolean }) => Promise<void>;
   checkConnection: () => Promise<void>;
   open: (key: string | null) => Promise<void>;
   act: (key: string, action: OrderAction, body?: Record<string, unknown>) => Promise<boolean>;
@@ -244,6 +315,10 @@ export const useAdminOrders = create<AdminOrdersState>((set, get) => ({
   loading: false,
   error: null,
   lastUpdated: null,
+  analyticsKey: null,
+  analyticsAt: null,
+  fullKey: null,
+  fullAt: null,
 
   selectedKey: null,
   detail: null,
@@ -272,31 +347,62 @@ export const useAdminOrders = create<AdminOrdersState>((set, get) => ({
     set({ query });
   },
 
-  async refresh() {
-    set({ loading: true, error: null });
+  /**
+   * Stale-while-revalidate: what's already loaded stays on screen while the new
+   * data is fetched. Skipped when the same window + market were fully loaded
+   * within {@link FRESH_FOR_MS}; concurrent identical calls share one request.
+   */
+  refresh(opts) {
+    const force = opts?.force === true;
+    const key = windowKey(get().days);
+    const { fullKey, fullAt } = get();
+    if (!force && fullKey === key && fullAt && Date.now() - fullAt < FRESH_FOR_MS) return Promise.resolve();
+    if (!force && fullInFlight?.key === key) return fullInFlight.promise;
+
+    beginLoad();
+    set({ error: null });
+    const token = {};
+    const promise: Promise<void> = (async () => {
+      try {
+        // The report (shared with the overview, so it may already be fresh) and
+        // the printer link are independent — fetch them together.
+        const [, connection] = await Promise.all([
+          ensureAnalytics(force),
+          getJson<PrinterConnection>("/admin/orders/connection"),
+        ]);
+        set({ connection });
+        await Promise.all([get().refreshList({ fresh: force }), get().loadPrintPrep()]);
+        set({ fullKey: key, fullAt: Date.now() });
+      } catch (err) {
+        set({ error: (err as Error)?.message ?? "Failed to load orders." });
+      } finally {
+        if (fullInFlight?.token === token) fullInFlight = null;
+        endLoad();
+      }
+    })();
+    fullInFlight = { key, promise, token };
+    return promise;
+  },
+
+  async loadOverview(opts) {
+    beginLoad();
     try {
-      const { days } = get();
-      const market = marketParam();
-      const [analytics, connection] = await Promise.all([
-        getJson<OrderAnalytics>(`/admin/orders/analytics?days=${days}${market}`),
-        getJson<PrinterConnection>("/admin/orders/connection"),
-      ]);
-      set({ analytics, connection, lastUpdated: Date.now() });
-      await Promise.all([get().refreshList(), get().loadPrintPrep()]);
+      await ensureAnalytics(opts?.force === true);
     } catch (err) {
       set({ error: (err as Error)?.message ?? "Failed to load orders." });
     } finally {
-      set({ loading: false });
+      endLoad();
     }
   },
 
-  async refreshList() {
+  async refreshList(opts) {
     try {
       const { stateFilter, attentionOnly, query } = get();
       const params = new URLSearchParams();
       if (stateFilter !== "all") params.set("state", stateFilter);
       if (attentionOnly) params.set("attention", "1");
       if (query.trim()) params.set("q", query.trim());
+      if (opts?.fresh) params.set("fresh", "1");
       const market = marketParam();
       const list = await getJson<{ total: number; orders: PrintOrderRecord[] }>(
         `/admin/orders?${params.toString()}${market}`,
@@ -353,7 +459,9 @@ export const useAdminOrders = create<AdminOrdersState>((set, get) => ({
       if (!res.ok) throw new Error(await messageOf(res, "That didn't work."));
       const json = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { skipped?: string } };
       // Reload first: opening an order clears the notice, and the notice is the point.
-      await Promise.all([get().open(key), get().refreshList()]);
+      // The action changed what the report and list say — the next visit must refetch.
+      set({ analyticsAt: null, fullAt: null });
+      await Promise.all([get().open(key), get().refreshList({ fresh: true })]);
       set({
         notice:
           action === "resend-email" && json.ok === false

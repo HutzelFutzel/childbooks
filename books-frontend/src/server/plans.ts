@@ -5,13 +5,13 @@
  * the landing page can render pricing in the server HTML — good for SEO and for
  * emitting Product/Offer structured data — mirroring {@link getSeoConfig}.
  */
-import { cache } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseDb } from "../lib/firebase";
 import { normalizePublicPlansConfig, type PublicPlansConfig } from "../core/config/plans";
+import { cachedServerRead } from "./cachedRead";
 
 /** Fetch the public plans config, or an empty config when unset/unreadable. */
-export const getPublicPlans = cache(async (): Promise<PublicPlansConfig> => {
+export const getPublicPlans = cachedServerRead("appConfig/plans", async (): Promise<PublicPlansConfig> => {
   try {
     const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "plans"));
     return normalizePublicPlansConfig(snap.exists() ? snap.data() : undefined);

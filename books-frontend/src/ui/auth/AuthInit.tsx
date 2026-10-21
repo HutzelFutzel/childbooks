@@ -20,8 +20,13 @@ export function AuthInit() {
     // Signing in is the one thing it must NOT do: nobody is browsing, and a
     // guest-first init would mint (and leave behind) an anonymous account for
     // every book anyone renders. It authenticates with the render job's token.
-    if (window.location.pathname.startsWith("/internal/")) return;
-    init();
+    const path = window.location.pathname;
+    if (path.startsWith("/internal/")) return;
+    // On passive marketing pages, restore any existing session without minting
+    // a new anonymous account on first page load. Entering `/studio` (or making
+    // an authenticated backend request) upgrades to guest-first immediately.
+    const autoGuest = path.startsWith("/studio");
+    init({ autoGuest });
   }, [init]);
   return null;
 }

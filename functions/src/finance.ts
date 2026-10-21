@@ -32,6 +32,7 @@ import { randomUUID } from "node:crypto";
 import { getFirestore, type Query } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getPricingSettings } from "./appConfig";
+import { createTtlCache } from "./ttlCache";
 import { fxRate } from "../../books-frontend/src/core/config/productMath";
 import { normalizeCountry, UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
 import type { CurrencyCode } from "../../books-frontend/src/core/config/products";
@@ -388,6 +389,46 @@ function dayKeyIn(at: number, tz: string): string {
   } catch {
     return new Date(at).toISOString().slice(0, 10);
   }
+}
+
+/**
+ * How long an identical summary request is answered from memory. The stream is
+ * append-only and the dashboard is a trend view, so a sub-minute lag is
+ * invisible — while a repeat open (or the overview and the Finance tab asking
+ * for the same window) skips a scan of up to {@link MAX_SCAN} events.
+ */
+const SUMMARY_TTL_MS = 45_000;
+/** Windows are quantised to this so a client sending `to = Date.now()` still hits the cache. */
+const SUMMARY_WINDOW_BUCKET_MS = 60_000;
+const summaryCache = createTtlCache<FinanceSummary>(SUMMARY_TTL_MS, 24);
+
+/**
+ * `financeSummary` behind a short single-flight cache. Pass `fresh` for an
+ * explicit refresh (and after anything that books events itself, like saving a
+ * custom cost) so it can never be answered from a stale entry.
+ */
+export async function financeSummaryCached(
+  q: FinanceSummaryQuery,
+  opts?: { fresh?: boolean },
+): Promise<FinanceSummary> {
+  const bucket = (ms: number) => Math.floor(ms / SUMMARY_WINDOW_BUCKET_MS);
+  const key = JSON.stringify([
+    bucket(q.fromMs),
+    bucket(q.toMs),
+    q.category ?? "",
+    q.uid ?? "",
+    q.projectId ?? "",
+    q.country ?? "",
+    q.productId ?? "",
+    q.groupLimit ?? "",
+    q.timezone ?? "",
+  ]);
+  return summaryCache.get(key, () => financeSummary(q), opts);
+}
+
+/** Drop every cached summary (call after the server books finance events itself). */
+export function invalidateFinanceSummaries(): void {
+  summaryCache.invalidate();
 }
 
 /**

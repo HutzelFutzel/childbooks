@@ -239,6 +239,21 @@
   .animate-float-slow {
     animation: float-slow 5s ease-in-out infinite;
   }
+
+  /* Indeterminate top-of-page progress for the admin shell: a short bar that
+     slides across the full width for as long as something is loading. */
+  @keyframes admin-progress {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(350%);
+    }
+  }
+  .admin-progress-bar {
+    width: 30%;
+    animation: admin-progress 1.2s ease-in-out infinite;
+  }
 }
 
 /* Respect reduced-motion for all the decorative animation above. */
@@ -247,6 +262,11 @@
   .animate-float-slow,
   .animate-glint {
     animation: none;
+  }
+  /* No sweep: show a steady half-bar instead, so loading is still visible. */
+  .admin-progress-bar {
+    animation: none;
+    width: 50%;
   }
 }
 

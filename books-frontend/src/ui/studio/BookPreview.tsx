@@ -8,6 +8,8 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { BookOpen, ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { PageDesign } from "../../core/types";
+import { getCursor } from "../../core/versioning";
+import { prefetchBlob } from "../../state/blobs";
 import { PageStage } from "../design/PageStage";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { defaultIllustrationFocus, type DesignPage } from "../design/designInit";
@@ -18,6 +20,7 @@ import {
   coverSideOf,
   DeadPageFill,
   dispAspect,
+  displayEntries,
   PairPreview,
   sideAspect,
   type DisplaySpread,
@@ -93,6 +96,18 @@ export function BookPreview({
   }, [count, onClose]);
 
   const disp = displays[Math.min(index, count - 1)];
+  const { project } = useStudio();
+  useEffect(() => {
+    for (const neighborIdx of [index - 1, index + 1]) {
+      const neighbor = displays[neighborIdx];
+      if (!neighbor) continue;
+      for (const { entry } of displayEntries(neighbor)) {
+        const tree = project.illustrations?.[entry.page.id];
+        const blobId = (tree ? getCursor(tree).content.blobId : undefined) ?? entry.page.blobId;
+        prefetchBlob(blobId, "web");
+      }
+    }
+  }, [displays, index, project.illustrations]);
   // The printer's blank pages sit after the story and before the back cover, so
   // the flip-through says so at the point where the book would show them.
   const blankInfo = useBlankPagePlan();
@@ -330,7 +345,7 @@ export function PreviewSpread({ disp }: { disp: DisplaySpread }) {
   if (isPlainPagePair(disp)) {
     return (
       <div className="relative w-full overflow-hidden rounded-[3px] bg-white shadow-[0_14px_36px_-12px_rgba(20,22,58,0.22),0_2px_6px_rgba(20,22,58,0.08)] ring-1 ring-ink-900/10">
-        <PairPreview left={disp.left.entry} right={disp.right.entry} />
+        <PairPreview left={disp.left.entry} right={disp.right.entry} size="web" />
         <div
           className="pointer-events-none absolute inset-y-0 left-1/2 w-10 -translate-x-1/2"
           style={{ background: FOLD_GRADIENT }}

@@ -36,6 +36,7 @@ import { cn } from "../../lib/cn";
 import { notify } from "../../lib/notify";
 import { fmtDateTime, fmtNumber, fmtRelative, fmtUsd } from "./format";
 import { CustomCostsCard } from "./CustomCostsCard";
+import { useAdminBusy } from "../LoadingState";
 import { PrintCalibrationCard } from "./PrintCalibrationCard";
 
 const TIMEFRAMES: { id: Timeframe; label: string }[] = [
@@ -100,6 +101,7 @@ function signed(n: number): string {
 
 export function FinanceAnalysis() {
   const s = useAdminFinance();
+  useAdminBusy(s.loading);
 
   useEffect(() => {
     // Guarded on "no data yet": the section unmounts when another one is shown,
@@ -127,7 +129,7 @@ export function FinanceAnalysis() {
             variant="secondary"
             size="sm"
             leftIcon={<RefreshCw className={`size-4 ${s.loading ? "animate-spin" : ""}`} />}
-            onClick={() => void s.refresh()}
+            onClick={() => void s.refresh({ force: true })}
             disabled={s.loading}
           >
             Refresh

@@ -60,6 +60,9 @@ async function safeError(res: Response): Promise<string | null> {
   }
 }
 
+/** The environment read currently in flight, shared by every caller that arrives meanwhile. */
+let runtimeInFlight: Promise<void> | null = null;
+
 interface AdminHealthState {
   report: SystemHealthReport | null;
   loading: boolean;
@@ -101,15 +104,23 @@ export const useAdminHealth = create<AdminHealthState>((set, get) => ({
     }
   },
 
-  async loadRuntime() {
+  loadRuntime() {
+    // The top-bar badge and the overview both ask on first load — share one request.
+    if (runtimeInFlight) return runtimeInFlight;
     set({ modeError: null });
-    try {
-      const res = await backendFetch("/admin/runtime");
-      if (!res.ok) throw new Error((await safeError(res)) ?? "Couldn't load the environment.");
-      set({ runtime: (await res.json()) as RuntimeEnvState });
-    } catch (err) {
-      set({ modeError: (err as Error)?.message ?? "Couldn't load the environment." });
-    }
+    const promise: Promise<void> = (async () => {
+      try {
+        const res = await backendFetch("/admin/runtime");
+        if (!res.ok) throw new Error((await safeError(res)) ?? "Couldn't load the environment.");
+        set({ runtime: (await res.json()) as RuntimeEnvState });
+      } catch (err) {
+        set({ modeError: (err as Error)?.message ?? "Couldn't load the environment." });
+      } finally {
+        runtimeInFlight = null;
+      }
+    })();
+    runtimeInFlight = promise;
+    return promise;
   },
 
   async checkReadiness(env: BillingEnv = "live") {

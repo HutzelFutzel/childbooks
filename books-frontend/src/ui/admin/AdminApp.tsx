@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowLeft, Eye, FlaskConical, Loader2, Menu, Search, ShieldAlert } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Eye, FlaskConical, Loader2, Menu, Search, ShieldAlert } from "lucide-react";
+import { Skeleton } from "@/ui/components/Skeleton";
 import { Button } from "@/ui/components/Button";
 import { Drawer } from "@/ui/components/Drawer";
 import { TopBar } from "@/ui/layout/TopBar";
@@ -24,6 +25,7 @@ import { useAdminAccess } from "@/state/adminAccessStore";
 import { AccessLoadState, SectionGate } from "./AccessGate";
 import {
   useAdminTab,
+  adminHref,
   canonicalAdminPath,
   type CatalogSegment,
   type ConfigTabId,
@@ -32,17 +34,77 @@ import { NAV_INDEX, NAV_TREE, resolveAdminPage, type NavLeaf } from "./adminNav"
 import { AdminSidebarNav } from "./AdminSidebarNav";
 import { AdminPageHeader } from "./AdminPageHeader";
 import { CommandPalette } from "./CommandPalette";
+import { AdminProgressBar, LoadingState, useAdminBusy } from "./LoadingState";
+import { ConfigReady, configDocsForPage } from "./ConfigReady";
 
+/** Shown while a tab's code downloads; also lights the top progress bar. */
 function TabLoader() {
+  useAdminBusy(true);
+  return <LoadingState label="Loading section…" />;
+}
+
+/** One line of the startup checklist: done, in progress, or still waiting. */
+function StartupStep({ label, state }: { label: string; state: "done" | "active" | "waiting" }) {
   return (
-    <div
-      className="flex min-h-64 flex-col items-center justify-center gap-3 py-16 text-ink-500"
-      role="status"
-      aria-live="polite"
+    <li
+      className={cn(
+        "flex items-center gap-2 text-sm",
+        state === "done" ? "text-ink-700" : state === "active" ? "font-medium text-ink-900" : "text-ink-400",
+      )}
     >
-      <Loader2 className="size-6 animate-spin text-brand-400" />
-      <p className="text-sm font-medium">Loading section…</p>
-    </div>
+      {state === "done" ? (
+        <CheckCircle2 className="size-4 text-emerald-500" />
+      ) : state === "active" ? (
+        <Loader2 className="size-4 animate-spin text-brand-500" />
+      ) : (
+        <span className="size-4 rounded-full ring-1 ring-inset ring-ink-200" />
+      )}
+      {label}
+    </li>
+  );
+}
+
+/**
+ * The one screen shown from first paint until the dashboard is ready. Replaces
+ * three different full-screen spinners with a stable layout (sidebar outline +
+ * a checklist of what's being waited on), so the page doesn't keep restarting.
+ * The steps run in parallel, so each shows its own state rather than a
+ * misleading "step 2 of 3".
+ */
+function AdminStartup({
+  signedIn,
+  adminVerified,
+  permissionsLoaded,
+}: {
+  signedIn: boolean;
+  adminVerified: boolean;
+  permissionsLoaded: boolean;
+}) {
+  useAdminBusy(true);
+  const stateOf = (done: boolean): "done" | "active" => (done ? "done" : "active");
+  return (
+    <>
+      <aside
+        className="hidden w-64 shrink-0 space-y-3 border-r border-ink-100 bg-white px-3 py-4 lg:block"
+        aria-hidden
+      >
+        <Skeleton className="h-8" />
+        <Skeleton className="h-32" />
+        <Skeleton className="h-40" />
+        <Skeleton className="h-24" />
+      </aside>
+      <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-5 px-6" role="status" aria-live="polite">
+        <div className="text-center">
+          <p className="text-base font-semibold text-ink-900">Getting the dashboard ready…</p>
+          <p className="mt-1 text-xs text-ink-500">This only takes a moment.</p>
+        </div>
+        <ul className="space-y-2">
+          <StartupStep label="Signing you in" state={stateOf(signedIn)} />
+          <StartupStep label="Verifying admin access" state={signedIn ? stateOf(adminVerified) : "waiting"} />
+          <StartupStep label="Loading your permissions" state={signedIn ? stateOf(permissionsLoaded) : "waiting"} />
+        </ul>
+      </div>
+    </>
   );
 }
 
@@ -228,10 +290,29 @@ export default function AdminApp() {
     initAuth();
   }, [initAuth]);
 
+  // Start the permissions request as soon as a real account is signed in — in
+  // parallel with the `admins/{uid}` check above, not after it. The backend is
+  // the authority on admin access (it 403s a non-admin, who never sees the
+  // result: AccessDenied renders first), and this cuts one full round trip off
+  // the "Verifying admin access…" → dashboard wait.
+  const hasRealAccount = useAuthStore((s) => Boolean(s.user && !s.user.isAnonymous));
+  useEffect(() => {
+    if (hasRealAccount) void initAccess();
+  }, [hasRealAccount, initAccess]);
+
+  // Fetch the landing tab's code while auth and permissions are in flight, so it
+  // is already on hand when access resolves instead of starting its download then.
+  useEffect(() => {
+    if (canonicalAdminPath(window.location.pathname) === adminHref("configuration", "overview")) {
+      void import("./tabs/BusinessOverviewTab");
+    }
+  }, []);
+
   useEffect(() => {
     if (!isAdmin) return;
-    subscribeConfig();
+    subscribeConfig("admin");
     subscribeAdminModelCosts();
+    // No-op if the early request above is running or done; retries it if it failed.
     void initAccess();
   }, [isAdmin, subscribeConfig, subscribeAdminModelCosts, initAccess]);
 
@@ -267,6 +348,7 @@ export default function AdminApp() {
         isDev() ? "h-[calc(100vh-1.5rem)]" : "h-screen",
       )}
     >
+      <AdminProgressBar />
       <TopBar
         contextLabel="Admin"
         right={
@@ -318,18 +400,15 @@ export default function AdminApp() {
 
       <main className="flex min-h-0 flex-1 overflow-hidden">
         {!ready || !adminReady ? (
-          <div
-            className="flex flex-1 flex-col items-center justify-center gap-3 text-ink-500"
-            role="status"
-            aria-live="polite"
-          >
-            <Loader2 className="size-7 animate-spin text-brand-400" />
-            <p className="text-sm font-medium">Verifying admin access…</p>
-          </div>
+          <AdminStartup signedIn={ready} adminVerified={adminReady} permissionsLoaded={accessLoaded} />
         ) : !isAdmin ? (
           <AccessDenied onLeave={() => router.push("/studio")} />
         ) : !accessLoaded ? (
-          <AccessLoadState error={accessError} onRetry={() => void reloadAccess()} />
+          accessError ? (
+            <AccessLoadState error={accessError} onRetry={() => void reloadAccess()} />
+          ) : (
+            <AdminStartup signedIn adminVerified permissionsLoaded={false} />
+          )
         ) : (
           <>
             <aside className="hidden w-64 shrink-0 overflow-y-auto border-r border-ink-100 bg-white px-3 py-4 lg:block">
@@ -393,38 +472,46 @@ export default function AdminApp() {
 
                 {section === "configuration" && (
                   <SectionGate permissionKey={`configuration.${configTab}`}>
-                    <ConfigTabPanel tab={configTab} />
+                    <ConfigReady docs={configDocsForPage("configuration", configTab)}>
+                      <ConfigTabPanel tab={configTab} />
+                    </ConfigReady>
                   </SectionGate>
                 )}
                 {section === "analysis" && <AnalysisTab />}
                 {section === "permissions" && isOwnerAccess && <PermissionsTab />}
                 {section === "marketing" && (
                   <SectionGate permissionKey={`marketing.${marketingTab}`}>
-                    {marketingTab === "referrals" && <ReferralsTab />}
-                    {marketingTab === "affiliates" && <AffiliatesTab />}
-                    {marketingTab === "campaigns" && <CampaignsTab />}
-                    {marketingTab === "coupons" && <CouponsTab />}
-                    {marketingTab === "surveys" && <SurveysTab />}
-                    {marketingTab === "announcements" && <AnnouncementsTab />}
-                    {marketingTab === "seo" && <SeoTab />}
-                    {marketingTab === "blog" && <BlogTab />}
-                    {marketingTab === "landingPages" && <LandingPagesTab />}
-                    {marketingTab === "branding" && <BrandingTab />}
-                    {marketingTab === "qrCodes" && <QrCodesTab />}
+                    <ConfigReady docs={configDocsForPage("marketing", marketingTab)}>
+                      {marketingTab === "referrals" && <ReferralsTab />}
+                      {marketingTab === "affiliates" && <AffiliatesTab />}
+                      {marketingTab === "campaigns" && <CampaignsTab />}
+                      {marketingTab === "coupons" && <CouponsTab />}
+                      {marketingTab === "surveys" && <SurveysTab />}
+                      {marketingTab === "announcements" && <AnnouncementsTab />}
+                      {marketingTab === "seo" && <SeoTab />}
+                      {marketingTab === "blog" && <BlogTab />}
+                      {marketingTab === "landingPages" && <LandingPagesTab />}
+                      {marketingTab === "branding" && <BrandingTab />}
+                      {marketingTab === "qrCodes" && <QrCodesTab />}
+                    </ConfigReady>
                   </SectionGate>
                 )}
                 {section === "communication" && (
                   <SectionGate permissionKey={`communication.${communicationTab}`}>
-                    {communicationTab === "contact" && <ContactInboxTab />}
-                    {communicationTab === "transactional-emails" && <EmailTab />}
-                    {communicationTab === "admin-slack" && <SlackTab />}
+                    <ConfigReady docs={configDocsForPage("communication", communicationTab)}>
+                      {communicationTab === "contact" && <ContactInboxTab />}
+                      {communicationTab === "transactional-emails" && <EmailTab />}
+                      {communicationTab === "admin-slack" && <SlackTab />}
+                    </ConfigReady>
                   </SectionGate>
                 )}
                 {section === "legal" && (
                   <SectionGate permissionKey={`legal.${legalTab}`}>
-                    {legalTab === "documents" && <LegalDocsTab />}
-                    {legalTab === "cookies" && <CookieConsentTab />}
-                    {legalTab === "gdpr" && <GdprTab />}
+                    <ConfigReady docs={configDocsForPage("legal", legalTab)}>
+                      {legalTab === "documents" && <LegalDocsTab />}
+                      {legalTab === "cookies" && <CookieConsentTab />}
+                      {legalTab === "gdpr" && <GdprTab />}
+                    </ConfigReady>
                   </SectionGate>
                 )}
               </div>

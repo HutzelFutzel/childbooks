@@ -133,6 +133,24 @@ async function safeError(res: Response): Promise<string | null> {
   }
 }
 
+/**
+ * How long a loaded summary / alerts list counts as current. Within this window
+ * re-opening the dashboard or switching tabs reuses what's in memory instead of
+ * re-running the server-side aggregation; "Refresh" always bypasses it.
+ */
+const FRESH_FOR_MS = 30_000;
+
+/** Calls sharing one in-flight request instead of racing each other. */
+let summaryInFlight: { key: string; promise: Promise<void>; token: object } | null = null;
+let alertsInFlight: Promise<void> | null = null;
+/** Bumped per request so a slow older response can never overwrite a newer one. */
+let summarySeq = 0;
+
+interface RefreshOpts {
+  /** Skip the freshness window (an explicit "Refresh", or after a write that changes the numbers). */
+  force?: boolean;
+}
+
 interface AdminFinanceState {
   timeframe: Timeframe;
   customFrom: number;
@@ -143,7 +161,10 @@ interface AdminFinanceState {
   projectId: string;
 
   summary: FinanceSummaryData | null;
+  /** What the loaded `summary` was computed for (window + filters + market). */
+  summaryKey: string | null;
   alerts: AdminAlertRow[];
+  alertsAt: number | null;
   customCosts: CustomCostRow[];
   customCostsLoading: boolean;
   loading: boolean;
@@ -156,8 +177,8 @@ interface AdminFinanceState {
   setCustomRange: (from: number, to: number) => void;
   setCategory: (category: FinanceCategoryFilter) => void;
   setDrilldown: (patch: { uid?: string; projectId?: string }) => void;
-  refresh: () => Promise<void>;
-  loadAlerts: () => Promise<void>;
+  refresh: (opts?: RefreshOpts) => Promise<void>;
+  loadAlerts: (opts?: RefreshOpts) => Promise<void>;
   resolveAlert: (id: string) => Promise<void>;
   retryFulfillments: () => Promise<number>;
   loadCustomCosts: () => Promise<void>;
@@ -174,7 +195,9 @@ export const useAdminFinance = create<AdminFinanceState>((set, get) => ({
   projectId: "",
 
   summary: null,
+  summaryKey: null,
   alerts: [],
+  alertsAt: null,
   customCosts: [],
   customCostsLoading: false,
   loading: false,
@@ -206,39 +229,83 @@ export const useAdminFinance = create<AdminFinanceState>((set, get) => ({
     void get().refresh();
   },
 
-  async refresh() {
-    const { timeframe, customFrom, customTo, category, uid, projectId } = get();
+  /**
+   * Stale-while-revalidate: whatever summary is already loaded stays on screen
+   * while a new one is fetched. A request is skipped when the same window +
+   * filters were loaded within {@link FRESH_FOR_MS}, and concurrent identical
+   * calls share one request.
+   */
+  refresh(opts) {
+    const { timeframe, customFrom, customTo, category, uid, projectId, summary, summaryKey, lastUpdated } = get();
+    const market = marketParam();
+    // The window is identified by its timeframe, not by "now" — a rolling "30d"
+    // is the same request a minute later, so it must hash the same.
+    const key = [
+      timeframe,
+      timeframe === "custom" ? `${customFrom}-${customTo}` : "",
+      category,
+      uid,
+      projectId,
+      market,
+    ].join("|");
+    const force = opts?.force === true;
+
+    if (!force && summary && summaryKey === key && lastUpdated && Date.now() - lastUpdated < FRESH_FOR_MS) {
+      return Promise.resolve();
+    }
+    if (!force && summaryInFlight?.key === key) return summaryInFlight.promise;
+
+    const seq = ++summarySeq;
     const range = resolveRange(timeframe, { from: customFrom, to: customTo });
     set({ loading: true, error: null });
-    try {
-      const qs =
-        `from=${range.from}&to=${range.to}` +
-        marketParam() +
-        (category !== "all" ? `&category=${category}` : "") +
-        (uid ? `&uid=${encodeURIComponent(uid)}` : "") +
-        (projectId ? `&projectId=${encodeURIComponent(projectId)}` : "");
-      const res = await backendFetch(`/admin/finance/summary?${qs}`);
-      if (!res.ok) throw new Error((await safeError(res)) ?? "Failed to load finance summary.");
-      set({ summary: (await res.json()) as FinanceSummaryData, lastUpdated: Date.now() });
-    } catch (err) {
-      set({ error: (err as Error)?.message ?? "Failed to load finance summary." });
-    } finally {
-      set({ loading: false });
-    }
+    const token = {};
+    const promise: Promise<void> = (async () => {
+      try {
+        const qs =
+          `from=${range.from}&to=${range.to}` +
+          market +
+          (category !== "all" ? `&category=${category}` : "") +
+          (uid ? `&uid=${encodeURIComponent(uid)}` : "") +
+          (projectId ? `&projectId=${encodeURIComponent(projectId)}` : "") +
+          (force ? "&fresh=1" : "");
+        const res = await backendFetch(`/admin/finance/summary?${qs}`);
+        if (!res.ok) throw new Error((await safeError(res)) ?? "Failed to load finance summary.");
+        const data = (await res.json()) as FinanceSummaryData;
+        // A newer request (other window / filters) owns the screen now.
+        if (seq === summarySeq) set({ summary: data, summaryKey: key, lastUpdated: Date.now() });
+      } catch (err) {
+        if (seq === summarySeq) {
+          set({ error: (err as Error)?.message ?? "Failed to load finance summary." });
+        }
+      } finally {
+        if (seq === summarySeq) set({ loading: false });
+        if (summaryInFlight?.token === token) summaryInFlight = null;
+      }
+    })();
+    summaryInFlight = { key, promise, token };
+    return promise;
   },
 
-  async loadAlerts() {
+  loadAlerts(opts) {
+    const { alertsAt } = get();
+    if (!opts?.force && alertsAt && Date.now() - alertsAt < FRESH_FOR_MS) return Promise.resolve();
+    if (alertsInFlight) return alertsInFlight;
     set({ alertsLoading: true });
-    try {
-      const res = await backendFetch("/admin/alerts?limit=100");
-      if (!res.ok) throw new Error((await safeError(res)) ?? "Failed to load alerts.");
-      const json = (await res.json()) as { alerts?: AdminAlertRow[] };
-      set({ alerts: json.alerts ?? [] });
-    } catch {
-      // Alerts are supplementary — leave whatever we had.
-    } finally {
-      set({ alertsLoading: false });
-    }
+    const promise = (async () => {
+      try {
+        const res = await backendFetch("/admin/alerts?limit=100");
+        if (!res.ok) throw new Error((await safeError(res)) ?? "Failed to load alerts.");
+        const json = (await res.json()) as { alerts?: AdminAlertRow[] };
+        set({ alerts: json.alerts ?? [], alertsAt: Date.now() });
+      } catch {
+        // Alerts are supplementary — leave whatever we had.
+      } finally {
+        alertsInFlight = null;
+        set({ alertsLoading: false });
+      }
+    })();
+    alertsInFlight = promise;
+    return promise;
   },
 
   async resolveAlert(id) {
@@ -263,7 +330,7 @@ export const useAdminFinance = create<AdminFinanceState>((set, get) => ({
       });
       if (!res.ok) throw new Error((await safeError(res)) ?? "Retry sweep failed.");
       const json = (await res.json()) as { placed?: number };
-      await get().loadAlerts();
+      await get().loadAlerts({ force: true });
       return json.placed ?? 0;
     } finally {
       set({ retrying: false });
@@ -293,7 +360,7 @@ export const useAdminFinance = create<AdminFinanceState>((set, get) => ({
     if (!res.ok) throw new Error((await safeError(res)) ?? "Failed to save the cost.");
     await get().loadCustomCosts();
     // Saving books any due periods server-side — refresh the totals too.
-    await get().refresh();
+    await get().refresh({ force: true });
   },
 
   async deleteCustomCost(id) {

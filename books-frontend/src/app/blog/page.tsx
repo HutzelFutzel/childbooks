@@ -3,6 +3,7 @@ import { getSeoConfig } from "../../server/seo";
 import { getBrandingConfig } from "../../server/branding";
 import { getLegalConfig } from "../../server/legal";
 import { getPublishedPosts } from "../../server/blog";
+import { getLandingFooterLinks } from "../../server/landingPages";
 import { marketingPageMetadata } from "../../server/pageSeo";
 import { resolveSeoPage } from "../../core/config/seo";
 import { Nav } from "../../ui/marketing/Nav";
@@ -30,6 +31,7 @@ export default async function BlogIndexPage() {
     getBrandingConfig(),
     getLegalConfig(),
     getPublishedPosts(),
+    getLandingFooterLinks(),
   ]);
   const logoUrl = branding.logo?.imageUrl ?? null;
   const { title } = resolveSeoPage(seo, PATH);

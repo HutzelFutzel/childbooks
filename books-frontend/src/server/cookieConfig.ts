@@ -5,7 +5,6 @@
  * consent version are available during SSR (no flash before the client store
  * hydrates). Mirrors `server/siteContent.ts`.
  */
-import { cache } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseDb } from "../lib/firebase";
 import {
@@ -13,8 +12,9 @@ import {
   normalizeCookieConfig,
   type CookieConfig,
 } from "../core/config/cookieConfig";
+import { cachedServerRead } from "./cachedRead";
 
-export const getCookieConfig = cache(async (): Promise<CookieConfig> => {
+export const getCookieConfig = cachedServerRead("appConfig/cookieConfig", async (): Promise<CookieConfig> => {
   try {
     const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "cookieConfig"));
     return normalizeCookieConfig(snap.exists() ? snap.data() : undefined);

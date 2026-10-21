@@ -597,11 +597,24 @@ interface AppConfigState {
   /** Marketing announcement banners (Marketing → Announcements). */
   announcements: AnnouncementsConfig;
   loaded: boolean;
+  /**
+   * Config docs (by `appConfig/{id}`) whose first snapshot has arrived — or
+   * failed. Until then the matching fields above hold DEFAULTS, not the saved
+   * values, so a screen that renders them should wait (see `useConfigDocsStatus`).
+   */
+  loadedDocs: Record<string, boolean>;
+  /** Docs whose listener errored (permission denied, offline…). Their fields stay at defaults. */
+  failedDocs: Record<string, boolean>;
   unsubs: Unsubscribe[];
+  subscribedDocs: Set<string>;
   adminCostsUnsub: Unsubscribe | null;
 
-  /** Begin live subscriptions to the config docs (idempotent). */
-  subscribe: () => void;
+  /**
+   * Begin live subscriptions to the config docs for a surface (idempotent and
+   * additive — calling `subscribe("admin")` after `subscribe("studio")` attaches
+   * only the remaining admin-only listeners).
+   */
+  subscribe: (scope?: "studio" | "account" | "marketing-edit" | "admin") => void;
   stop: () => void;
   /**
    * Live-subscribe to the FULL rate table (admin-only Firestore doc). Called by
@@ -1077,103 +1090,87 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   cookieConfig: createDefaultCookieConfig(),
   announcements: createDefaultAnnouncementsConfig(),
   loaded: false,
+  loadedDocs: {},
+  failedDocs: {},
   unsubs: [],
+  subscribedDocs: new Set<string>(),
 
-  subscribe() {
-    if (get().unsubs.length > 0) return;
+  subscribe(scope = "studio") {
     const db = getFirebaseDb();
-    const unsubs: Unsubscribe[] = [
-      onSnapshot(doc(db, "appConfig", "models"), (snap) => {
-        set({ modelConfig: normalizeModelConfig(snap.exists() ? snap.data() : undefined), loaded: true });
-      }, () => set({ loaded: true })),
-      onSnapshot(doc(db, "appConfig", "artStyles"), (snap) => {
-        set({ artStyles: normalizeArtStylesConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "layouts"), (snap) => {
-        set({ layouts: normalizeLayoutsConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "generationTuning"), (snap) => {
-        set({
-          generationTuning: normalizeGenerationTuningConfig(
-            snap.exists() ? snap.data() : undefined,
-          ),
-        });
-      }),
-      onSnapshot(doc(db, "appConfig", "imageMasks"), (snap) => {
-        set({ imageMasks: normalizeImageMasksConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      // The three age-band documents publish a shared snapshot as well as
-      // store state: a few pure validators resolve bands with nowhere to thread
-      // a config argument. See `core/config/activeAudience`.
-      onSnapshot(doc(db, "appConfig", "ageWriting"), (snap) => {
-        set({ ageWriting: normalizeAgeWritingConfig(snap.exists() ? snap.data() : undefined) });
-        publishAudienceSource(get());
-      }),
-      onSnapshot(doc(db, "appConfig", "audience"), (snap) => {
-        set({ audience: normalizeAudienceConfig(snap.exists() ? snap.data() : undefined) });
-        publishAudienceSource(get());
-      }),
-      onSnapshot(doc(db, "appConfig", "storyCraft"), (snap) => {
-        set({ storyCraft: normalizeStoryCraftConfig(snap.exists() ? snap.data() : undefined) });
-        publishAudienceSource(get());
-      }),
-      onSnapshot(doc(db, "appConfig", "typography"), (snap) => {
-        set({ typography: normalizeTypographyConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "bookLanguages"), (snap) => {
-        set({
-          bookLanguages: normalizeBookLanguagesConfig(snap.exists() ? snap.data() : undefined),
-        });
-      }),
-      // The public projection (per-image estimates only); the raw rate table
-      // is admin-only and subscribed separately via subscribeAdminModelCosts.
-      onSnapshot(doc(db, "appConfig", "modelCostsPublic"), (snap) => {
-        set({ modelCosts: normalizeModelCostTable(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "imageCostStats"), (snap) => {
-        set({ imageCostStats: normalizeImageCostStats(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "latencyStats"), (snap) => {
-        set({ latencyStats: normalizeLatencyStats(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "products"), (snap) => {
+    const subscribed = get().subscribedDocs;
+    const newUnsubs: Unsubscribe[] = [];
+
+    const listen = (
+      docId: string,
+      onNext: (snap: { exists: () => boolean; data: () => unknown; get: (field: string) => unknown }) => void,
+      onError?: () => void,
+    ) => {
+      if (subscribed.has(docId)) return;
+      subscribed.add(docId);
+      newUnsubs.push(
+        onSnapshot(
+          doc(db, "appConfig", docId),
+          (snap) => {
+            onNext(snap);
+            // After `onNext`, so a reader that sees "loaded" also sees the data.
+            const { loadedDocs, failedDocs } = get();
+            if (!loadedDocs[docId] || failedDocs[docId]) {
+              const { [docId]: _recovered, ...stillFailed } = failedDocs;
+              set({ loadedDocs: { ...loadedDocs, [docId]: true }, failedDocs: stillFailed });
+            }
+          },
+          () => {
+            onError?.();
+            set({
+              loadedDocs: { ...get().loadedDocs, [docId]: true },
+              failedDocs: { ...get().failedDocs, [docId]: true },
+            });
+          },
+        ),
+      );
+    };
+
+    const includeStudio = scope === "studio" || scope === "admin";
+    const includeAccount = scope === "account" || includeStudio;
+    const includeMarketingEdit = scope === "marketing-edit" || scope === "admin";
+    const includeAdmin = scope === "admin";
+
+    if (includeAccount) {
+      listen(
+        "models",
+        (snap) => {
+          set({ modelConfig: normalizeModelConfig(snap.exists() ? snap.data() : undefined), loaded: true });
+        },
+        () => set({ loaded: true }),
+      );
+      listen("products", (snap) => {
         set({ products: normalizePublicProductsConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "markets"), (snap) => {
-        // A missing document leaves the registry empty rather than falling back
-        // to the seed list: the seed is the BACKEND's answer for a first run,
-        // and duplicating it here would let the client offer countries the
-        // server hasn't actually opened.
-        set({
-          markets: registryOf(normalizePublicMarkets(snap.exists() ? snap.data() : undefined).enabled),
-          marketsLoaded: true,
-        });
-      }, () => set({ markets: EMPTY_MARKET_REGISTRY, marketsLoaded: true })),
-      onSnapshot(doc(db, "appConfig", "marketCapability"), (snap) => {
-        set({
-          marketCapability: snap.exists()
-            ? normalizeMarketCapability(snap.data())
-            : createEmptyMarketCapability(),
-        });
-      }),
-      onSnapshot(doc(db, "appConfig", "productCapability"), (snap) => {
-        set({
-          productCapability: snap.exists()
-            ? normalizeProductCapability(snap.data())
-            : createEmptyProductCapability(),
-        });
-      }),
-      onSnapshot(doc(db, "appConfig", "pricingSettings"), (snap) => {
+      });
+      listen(
+        "markets",
+        (snap) => {
+          // A missing document leaves the registry empty rather than falling back
+          // to the seed list: the seed is the BACKEND's answer for a first run,
+          // and duplicating it here would let the client offer countries the
+          // server hasn't actually opened.
+          set({
+            markets: registryOf(normalizePublicMarkets(snap.exists() ? snap.data() : undefined).enabled),
+            marketsLoaded: true,
+          });
+        },
+        () => set({ markets: EMPTY_MARKET_REGISTRY, marketsLoaded: true }),
+      );
+      listen("pricingSettings", (snap) => {
         set({ pricingSettings: normalizePricingSettings(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "sparks"), (snap) => {
+      });
+      listen("sparks", (snap) => {
         const sparks = normalizeSparksConfig(snap.exists() ? snap.data() : undefined);
         set({ sparks });
         // The legacy projection is derived from this doc, so a Sparks change has
         // to re-derive it (either doc can arrive first).
         if (!get().referralDocExists) set({ referral: referralConfigFromLegacy(sparks.referral) });
-      }),
-      onSnapshot(doc(db, "appConfig", "referral"), (snap) => {
+      });
+      listen("referral", (snap) => {
         // The backend projects the OLD `sparks.referral` settings until an admin
         // saves the new program once, so the client has to project them too —
         // otherwise the invite entry points stay hidden on a program that is
@@ -1184,65 +1181,144 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
             ? normalizeReferralConfig(snap.data())
             : referralConfigFromLegacy(get().sparks.referral),
         });
-      }),
-      onSnapshot(doc(db, "appConfig", "campaigns"), (snap) => {
-        set({ campaigns: normalizeCampaignsConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "coupons"), (snap) => {
+      });
+      listen("coupons", (snap) => {
         set({ couponsEnabled: snap.exists() && snap.get("enabled") === true });
-      }),
-      onSnapshot(doc(db, "appConfig", "plans"), (snap) => {
+      });
+      listen("plans", (snap) => {
         set({ plans: normalizePublicPlansConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "branding"), (snap) => {
+      });
+      listen("branding", (snap) => {
         set({ branding: normalizeBrandingConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "qrCodes"), (snap) => {
-        set({ qrCodes: normalizeQrCodesConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "seo"), (snap) => {
-        set({ seo: normalizeSeoConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "siteImages"), (snap) => {
-        set({ siteImages: normalizeSiteImagesConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "siteContent"), (snap) => {
-        set({ siteContent: normalizeSiteContentConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "catalogMedia"), (snap) => {
+      });
+      listen("catalogMedia", (snap) => {
         set({
           catalogMedia: normalizeCatalogMediaConfig(snap.exists() ? snap.data() : undefined),
         });
-      }),
-      onSnapshot(doc(db, "appConfig", "prompts"), (snap) => {
-        set({ prompts: normalizePromptsConfig(snap.exists() ? snap.data() : undefined) });
-      }),
+      });
+      listen("legal", (snap) => {
+        set({ legal: normalizeLegalConfig(snap.exists() ? snap.data() : undefined) });
+      });
+      listen("cookieConfig", (snap) => {
+        set({ cookieConfig: normalizeCookieConfig(snap.exists() ? snap.data() : undefined) });
+      });
+    }
+
+    if (includeStudio) {
+      listen("artStyles", (snap) => {
+        set({ artStyles: normalizeArtStylesConfig(snap.exists() ? snap.data() : undefined) });
+      });
+      listen("layouts", (snap) => {
+        set({ layouts: normalizeLayoutsConfig(snap.exists() ? snap.data() : undefined) });
+      });
+      listen("generationTuning", (snap) => {
+        set({
+          generationTuning: normalizeGenerationTuningConfig(
+            snap.exists() ? snap.data() : undefined,
+          ),
+        });
+      });
+      listen("imageMasks", (snap) => {
+        set({ imageMasks: normalizeImageMasksConfig(snap.exists() ? snap.data() : undefined) });
+      });
+      // The three age-band documents publish a shared snapshot as well as
+      // store state: a few pure validators resolve bands with nowhere to thread
+      // a config argument. See `core/config/activeAudience`.
+      listen("ageWriting", (snap) => {
+        set({ ageWriting: normalizeAgeWritingConfig(snap.exists() ? snap.data() : undefined) });
+        publishAudienceSource(get());
+      });
+      listen("audience", (snap) => {
+        set({ audience: normalizeAudienceConfig(snap.exists() ? snap.data() : undefined) });
+        publishAudienceSource(get());
+      });
+      listen("storyCraft", (snap) => {
+        set({ storyCraft: normalizeStoryCraftConfig(snap.exists() ? snap.data() : undefined) });
+        publishAudienceSource(get());
+      });
+      listen("typography", (snap) => {
+        set({ typography: normalizeTypographyConfig(snap.exists() ? snap.data() : undefined) });
+      });
+      listen("bookLanguages", (snap) => {
+        set({
+          bookLanguages: normalizeBookLanguagesConfig(snap.exists() ? snap.data() : undefined),
+        });
+      });
+      // The public projection (per-image estimates only); the raw rate table
+      // is admin-only and subscribed separately via subscribeAdminModelCosts.
+      listen("modelCostsPublic", (snap) => {
+        set({ modelCosts: normalizeModelCostTable(snap.exists() ? snap.data() : undefined) });
+      });
+      listen("imageCostStats", (snap) => {
+        set({ imageCostStats: normalizeImageCostStats(snap.exists() ? snap.data() : undefined) });
+      });
+      listen("latencyStats", (snap) => {
+        set({ latencyStats: normalizeLatencyStats(snap.exists() ? snap.data() : undefined) });
+      });
       // Subscribed rather than fetched once: a saved change has to reach an open
       // studio without waiting for a reload.
-      onSnapshot(doc(db, "appConfig", "guide"), (snap) => {
+      listen("guide", (snap) => {
         set({ guide: normalizeGuideConfig(snap.exists() ? snap.data() : undefined) });
-      }),
+      });
+    }
+
+    if (includeMarketingEdit) {
+      listen("siteImages", (snap) => {
+        set({ siteImages: normalizeSiteImagesConfig(snap.exists() ? snap.data() : undefined) });
+      });
+      listen("siteContent", (snap) => {
+        set({ siteContent: normalizeSiteContentConfig(snap.exists() ? snap.data() : undefined) });
+      });
+      if (!subscribed.has("models")) {
+        set({ loaded: true });
+      }
+    }
+
+    if (includeAdmin) {
+      listen("marketCapability", (snap) => {
+        set({
+          marketCapability: snap.exists()
+            ? normalizeMarketCapability(snap.data())
+            : createEmptyMarketCapability(),
+        });
+      });
+      listen("productCapability", (snap) => {
+        set({
+          productCapability: snap.exists()
+            ? normalizeProductCapability(snap.data())
+            : createEmptyProductCapability(),
+        });
+      });
+      listen("campaigns", (snap) => {
+        set({ campaigns: normalizeCampaignsConfig(snap.exists() ? snap.data() : undefined) });
+      });
+      listen("qrCodes", (snap) => {
+        set({ qrCodes: normalizeQrCodesConfig(snap.exists() ? snap.data() : undefined) });
+      });
+      listen("seo", (snap) => {
+        set({ seo: normalizeSeoConfig(snap.exists() ? snap.data() : undefined) });
+      });
+      listen("prompts", (snap) => {
+        set({ prompts: normalizePromptsConfig(snap.exists() ? snap.data() : undefined) });
+      });
       // NOTE: `emailConfig` is deliberately NOT subscribed here. It holds the
       // support inbox, the contact recipient and every sender identity, so it
       // lives in an admin-only doc and is fetched by the admin editor via
       // `loadEmailConfig()` instead of being streamed to every visitor.
-      onSnapshot(doc(db, "appConfig", "emailStats"), (snap) => {
+      listen("emailStats", (snap) => {
         set({ emailStats: normalizeEmailStats(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "slackConfig"), (snap) => {
+      });
+      listen("slackConfig", (snap) => {
         set({ slackConfig: normalizeSlackConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "legal"), (snap) => {
-        set({ legal: normalizeLegalConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "cookieConfig"), (snap) => {
-        set({ cookieConfig: normalizeCookieConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-      onSnapshot(doc(db, "appConfig", "announcements"), (snap) => {
+      });
+      listen("announcements", (snap) => {
         set({ announcements: normalizeAnnouncementsConfig(snap.exists() ? snap.data() : undefined) });
-      }),
-    ];
-    set({ unsubs });
+      });
+    }
+
+    if (newUnsubs.length > 0) {
+      set({ unsubs: [...get().unsubs, ...newUnsubs], subscribedDocs: subscribed });
+    }
   },
 
   adminCostsUnsub: null,
@@ -1250,7 +1326,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   stop() {
     get().unsubs.forEach((u) => u());
     get().adminCostsUnsub?.();
-    set({ unsubs: [], adminCostsUnsub: null });
+    set({ unsubs: [], subscribedDocs: new Set<string>(), adminCostsUnsub: null, loadedDocs: {}, failedDocs: {} });
   },
 
   subscribeAdminModelCosts() {

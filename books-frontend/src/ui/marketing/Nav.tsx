@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
@@ -9,9 +10,16 @@ import { cn } from "../lib/cn";
 import { isDev } from "../../platform/runtime";
 import { useAuthStore } from "../../state/authStore";
 import { AccountMenu } from "./AccountMenu";
-import { AuthDialog } from "../auth/AuthDialog";
-import { GuestMigrationDialog } from "../auth/GuestMigrationDialog";
 import { DEV_BANNER_HEIGHT_REM } from "../layout/DevEnvironmentBanner";
+
+const AuthDialog = dynamic(
+  () => import("../auth/AuthDialog").then((m) => m.AuthDialog),
+  { ssr: false },
+);
+const GuestMigrationDialog = dynamic(
+  () => import("../auth/GuestMigrationDialog").then((m) => m.GuestMigrationDialog),
+  { ssr: false },
+);
 
 // `DevEnvironmentBanner` scrolls away with the page (see its own comment for
 // why it can't just be `sticky`), so once it's out of view this header slides
@@ -45,6 +53,8 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
   const authReady = useAuthStore((s) => s.ready);
   const user = useAuthStore((s) => s.user);
   const isAdmin = useAuthStore((s) => s.isAdmin);
+  const dialogOpen = useAuthStore((s) => s.dialogOpen);
+  const pendingMigration = useAuthStore((s) => s.pendingMigration);
   const signedIn = authReady && Boolean(user) && !user?.isAnonymous;
   const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
   const signOutUser = useAuthStore((s) => s.signOutUser);
@@ -220,8 +230,8 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
 
       {/* Mounted here so "Sign in" opens in place on every marketing page,
           instead of round-tripping through /studio just to see a sign-in form. */}
-      <AuthDialog />
-      <GuestMigrationDialog />
+      {dialogOpen && <AuthDialog />}
+      {pendingMigration && <GuestMigrationDialog />}
     </>
   );
 }

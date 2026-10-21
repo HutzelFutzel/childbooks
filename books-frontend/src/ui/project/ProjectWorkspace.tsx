@@ -16,10 +16,13 @@ const GuideStudio = dynamic(() => import("../guide/GuideStudio").then((m) => m.G
 });
 
 export function ProjectWorkspace() {
-  const project = useProjectsStore((s) => s.current());
-  if (!project) return null;
+  const currentId = useProjectsStore((s) => s.currentId);
+  const hasProject = useProjectsStore((s) =>
+    s.currentId !== null && s.projects.some((p) => p.id === s.currentId),
+  );
+  if (!currentId || !hasProject) return null;
 
   // The Chat studio derives where the book is from the book itself. Keyed by id
   // so its local state resets when switching books.
-  return <GuideStudio key={project.id} />;
+  return <GuideStudio key={currentId} />;
 }

@@ -16,16 +16,20 @@ import {
   type BlogPost,
   type BlogPostSummary,
 } from "../core/config/blog";
+import { cachedServerRead } from "./cachedRead";
 
 /** Published posts (card metadata), newest first. */
-export const getPublishedPosts = cache(async (): Promise<BlogPostSummary[]> => {
-  try {
-    const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "blogIndex"));
-    return normalizeBlogIndex(snap.exists() ? snap.data() : undefined).posts;
-  } catch {
-    return [];
-  }
-});
+export const getPublishedPosts = cachedServerRead(
+  "appConfig/blogIndex",
+  async (): Promise<BlogPostSummary[]> => {
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "blogIndex"));
+      return normalizeBlogIndex(snap.exists() ? snap.data() : undefined).posts;
+    } catch {
+      return [];
+    }
+  },
+);
 
 /** A single published post by slug, or null when missing/draft/unreadable. */
 export const getPostBySlug = cache(async (slug: string): Promise<BlogPost | null> => {

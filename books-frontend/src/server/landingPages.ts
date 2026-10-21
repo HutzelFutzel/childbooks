@@ -24,16 +24,20 @@ import {
   type LandingPage,
   type LandingPagesIndex,
 } from "../core/config/landingPages";
+import { cachedServerRead } from "./cachedRead";
 
 /** Published + retired pages (the routing projection). */
-export const getLandingIndex = cache(async (): Promise<LandingPagesIndex> => {
-  try {
-    const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "landingPagesIndex"));
-    return normalizeLandingIndex(snap.exists() ? snap.data() : undefined);
-  } catch {
-    return createDefaultLandingIndex();
-  }
-});
+export const getLandingIndex = cachedServerRead(
+  "appConfig/landingPagesIndex",
+  async (): Promise<LandingPagesIndex> => {
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "landingPagesIndex"));
+      return normalizeLandingIndex(snap.exists() ? snap.data() : undefined);
+    } catch {
+      return createDefaultLandingIndex();
+    }
+  },
+);
 
 /** A published page, or null when missing, draft, retired or unreadable. */
 export const getLandingPage = cache(

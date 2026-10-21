@@ -4,6 +4,7 @@ import { ArrowRight, Clock, HelpCircle, ShieldCheck, Sparkles } from "lucide-rea
 import { getBrandingConfig } from "../../server/branding";
 import { getLegalConfig } from "../../server/legal";
 import { getSeoConfig } from "../../server/seo";
+import { getLandingFooterLinks } from "../../server/landingPages";
 import { marketingPageMetadata } from "../../server/pageSeo";
 import { resolveSeoPage } from "../../core/config/seo";
 import { legalUrlByRole } from "../../core/config/legal";
@@ -27,6 +28,7 @@ export default async function ContactPage() {
     getBrandingConfig(),
     getLegalConfig(),
     getSeoConfig(),
+    getLandingFooterLinks(),
   ]);
   const logoUrl = branding.logo?.imageUrl ?? null;
   const privacyUrl = legalUrlByRole(legal, "privacy") || undefined;

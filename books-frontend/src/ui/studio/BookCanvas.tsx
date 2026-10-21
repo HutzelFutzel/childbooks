@@ -25,6 +25,7 @@ import {
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { getCursor } from "../../core/versioning";
 import { staleIllustrationSpreadIds } from "../../state/ai";
+import { prefetchBlob } from "../../state/blobs";
 import { useJobsStore } from "../../state/jobsStore";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
@@ -131,6 +132,23 @@ export function BookCanvas() {
     if (displays.length === 0) return;
     if (!displays.some((d) => d.id === activeId)) setEditingDisp(displays[0].id);
   }, [displays, activeId, setEditingDisp]);
+
+  // Prefetch adjacent spreads' web blobs so switching spreads in the editor
+  // renders from memory immediately.
+  useEffect(() => {
+    if (!activeDisp) return;
+    const idx = displays.findIndex((d) => d.id === activeDisp.id);
+    if (idx < 0) return;
+    for (const neighborIdx of [idx - 1, idx + 1]) {
+      const neighbor = displays[neighborIdx];
+      if (!neighbor) continue;
+      for (const { entry } of displayEntries(neighbor)) {
+        const tree = project.illustrations?.[entry.page.id];
+        const blobId = (tree ? getCursor(tree).content.blobId : undefined) ?? entry.page.blobId;
+        prefetchBlob(blobId, "web");
+      }
+    }
+  }, [activeDisp, displays, project.illustrations]);
 
   const activePageId = useMemo(() => {
     if (!activeDisp) return undefined;

@@ -6,7 +6,6 @@
  * available during SSR (no flash before the client store hydrates). Mirrors
  * `server/cookieConfig.ts`.
  */
-import { cache } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseDb } from "../lib/firebase";
 import {
@@ -14,12 +13,16 @@ import {
   normalizeAnnouncementsConfig,
   type AnnouncementsConfig,
 } from "../core/config/announcements";
+import { cachedServerRead } from "./cachedRead";
 
-export const getAnnouncementsConfig = cache(async (): Promise<AnnouncementsConfig> => {
-  try {
-    const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "announcements"));
-    return normalizeAnnouncementsConfig(snap.exists() ? snap.data() : undefined);
-  } catch {
-    return createDefaultAnnouncementsConfig();
-  }
-});
+export const getAnnouncementsConfig = cachedServerRead(
+  "appConfig/announcements",
+  async (): Promise<AnnouncementsConfig> => {
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "announcements"));
+      return normalizeAnnouncementsConfig(snap.exists() ? snap.data() : undefined);
+    } catch {
+      return createDefaultAnnouncementsConfig();
+    }
+  },
+);

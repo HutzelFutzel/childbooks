@@ -49,6 +49,7 @@ import { fulfillPaidOrder, sendConfirmationIfPlaced } from "./stripe";
 import { readPrintPrepForAdmin } from "./printPrep";
 import { sendOrderConfirmationEmail, sendOrderFailedEmail, sendOrderShippedEmail } from "./email/triggers";
 import { toUsd } from "./finance";
+import { orderRecordsCache } from "./printOrderRecordsCache";
 import { computeOrderAnalytics } from "../../books-frontend/src/core/orders/analytics";
 import { countryLabel, normalizeCountry } from "../../books-frontend/src/core/analytics/markets";
 import {
@@ -81,13 +82,26 @@ async function actorOf(req: Request): Promise<string> {
   }
 }
 
-/** Newest first; filtering happens in memory (every order is one small document). */
-async function loadRecords(): Promise<PrintOrderRecord[]> {
-  await ensurePrintOrdersBackfilled();
-  const snap = await db().collection(PRINT_ORDERS).orderBy("createdAt", "desc").limit(SCAN_CAP).get();
-  const now = Date.now();
-  return snap.docs.map((d) => normalizeRecord(d.id, d.data() as Record<string, unknown>, now));
+/**
+ * Newest first; filtering happens in memory (every order is one small document).
+ * Cached briefly and shared between the list and the report — see
+ * `printOrderRecordsCache.ts` for the invalidation rules.
+ */
+async function loadRecords(opts?: { fresh?: boolean }): Promise<PrintOrderRecord[]> {
+  return orderRecordsCache.get(
+    "all",
+    async () => {
+      await ensurePrintOrdersBackfilled();
+      const snap = await db().collection(PRINT_ORDERS).orderBy("createdAt", "desc").limit(SCAN_CAP).get();
+      const now = Date.now();
+      return snap.docs.map((d) => normalizeRecord(d.id, d.data() as Record<string, unknown>, now));
+    },
+    opts,
+  );
 }
+
+/** `?fresh=1` — an explicit refresh that must not be answered from the cache. */
+const wantsFresh = (req: Request): boolean => str(req.query.fresh) === "1";
 
 /** Sandbox and live orders live side by side; by default show the environment being served. */
 function inScope(r: PrintOrderRecord, env: string): boolean {
@@ -112,7 +126,7 @@ export function registerPrintOrderAdminRoutes(app: Express): void {
       const q = str(req.query.q).toLowerCase();
       const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
 
-      let rows = (await loadRecords()).filter((r) => inScope(r, env));
+      let rows = (await loadRecords({ fresh: wantsFresh(req) })).filter((r) => inScope(r, env));
       if (state && (PRINT_ORDER_STATES as readonly string[]).includes(state)) {
         rows = rows.filter((r) => r.state === (state as PrintOrderState));
       }
@@ -144,7 +158,7 @@ export function registerPrintOrderAdminRoutes(app: Express): void {
       const env = str(req.query.env) || activeEnv;
       const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
       const country = normalizeCountry(str(req.query.country));
-      const records = (await loadRecords()).filter((r) => inScope(r, env));
+      const records = (await loadRecords({ fresh: wantsFresh(req) })).filter((r) => inScope(r, env));
 
       // One rate per currency actually present, instead of a conversion per order.
       const currencies = new Set<string>(["USD"]);

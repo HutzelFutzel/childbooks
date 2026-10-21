@@ -5,7 +5,6 @@
  * the public `appConfig/branding` doc (public read rules), mirroring
  * {@link getPublishedBook}. Returns the watermark or null when none is set.
  */
-import { cache } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseDb } from "../lib/firebase";
 import {
@@ -14,9 +13,10 @@ import {
   type BrandingConfig,
   type BrandingWatermark,
 } from "../core/config/branding";
+import { cachedServerRead } from "./cachedRead";
 
 /** Fetch the full branding config, or defaults if unset/unreadable. */
-export const getBrandingConfig = cache(async (): Promise<BrandingConfig> => {
+export const getBrandingConfig = cachedServerRead("appConfig/branding", async (): Promise<BrandingConfig> => {
   try {
     const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "branding"));
     return normalizeBrandingConfig(snap.exists() ? snap.data() : undefined);

@@ -8,6 +8,7 @@ import { marketingPageMetadata } from "../../server/pageSeo";
 import { resolveSeoPage } from "../../core/config/seo";
 import { getPublicPlans } from "../../server/plans";
 import { getCatalogMedia, getPricingSettings, getPublicProducts } from "../../server/products";
+import { getLandingFooterLinks } from "../../server/landingPages";
 import { offerablePublicProducts } from "../../core/config/products";
 import { Nav } from "../../ui/marketing/Nav";
 import { Footer } from "../../ui/marketing/Footer";
@@ -49,6 +50,7 @@ export default async function PricingPage({
       getPricingSettings(),
       getPublicPlans(),
       getCatalogMedia(),
+      getLandingFooterLinks(),
     ]);
 
   const logoUrl = branding.logo?.imageUrl ?? null;

@@ -23,6 +23,7 @@ import {
   type NavNode,
 } from "./adminNav";
 import type { CatalogSegment } from "./adminTabStore";
+import { useAdminBusy } from "./LoadingState";
 
 const STORAGE_KEY = "admin.sidebar.openDomains.v2";
 
@@ -390,6 +391,8 @@ function SidebarLeaf({
   const active = hrefIsActive(leaf.href, pathname, catalogSegment);
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  // Light the top progress bar too — the spinner on this one row is easy to miss.
+  useAdminBusy(isPending);
 
   return (
     <Link

@@ -6,13 +6,8 @@
  * data layer moves off IndexedDB.
  */
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
-import { getAnalytics, isSupported, type Analytics } from "firebase/analytics";
-import {
-  getToken as getAppCheckToken,
-  initializeAppCheck,
-  ReCaptchaEnterpriseProvider,
-  type AppCheck,
-} from "firebase/app-check";
+import type { Analytics } from "firebase/analytics";
+import type { AppCheck } from "firebase/app-check";
 import { connectAuthEmulator, getAuth, type Auth } from "firebase/auth";
 import {
   connectFirestoreEmulator,
@@ -156,6 +151,7 @@ export function initAppCheck(): Promise<AppCheck | null> {
     if (useEmulators()) return null;
     if (!APP_CHECK_SITE_KEY) return null;
     try {
+      const { initializeAppCheck, ReCaptchaEnterpriseProvider } = await import("firebase/app-check");
       return initializeAppCheck(getFirebaseApp(), {
         provider: new ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY),
         isTokenAutoRefreshEnabled: true,
@@ -180,7 +176,8 @@ export async function appCheckToken(): Promise<string | null> {
   const appCheck = await initAppCheck();
   if (!appCheck) return null;
   try {
-    return (await getAppCheckToken(appCheck, /* forceRefresh */ false)).token;
+    const { getToken } = await import("firebase/app-check");
+    return (await getToken(appCheck, /* forceRefresh */ false)).token;
   } catch {
     return null;
   }
@@ -201,6 +198,7 @@ export function initAnalytics(): Promise<Analytics | null> {
     if (useEmulators()) return null; // nothing to measure against local emulators
     if (!config.measurementId) return null;
     try {
+      const { getAnalytics, isSupported } = await import("firebase/analytics");
       if (!(await isSupported())) return null;
       return getAnalytics(getFirebaseApp());
     } catch {

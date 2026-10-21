@@ -122,6 +122,8 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
     const timer = setInterval(() => setPulse((n) => n + 1), 15_000);
     return () => clearInterval(timer);
   }, [drawing]);
+  const activeIdsKey = [...journey.activeUnitIds].sort().join("|");
+  const failedIdsKey = Object.keys(journey.failedUnits).sort().join("|");
   useEffect(() => {
     if (!loaded || !drawPhase || drawPhase === "done") return;
     if (followed.current !== drawPhase) {
@@ -129,16 +131,23 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
       setView(drawPhase === "cast" ? "cast" : "pages");
     }
     void continueDrawBook().catch((err) => useChatStudio.setState({ error: describeError(err) }));
-  }, [loaded, drawPhase, drawJob, project, journey.activeUnitIds, setView, pulse]);
+  }, [loaded, drawPhase, drawJob, projectId, activeIdsKey, setView, pulse]);
 
   // News the book reports on its own: each is said once. The lines that ask
   // for a well's buttons are said with the well (`useWellConversation`).
   const floor = useChatStudio((s) => s.floor);
   // Portraits finished before this visit are the away summary's news.
   const openedAt = useRef(Date.now());
+  const portraitKey = namedCast(briefOf(project.config))
+    .map((m) => `${m.id}:${currentPortrait(project, m.id)?.blobId ?? ""}`)
+    .join("|");
+  const hcCase = journey.hardcover?.case ?? "";
+  const hcPages = journey.hardcover?.pages ?? 0;
   useEffect(() => {
     if (!loaded || floor > 0) return;
-    const announced = portraitAnnouncement(project, journey, openedAt.current, said);
+    const current = liveProject(projectId);
+    if (!current) return;
+    const announced = portraitAnnouncement(current, journey, openedAt.current, said);
     if (announced) {
       say(announced.lines, { unprompted: true, marks: announced.marks, receipt: { parts: [], thumbs: announced.thumbs } });
       // The pictures that just arrived are what the book shows: the line above
@@ -155,7 +164,8 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
         say([{ key: "hardcoverSpread", priority: "result", vars: { count: hc.pages } }], { marks: [mark], unprompted: true });
       }
     }
-  }, [loaded, floor, project, journey, say, said]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, floor, projectId, portraitKey, activeIdsKey, failedIdsKey, journey.phase, hcCase, hcPages, say, said]);
 }
 
 /** More than this many, and "everyone" reads better than a list of names. */

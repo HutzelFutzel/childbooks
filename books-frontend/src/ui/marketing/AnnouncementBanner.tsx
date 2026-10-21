@@ -259,7 +259,8 @@ export function AnnouncementBanner({ config }: { config: AnnouncementsConfig }) 
     pathname?.startsWith("/studio") || pathname?.startsWith("/admin") || pathname?.startsWith("/internal");
   const hasAny = config.banners.length > 0 && !isAppShell;
   const accessLevel = useAuthStore((s) => s.accessLevel);
-  const authResolved = accessLevel !== "loading";
+  const ready = useAuthStore((s) => s.ready);
+  const authResolved = ready || accessLevel !== "loading";
   const isSignedIn = accessLevel === "full" || accessLevel === "unverified";
 
   // Ticks once a second — drives both re-evaluating the schedule window (so a

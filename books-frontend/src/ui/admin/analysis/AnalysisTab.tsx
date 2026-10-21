@@ -16,6 +16,7 @@ import { useAdminMarket } from "../../../state/adminMarketStore";
 import { useAdminPayments } from "../../../state/adminPaymentsStore";
 import { useAdminTab, type AnalysisTabId } from "../adminTabStore";
 import { SectionGate } from "../AccessGate";
+import { LoadingState, useAdminBusy } from "../LoadingState";
 import { Button } from "../../components/Button";
 import { Tabs } from "../../components/Tabs";
 import { Kpis } from "./Kpis";
@@ -31,16 +32,8 @@ import { downloadCsv } from "./csv";
 import { fmtRelative, toDateInput } from "./format";
 
 function SubTabLoader() {
-  return (
-    <div
-      className="flex min-h-48 flex-col items-center justify-center gap-3 py-16 text-ink-400"
-      role="status"
-      aria-live="polite"
-    >
-      <Loader2 className="size-6 animate-spin text-brand-400" />
-      <p className="text-sm font-medium text-ink-500">Loading analytics…</p>
-    </div>
-  );
+  useAdminBusy(true);
+  return <LoadingState label="Loading analytics…" className="min-h-48" />;
 }
 
 const PaymentsAnalysis = dynamic(() => import("./PaymentsAnalysis").then((m) => m.PaymentsAnalysis), { loading: SubTabLoader });
@@ -90,6 +83,7 @@ export function AnalysisTab() {
   const init = useAdminAnalytics((s) => s.init);
   const refresh = useAdminAnalytics((s) => s.refresh);
   const loading = useAdminAnalytics((s) => s.loading);
+  useAdminBusy(loading);
   const error = useAdminAnalytics((s) => s.error);
   const overview = useAdminAnalytics((s) => s.overview);
   const funnel = useAdminAnalytics((s) => s.funnel);

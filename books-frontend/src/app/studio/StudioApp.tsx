@@ -58,6 +58,7 @@ export default function StudioApp() {
   const route = useMemo(() => parseStudioPath(pathname), [pathname]);
   const projects = useProjectsStore((s) => s.projects);
   const loadProjects = useProjectsStore((s) => s.load);
+  const loadSingleProject = useProjectsStore((s) => s.loadSingleProject);
   const loadSettings = useSettingsStore((s) => s.load);
   const projectsLoaded = useProjectsStore((s) => s.loaded);
   const currentId = useProjectsStore((s) => s.currentId);
@@ -119,13 +120,24 @@ export default function StudioApp() {
     const loadingUid = uid;
     setProjectsOwnerUid(null);
     closeProject();
+    const initialRoute = parseStudioPath(window.location.pathname);
+    if (initialRoute.kind === "project") {
+      // Fast-path direct `/studio/{bookId}` entry: fetch the single requested
+      // book first so the workspace can mount without waiting for the entire
+      // library list to download and parse.
+      void loadSingleProject(initialRoute.bookId).then((found) => {
+        if (found && useAuthStore.getState().user?.uid === loadingUid) {
+          setProjectsOwnerUid(loadingUid);
+        }
+      });
+    }
     void loadProjects().then(() => {
       if (useAuthStore.getState().user?.uid === loadingUid) {
         setProjectsOwnerUid(loadingUid);
       }
     });
     void loadSettings();
-  }, [uid, closeProject, loadProjects, loadSettings]);
+  }, [uid, closeProject, loadProjects, loadSingleProject, loadSettings]);
 
   // The route is the source of truth for both the active book and workflow
   // destination. A route id is never trusted on its own: it can only select a
@@ -134,7 +146,6 @@ export default function StudioApp() {
     if (
       !uid ||
       accessLevel === "loading" ||
-      !projectsLoaded ||
       projectsOwnerUid !== uid
     ) {
       return;
@@ -147,6 +158,7 @@ export default function StudioApp() {
     }
 
     if (route.kind === "library") {
+      if (!projectsLoaded) return;
       rejectedBookRef.current = null;
       // Creation opens the book before navigation completes. Keep that book
       // selected and show the route loader instead of briefly rendering its
@@ -158,6 +170,7 @@ export default function StudioApp() {
 
     const project = projects.find((candidate) => candidate.id === route.bookId);
     if (!project) {
+      if (!projectsLoaded) return;
       closeProject();
       if (rejectedBookRef.current !== route.bookId) {
         rejectedBookRef.current = route.bookId;
@@ -454,7 +467,7 @@ export default function StudioApp() {
     route.kind === "invalid" ||
     enteringProject ||
     (route.kind === "project" && !inProject) ||
-    (uid !== null && (!projectsLoaded || projectsOwnerUid !== uid));
+    (uid !== null && !inProject && (!projectsLoaded || projectsOwnerUid !== uid));
 
   // The Chat studio shows work and Sparks in the conversation itself.
   const chatStudio = inProject;

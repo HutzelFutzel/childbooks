@@ -31,6 +31,7 @@ import { registerProviderRoutes } from "./providers";
 import { registerLuluRoutes, registerPrintWebhookRoute } from "./lulu";
 import { registerPrintSyncAdminRoutes, registerPrintSyncDevRoute } from "./printSync";
 import { registerPrintOrderAdminRoutes } from "./printOrderAdmin";
+import { registerOrderRecordsInvalidation } from "./printOrderRecordsCache";
 import { registerPrintPrepAdminRoutes } from "./printPrep";
 import { registerAiRoutes } from "./ai";
 import { registerGenerationQuoteRoutes } from "./generationQuotes";
@@ -204,6 +205,8 @@ export function createApp(): Express {
   app.use("/session", requireAuth);
   app.use("/admin", requireVerified, requireAdmin, permissionGate());
 
+  // Ahead of every /admin/orders route (incl. print-prep's): a write drops the cached order scan.
+  registerOrderRecordsInvalidation(app);
   registerLuluRoutes(app);
   registerPrintSyncAdminRoutes(app);
   registerPrintPrepAdminRoutes(app);

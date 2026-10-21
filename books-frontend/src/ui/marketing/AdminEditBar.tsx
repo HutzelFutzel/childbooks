@@ -40,7 +40,7 @@ export function AdminEditBar() {
   }, [setAdmin]);
 
   useEffect(() => {
-    if (admin && enabled) subscribe();
+    if (admin && enabled) subscribe("marketing-edit");
   }, [admin, enabled, subscribe]);
 
   if (!admin) return null;
