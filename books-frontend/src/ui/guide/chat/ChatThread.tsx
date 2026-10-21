@@ -181,7 +181,9 @@ export function ChatThread({
                     )}
                     {group.messages.map((message) => (
                       <motion.div key={message.id} variants={lineRise} initial="hidden" animate="show">
-                        {isQuietMessage(message) && !message.receipt ? (
+                        {isQuietMessage(message) &&
+                        !message.keys?.includes("foundCast") &&
+                        !message.receipt?.thumbs?.length ? (
                           <GuideNotice text={messageText(message, locale)} sparks={message.keys?.includes("sparksNotice")} />
                         ) : (
                           <GuideLine
@@ -289,7 +291,8 @@ function GuideLine({
   onOpenUnit: (unitId: string, view: BookViewId) => void;
 }) {
   const receiptOnly = message.keys?.includes("receipt");
-  const notice = message.keys?.includes("notice");
+  const notice = !receiptOnly && message.keys?.includes("notice");
+  const thumbs = message.receipt?.thumbs;
   return (
     <div className="flex flex-col gap-2">
       {notice ? (
@@ -303,12 +306,8 @@ function GuideLine({
       )}
       {message.keys?.includes("foundCast") ? (
         <CastStrip project={project} onOpenCast={onOpenCast} />
-      ) : message.receipt ? (
-        <Receipt
-          receipt={message.receipt}
-          action={null}
-          onOpenUnit={onOpenUnit}
-        />
+      ) : thumbs && thumbs.length > 0 ? (
+        <ReceiptThumbs thumbs={thumbs} onOpenUnit={onOpenUnit} />
       ) : null}
       {message.fit && (
         <StoryFitCard
@@ -358,30 +357,19 @@ function CastStrip({
   );
 }
 
-/** One small row under the guide line. Values dark; an inference named once. */
-function Receipt({
-  receipt,
-  action,
+/** Clickable thumbnails under a guide line (e.g. newly drawn portraits). */
+function ReceiptThumbs({
+  thumbs,
   onOpenUnit,
 }: {
-  receipt: NonNullable<GuideMessage["receipt"]>;
-  action: React.ReactNode;
+  thumbs: readonly ReceiptThumb[];
   onOpenUnit: (unitId: string, view: BookViewId) => void;
 }) {
   return (
-    <div className="flex w-fit max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-ink-900/8 bg-white/90 px-3 py-1.5 text-[13px] text-ink-500 shadow-[0_1px_3px_rgba(20,22,58,0.05),inset_0_1px_0_rgba(255,255,255,0.9)]">
-      {receipt.thumbs?.map((thumb) => (
+    <div className="flex w-fit max-w-full flex-wrap items-center gap-2">
+      {thumbs.map((thumb) => (
         <ReceiptThumbButton key={`${thumb.unitId}:${thumb.blobId}`} thumb={thumb} onOpenUnit={onOpenUnit} />
       ))}
-      {receipt.parts.map((part, index) => (
-        <span key={index} className="inline-flex items-center gap-1">
-          {index > 0 && <span aria-hidden className="text-ink-300">·</span>}
-          {part.label && <span>{part.label}</span>}
-          <span className="font-medium text-ink-900">{part.value}</span>
-          {part.inferred && <span className="text-ink-400">inferred</span>}
-        </span>
-      ))}
-      {action}
     </div>
   );
 }

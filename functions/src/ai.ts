@@ -61,6 +61,7 @@ import {
   type LoadedDrawing,
 } from "./customStyles";
 import { coverSpread } from "../../books-frontend/src/core/book/units";
+import { coverLinesOf } from "../../books-frontend/src/core/book/coverLines";
 import { generateStoryDraft } from "../../books-frontend/src/core/pipeline/storyDraft";
 import { translateStory } from "../../books-frontend/src/core/pipeline/storyTranslate";
 import { checkStoryFit } from "../../books-frontend/src/core/pipeline/storyFit";
@@ -407,6 +408,7 @@ export function registerAiRoutes(app: Express): void {
           ),
           story,
           title: project.title,
+          subtitle: coverLinesOf(project).subtitle,
           sourceLocale,
           targetLocale: target,
           creds: { apiKey: apiKeyFor(model.provider) },
@@ -522,6 +524,9 @@ export function registerAiRoutes(app: Express): void {
           artworkLooks,
           signal: requestDeadline(),
         }),
+        // Without the bound action's parameters the analysis ran at the provider's
+        // default thinking level, with no timeout of its own.
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,

@@ -153,6 +153,7 @@ export function normalizeStudioAuthoringState(input: unknown): StudioAuthoringSt
           startedAt: raw.storyRun.startedAt,
           status: raw.storyRun.status,
           error: typeof raw.storyRun.error === "string" ? raw.storyRun.error : undefined,
+          translating: raw.storyRun.translating === true ? true : undefined,
         })
       : undefined;
 

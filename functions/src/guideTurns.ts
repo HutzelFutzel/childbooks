@@ -174,8 +174,16 @@ export async function recordGuideTurn(args: RecordGuideTurnArgs): Promise<string
         intent: args.result.intent,
         confidence: args.result.confidence,
         proposedSlots: args.proposedSlots,
-        refused: args.result.refused.slice(0, 8),
+        // The value as text: the logger cuts nested objects off at `[MaxDepth]`,
+        // which hid exactly what the model had sent.
+        refused: args.result.refused.slice(0, 8).map((claim) => ({
+          ...claim,
+          value: JSON.stringify(claim.value ?? null).slice(0, 600),
+        })),
         refusedCommands: (args.result.refusedCommands ?? []).slice(0, 8),
+        // What was accepted, so a story that started on its own can be traced to the
+        // call that started it.
+        commands: (args.result.commands ?? []).slice(0, 8).map((call) => JSON.stringify(call).slice(0, 300)),
         repairs: args.result.repairs,
         model: `${args.model.provider}:${args.model.id}`,
         latencyMs: args.latencyMs,

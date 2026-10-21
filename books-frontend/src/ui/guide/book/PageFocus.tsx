@@ -15,7 +15,7 @@ import type { Project } from "../../../core/types";
 import { useStudio } from "../../studio/StudioContext";
 import { useStudioPanelStore } from "../../studio/studioPanelStore";
 import { useGuideT } from "../intl";
-import { BusyLine, BusyPill } from "./BusyPill";
+import { BusyPill } from "./BusyPill";
 import { ModeSwitch } from "./ModeSwitch";
 import { sameTarget } from "../../../core/guide/target";
 import { useChatStudio } from "../../../state/chatStudio";
@@ -167,9 +167,6 @@ export function PageFocus({
         </AnimatePresence>
       </div>
       <div className="mx-auto w-full max-w-2xl shrink-0 px-4 pt-2 pb-4">
-        <div className="sm:hidden">
-          <BusyLine project={project} />
-        </div>
         {composer}
       </div>
     </div>

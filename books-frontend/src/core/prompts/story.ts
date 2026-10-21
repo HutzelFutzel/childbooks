@@ -225,6 +225,7 @@ export function buildStoryTranslatePrompt(
   title: string | undefined,
   sourceLocale?: string | null,
   ctx?: PromptContext | null,
+  subtitle?: string,
 ): StoryPromptParts {
   const baseCraft = resolveStoryCraftFor(config.ageRangeId, ctx);
   const targetLanguage = getBookLanguage(config.contentLocale);
@@ -245,11 +246,13 @@ export function buildStoryTranslatePrompt(
       sourceLanguage: sourceLanguage.englishName,
       targetLanguage: targetLanguage.englishName,
       currentTitle: title?.trim() ?? "",
+      currentSubtitle: subtitle?.trim() ?? "",
       currentStory: story.trim(),
       deviceGuidance,
     },
     flags: {
       hasTitle: Boolean(title?.trim()),
+      hasSubtitle: Boolean(subtitle?.trim()),
       hasDevice: Boolean(deviceGuidance),
     },
   });

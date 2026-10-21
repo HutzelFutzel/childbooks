@@ -17,7 +17,7 @@
  * project store the rest of the studio uses.
  */
 import type { AgentWell as ChatStudioAgentWell } from "../../state/guideAgent";
-import { BusyLine, BusyPill } from "./book/BusyPill";
+import { BusyPill, showBusy, useBusyPhrase } from "./book/BusyPill";
 import { useBookBusy } from "../../state/useBookBusy";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { describePages, interiorUnitIds, pagesNamedIn } from "../../core/book/pageRefs";
@@ -467,7 +467,6 @@ function ChatShell({
           onDefault={talk.beside ? ignoreDefault : registerDefault}
         />
       </div>
-      <BusyLine project={project} />
     </div>
   );
 
@@ -491,7 +490,7 @@ function ChatShell({
 
   const composer = (
     <div className="flex flex-col gap-2">
-      <ActivityStatus activity={activity} activePortraitNames={activePortraitNames} />
+      <ActivityStatus activity={activity} activePortraitNames={activePortraitNames} project={project} />
       {/* Once the pages exist, what can be typed stays in view whatever else is
           open: there is no next step to protect, and it is how a reader finds the
           chat can change the text, not only the picture. */}
@@ -994,7 +993,12 @@ function BookPane({
             <StorySourceSwitch value={journey.entry} onChange={(entry) => void useChatStudio.getState().chooseEntry(entry)} />
           )}
           {journey.locked && journey.pages.total > 0 && journey.pages.done < journey.pages.total ? (
-            <PagesProgress done={journey.pages.done} total={journey.pages.total} />
+            <PagesProgress
+              done={journey.pages.done}
+              total={journey.pages.total}
+              onClick={busy.items.length > 0 ? () => showBusy(busy.items) : undefined}
+              title={orderT("busyHold")}
+            />
           ) : (
             journey.locked && <BusyPill project={project} />
           )}
@@ -1085,10 +1089,24 @@ function StorySourceSwitch({
   );
 }
 
-function PagesProgress({ done, total }: { done: number; total: number }) {
+function PagesProgress({
+  done,
+  total,
+  onClick,
+  title,
+}: {
+  done: number;
+  total: number;
+  onClick?: () => void;
+  title?: string;
+}) {
   return (
-    <div
-      className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-magic-100/70 px-2.5 text-xs font-semibold text-magic-700 ring-1 ring-inset ring-magic-300/70"
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      title={title}
+      className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-magic-100/70 px-2.5 text-xs font-semibold text-magic-700 ring-1 ring-inset ring-magic-300/70 transition enabled:hover:bg-magic-100 disabled:cursor-default"
       aria-live="polite"
     >
       <span className="relative flex size-1.5 shrink-0" aria-hidden>
@@ -1106,7 +1124,7 @@ function PagesProgress({ done, total }: { done: number; total: number }) {
       <span className="tabular-nums">
         {done}/{total}
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -1190,13 +1208,17 @@ const SLOW_ACTIVITY_MS = 15_000;
 function ActivityStatus({
   activity,
   activePortraitNames = [],
+  project,
 }: {
   activity: GuideActivity | null;
   activePortraitNames?: readonly string[];
+  project: Project;
 }) {
   const t = useGuideT("chrome");
   const list = useGuideList();
   const reduce = useReducedMotion();
+  const busy = useBookBusy(project);
+  const phrase = useBusyPhrase();
   const id = activity?.id ?? null;
   // A wait that runs long says so, so a quiet minute doesn't read as a failure.
   const [slow, setSlow] = useState(false);
@@ -1207,36 +1229,100 @@ function ActivityStatus({
     const timer = window.setTimeout(() => setSlow(true), SLOW_ACTIVITY_MS);
     return () => window.clearTimeout(timer);
   }, [id]);
-  if (!activity) return null;
-  // A message in flight shows as the guide's typing bubble in the thread + the
-  // composer ring trace, unless it runs past the slow threshold.
-  if (activity.id === "understanding" && !slow) return null;
-  const text =
-    activity.id === "drawingPages" && activity.total > 0
-      ? t("drawingPages", { n: Math.min(activity.done + 1, activity.total), total: activity.total })
-      : activity.id === "drawingPeople" && activePortraitNames.length > 0
-        ? t("drawingPeopleNamed", { names: list(activePortraitNames) })
-        : t(activity.id);
-  const hint =
-    activity.id === "drawingPeople"
-      ? t("drawingPeopleHint")
-      : activity.id === "preparingBook"
-        ? t("preparingBookHint")
-        : activity.id === "drawingPages"
-          ? t("drawingPagesHint")
-          : slow
-            ? t("stillWorking")
+
+  // A message in flight shows in the thread (TypingDots) + the send button spinner,
+  // unless it runs past the slow threshold. If background drawing is happening at the
+  // same time, keep showing the background drawing status instead of flickering.
+  const effectiveActivity =
+    activity?.id === "understanding" && !slow ? null : activity;
+
+  if (!effectiveActivity && !busy.busy) return null;
+
+  // Background drawing (portraits, book preparation, pages, or single-unit redraws):
+  // the reader does NOT need to wait and can freely chat, flip pages, or edit text.
+  const isBackgroundDrawing =
+    !effectiveActivity ||
+    effectiveActivity.id === "drawingPages" ||
+    effectiveActivity.id === "drawingPeople" ||
+    effectiveActivity.id === "preparingBook";
+
+  if (isBackgroundDrawing) {
+    const text = effectiveActivity
+      ? effectiveActivity.id === "drawingPages" && effectiveActivity.total > 0
+        ? t("drawingPages", { n: Math.min(effectiveActivity.done + 1, effectiveActivity.total), total: effectiveActivity.total })
+        : effectiveActivity.id === "drawingPeople" && activePortraitNames.length > 0
+          ? t("drawingPeopleNamed", { names: list(activePortraitNames) })
+          : t(effectiveActivity.id)
+      : phrase(busy);
+    const hint =
+      effectiveActivity?.id === "drawingPeople"
+        ? t("drawingPeopleHint")
+        : effectiveActivity?.id === "preparingBook"
+          ? t("preparingBookHint")
+          : effectiveActivity?.id === "drawingPages"
+            ? t("drawingPagesHint")
             : null;
-  const determinate =
-    activity.id === "drawingPages" ||
-    activity.id === "drawingPeople" ||
-    activity.id === "preparingBook"
-      ? activity
-      : null;
-  const progress =
-    determinate && determinate.total > 0
-      ? Math.max(6, Math.min(100, (determinate.done / determinate.total) * 100))
-      : null;
+    const determinate =
+      effectiveActivity &&
+      (effectiveActivity.id === "drawingPages" ||
+        effectiveActivity.id === "drawingPeople" ||
+        effectiveActivity.id === "preparingBook")
+        ? effectiveActivity
+        : null;
+    const progress =
+      determinate && determinate.total > 0
+        ? Math.max(6, Math.min(100, (determinate.done / determinate.total) * 100))
+        : null;
+
+    return (
+      <motion.div
+        role="status"
+        aria-live="polite"
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex items-center gap-2.5 rounded-xl bg-white/90 px-3 py-2 text-xs shadow-2xs ring-1 ring-ink-900/8"
+      >
+        <Loader2 className="size-3.5 shrink-0 animate-spin text-magic-600 motion-reduce:animate-none" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate font-medium text-ink-800">{text}</span>
+            <div className="flex shrink-0 items-center gap-2">
+              {progress !== null && (
+                <span className="tabular-nums font-semibold text-magic-700">
+                  {determinate!.done}/{determinate!.total}
+                </span>
+              )}
+              {busy.items.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => showBusy(busy.items)}
+                  className="font-medium text-ink-600 underline-offset-2 hover:text-ink-900 hover:underline"
+                >
+                  {t("busyShow")}
+                </button>
+              )}
+            </div>
+          </div>
+          {hint && <p className="mt-0.5 truncate text-[11px] text-ink-500">{hint}</p>}
+          {progress !== null && (
+            <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-magic-100">
+              <motion.span
+                className="block h-full rounded-full bg-magic-500"
+                initial={false}
+                animate={{ width: `${progress}%` }}
+                transition={{ duration: 0.4, ease: "easeOut" }}
+              />
+            </span>
+          )}
+        </div>
+      </motion.div>
+    );
+  }
+
+  // Foreground generation (writing story, revising story, reading story, planning pages):
+  // the reader is waiting on the next conversational step.
+  const text = t(effectiveActivity.id);
+  const hint = slow ? t("stillWorking") : null;
   return (
     <motion.div
       role="status"
@@ -1255,36 +1341,20 @@ function ActivityStatus({
         <Sparkles className="size-3.5 text-magic-700" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="flex items-baseline justify-between gap-3">
-          <span className="truncate font-display text-[13.5px] font-medium tracking-tight text-ink-900">
-            {text}
-          </span>
-          {progress !== null && (
-            <span className="shrink-0 rounded-full bg-magic-50 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-magic-700">
-              {determinate!.done}/{determinate!.total}
-            </span>
-          )}
+        <span className="block truncate font-display text-[13.5px] font-medium tracking-tight text-ink-900">
+          {text}
         </span>
         {hint && (
           <span className="mt-0.5 block text-xs leading-snug font-normal text-ink-500">{hint}</span>
         )}
         <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-magic-100">
-          {progress === null ? (
-            reduce ? (
-              <span className="block h-full w-1/3 rounded-full bg-magic-400" />
-            ) : (
-              <motion.span
-                className="block h-full w-1/3 rounded-full bg-magic-500"
-                animate={{ x: ["-120%", "320%"] }}
-                transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
-              />
-            )
+          {reduce ? (
+            <span className="block h-full w-1/3 rounded-full bg-magic-400" />
           ) : (
             <motion.span
-              className="block h-full rounded-full bg-magic-500"
-              initial={false}
-              animate={{ width: `${progress}%` }}
-              transition={{ duration: 0.4, ease: "easeOut" }}
+              className="block h-full w-1/3 rounded-full bg-magic-500"
+              animate={{ x: ["-120%", "320%"] }}
+              transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
             />
           )}
         </span>

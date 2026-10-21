@@ -49,8 +49,10 @@ import {
   STORY_DETAIL_IDS,
   STORY_DETAILS,
   detailPatchSchema,
+  withMatchedOption,
   detailShapeLines,
   detailTextMax,
+  salvageStoryIdeaInput,
   unknownDetailIds,
   withStoryDetail,
   type StoryDetailId,
@@ -332,6 +334,31 @@ function writer<T>(
 function idList(ids: readonly string[], limit = 40): string {
   const shown = ids.slice(0, limit).map((id) => `"${id}"`).join(" | ");
   return ids.length > limit ? `${shown} | …` : shown;
+}
+
+/**
+ * Groups of people who share an age, in the shape the schema takes.
+ *
+ * The model sometimes wraps a group in an object (`[{"names": ["Aren", "Amira"]}]`)
+ * or sends one flat group (`["Aren", "Amira"]`). Both say the same thing, so they
+ * are read; anything else is returned untouched and fails the schema as before.
+ */
+function coerceSameAgeGroups(raw: unknown): unknown {
+  const asGroup = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item;
+    if (item && typeof item === "object") {
+      const list = Object.values(item as Record<string, unknown>).find(
+        (value): value is unknown[] => Array.isArray(value) && value.every((entry) => typeof entry === "string"),
+      );
+      if (list) return list;
+    }
+    return item;
+  };
+  if (Array.isArray(raw)) {
+    if (raw.length > 0 && raw.every((item) => typeof item === "string")) return [raw];
+    return raw.map(asGroup);
+  }
+  return raw && typeof raw === "object" ? [asGroup(raw)] : raw;
 }
 
 function withConfig(project: Project, patch: Partial<BookConfig>): Project {
@@ -671,7 +698,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
    */
   sameAge: writer(
     '[["Amira", "Aaron"]] — groups of people who share an age. Only when the message says so',
-    z.array(z.array(nameSchema).min(2).max(8)).min(1).max(6),
+    z.preprocess(coerceSameAgeGroups, z.array(z.array(nameSchema).min(2).max(8)).min(1).max(6)),
     (project, groups) => {
       const linked = linkSameAge(project, groups);
       const refusedPart =
@@ -850,7 +877,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
   ),
 
   language: writer(
-    () => `${idList(BOOK_LANGUAGES.map((language) => language.id))} — the language the BOOK is written in (only before the story is written)`,
+    () => `${idList(BOOK_LANGUAGES.map((language) => language.id))} — the language the BOOK is written in (only before the story is written; once it is written, a new language is the setBookLanguage skill, which translates it)`,
     z.string().min(2).max(35),
     (project, locale) => {
       // Restating the book's own value is always a no-op — see the note on `audience`.
@@ -862,8 +889,9 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         });
       }
       if (storyLockedForSetup(project)) {
-        return refused("the book language cannot change once the story is being written or has been written", {
-          speak: "The story is already written, so to change the language, start a new book.",
+        // Not a fact to write: once the story exists its language changes by translating it, which the skill does.
+        return refused("the story is already written, so a new language translates it (the setBookLanguage skill) instead of being set", {
+          speak: "The story is already written, so I'll translate it into the new language rather than write it again.",
           reroute: { command: "setBookLanguage", args: { language: locale } },
         });
       }
@@ -879,10 +907,14 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
 
   storyIdea: writer(
     (context, project) =>
-      `{"<detail>": {…} | null, …} — only the story details the reader stated, as listed ids or in their own words: "add" puts their words next to what the detail already holds, "text" replaces it (only when they correct or replace it); null clears one. Details:\n${detailShapeLines(
+      `{"<detail>": {…} | null, …} — only the story details the reader stated, as listed ids or in their own words: "add" puts their words next to what the detail already holds, "text" replaces it (only when they correct or replace it); null clears one. Every detail is an OBJECT, never a bare string: {"about": {"text": "…"}}, not {"about": "…"}. Details:\n${detailShapeLines(
         project ? resolveStoryCraft(project.config.ageRangeId, context.storyCraft ?? null) : null,
       )}`,
-    z.object({
+    // Each detail is read on its own first (shorthand like `"about": "a trip"` is
+    // accepted, an unusable detail no longer takes the usable ones with it).
+    z.preprocess(salvageStoryIdeaInput, z.object({
+      // Details `salvageStoryIdeaInput` could not read, with why. Set by it, never by the model.
+      rejectedDetails: z.array(z.object({ id: z.string(), reason: z.string() })).optional(),
       // The brief's own fields: what checkpoints and older turns carry. The
       // interpreter is shown only the detail keys below.
       themeId: z.string().max(60).nullable().optional(),
@@ -903,11 +935,24 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         StoryDetailId,
         z.ZodOptional<z.ZodNullable<typeof detailPatchSchema>>
       >),
-    }),
+    })),
     (project, value, context) => {
       const brief = briefOf(project.config);
       let next: StoryBrief = { ...brief };
       let changed = false;
+      // What the schema step set aside. Reported with whatever did apply, or as
+      // the refusal itself when nothing did, so the repair pass sees the reason.
+      const unreadDetails = value.rejectedDetails ?? [];
+      const unreadPart =
+        unreadDetails.length > 0
+          ? { reason: unreadDetails.map((detail) => detail.reason).join("; ") }
+          : undefined;
+      const outcome = (written: Project): SlotWrite =>
+        changed
+          ? wrote(written, unreadPart)
+          : unreadPart
+            ? refused(unreadPart.reason)
+            : UNCHANGED;
       // Field by field and typed, rather than a spread: `undefined` has to mean
       // "not mentioned in this turn" while `null` means "clear it", and a merge
       // that treats them alike wipes a theme every time the reader talks about
@@ -1004,10 +1049,13 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       // The story details, each merged onto what the brief holds now. A write
       // that leaves a detail reading the same is not a change.
       for (const id of STORY_DETAIL_IDS) {
-        const patch = value[id];
-        if (patch === undefined) continue;
+        if (value[id] === undefined) continue;
         const def = STORY_DETAILS[id];
         const before = def.read(next);
+        // "rhymes" is the band's rhyme option, not a free-text wish the draft would
+        // have to interpret on its own.
+        const patch = withMatchedOption(id, value[id], before, craft);
+        if (patch === undefined) continue;
         if (patch === null && before === null) continue;
         const written = withStoryDetail(next, id, patch);
         const after = def.read(written);
@@ -1020,7 +1068,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         next = written;
         changed = true;
       }
-      return changed ? wrote(withBrief(project, next)) : UNCHANGED;
+      return outcome(withBrief(project, next));
     },
     (project) => {
       const brief = briefOf(project.config);
@@ -1068,6 +1116,15 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         said: "something about starting school",
         value: { about: { text: "starting school" } },
         note: "Their own words when no listed id obviously fits. Never invent an id.",
+      },
+      {
+        said: "they fly from San Francisco to Frankfurt, packed with rhymes and jokes",
+        value: {
+          about: { text: "a flight from San Francisco to Frankfurt" },
+          telling: { text: "rhymes" },
+          include: { add: "jokes" },
+        },
+        note: "Every detail is an object with ids / text / add, never a bare string. Their own plot goes in about.text, in their words.",
       },
       {
         said: "a calm bedtime story please, and no monsters",

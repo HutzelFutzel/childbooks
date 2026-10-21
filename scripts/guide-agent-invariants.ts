@@ -78,6 +78,7 @@ import { DEFAULT_GUIDE_COPY } from "../books-frontend/src/core/guide/copy";
 import { authoringOf, withAuthoring } from "../books-frontend/src/core/guide/projectState";
 import { availableViews, BOOK_VIEWS, deriveJourney } from "../books-frontend/src/core/guide/journey";
 import { briefOf, createDefaultStoryBrief } from "../books-frontend/src/core/story/brief";
+import { canTranslateStory, withTranslatedStory } from "../books-frontend/src/core/guide/storyLanguage";
 import { createDefaultConfig, type Project, type StoryCastMember } from "../books-frontend/src/core/types";
 
 export interface CheckResult {
@@ -832,7 +833,11 @@ const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "chang
   check(!suggestionsFor(writingStory, wide, { guest: false, view: "story" }).some((i) => i.id === "writeMyself"), "Writing it yourself is offered while the story is being written.");
   check(!suggestionsFor(writingStory, wide, { guest: false, view: "story" }).some((i) => i.id === "changeLanguage"), "Changing the language is offered while the story is being written.");
   check(!ideaMenuFor(writingStory, defaults, { guest: false, view: "story" }).some((g) => g.ideas.some((i) => i.id === "writeMyself" || i.id === "changeLanguage")), "The ideas menu offers to switch mode or language while the story is being written.");
-  check(!ideaMenuFor(twins, defaults, { guest: false, view: "story" }).some((g) => g.ideas.some((i) => i.id === "writeMyself" || i.id === "changeLanguage")), "The ideas menu offers to switch mode or language after the story is written.");
+  check(!ideaMenuFor(twins, defaults, { guest: false, view: "story" }).some((g) => g.ideas.some((i) => i.id === "writeMyself")), "The ideas menu offers to switch mode after the story is written.");
+  // The language can still change after the story is written, until the pages are drawn.
+  check(ideaMenuFor(twins, defaults, { guest: false, view: "story" }).some((g) => g.ideas.some((i) => i.id === "changeLanguage")), "The ideas menu does not offer the language once the story is written.");
+  const pagesDrawn = withAuthoring(twins, { lockedAt: 1 });
+  check(!suggestionsFor(pagesDrawn, wide, { guest: false, view: "story" }).some((i) => i.id === "changeLanguage"), "Changing the language is offered after the pages are drawn.");
   const langCtx: CommandContext = { ...ctx, languages: [{ id: "de-DE", label: "German" }] };
   check(
     planTurn({ project: writingStory, calls: [call("chooseEntry", { entry: "own" })], ctx: langCtx, config: defaults }).blocked[0]?.remedy.requirement === "storyIdle",
@@ -842,10 +847,45 @@ const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "chang
     planTurn({ project: writingStory, calls: [call("setBookLanguage", { language: "German" })], ctx: langCtx, config: defaults }).blocked[0]?.remedy.requirement === "storyIdle",
     "Switching the book language ran while the story was being written.",
   );
+  // After the story is written the language is carried over by translating it: the story is never written again.
+  const translated = GUIDE_COMMANDS.setBookLanguage.run(twins, { language: "German" }, langCtx);
   check(
-    GUIDE_COMMANDS.setBookLanguage.run(twins, { language: "German" }, langCtx).kind === "noop",
-    "Switching the book language succeeded after the story was written.",
+    translated.kind === "effect" && translated.effect.kind === "translateStory" && translated.effect.locale === "de-DE",
+    "Switching the book language after the story was written does not translate the story.",
   );
+  check(
+    GUIDE_COMMANDS.setBookLanguage.run(twins, { language: "English" }, { ...langCtx, languages: [{ id: "en-US", label: "English" }] }).kind === "noop",
+    "Asking for the language the story is already in did something.",
+  );
+  const translatePlan = planTurn({ project: twins, calls: [call("setBookLanguage", { language: "German" })], ctx: langCtx, config: defaults });
+  check(
+    translatePlan.blocked.length === 0 && !translatePlan.confirm && translatePlan.effects.some((e) => e.kind === "translateStory"),
+    "A translation asks first, though Undo takes it back whole.",
+  );
+  check(
+    planTurn({ project: pagesDrawn, calls: [call("setBookLanguage", { language: "German" })], ctx: langCtx, config: defaults }).blocked[0]?.remedy.requirement === "notLocked",
+    "The book language changed after the pages were drawn.",
+  );
+  // The story stays as written when only its language changes.
+  {
+    const translatedBook = withTranslatedStory(
+      withAuthoring(twins, { cover: { subtitle: "A day at the sea", subtitleIdeas: ["A seaside tale"], confirmedAt: 5 } }),
+      { title: "Amanda und das Meer", subtitle: "Ein Tag am Meer", story: "Amanda und Arthur gingen ans Meer." },
+      "de-DE",
+    );
+    check(translatedBook.config.contentLocale === "de-DE", "The translated book is not in the new language.");
+    check(translatedBook.config.storyText === "Amanda und Arthur gingen ans Meer.", "The translated story is not in the book.");
+    check(translatedBook.title === "Amanda und das Meer", "The translated title is not in the book.");
+    check(authoringOf(translatedBook).cover?.subtitle === "Ein Tag am Meer", "The translated subtitle is not in the book.");
+    check(authoringOf(translatedBook).cover?.subtitleIdeas === undefined, "Subtitle ideas in the old language were kept.");
+    check(authoringOf(translatedBook).cover?.confirmedAt === undefined, "The cover words stayed settled after they were translated.");
+    check(JSON.stringify(castOf(translatedBook)) === JSON.stringify(castOf(twins)), "Translating the story changed the people in the book.");
+    check(
+      translatedBook.config.ageRangeId === twins.config.ageRangeId && translatedBook.config.artStyle === twins.config.artStyle,
+      "Translating the story changed the age or the look.",
+    );
+    check(canTranslateStory(twins) && !canTranslateStory(pagesDrawn) && !canTranslateStory(writingStory), "Translating is open when it should not be, or shut when it should not be.");
+  }
 
   // Example answers: one entry per question the guide asks, read from the journey, never from the skills.
   {

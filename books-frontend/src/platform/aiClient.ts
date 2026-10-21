@@ -181,14 +181,21 @@ export function storyDraftRemote(
   );
 }
 
+export interface StoryTranslateResult {
+  title: string;
+  /** Empty when the book had no subtitle. */
+  subtitle: string;
+  story: string;
+}
+
 /** Ask the backend to translate and adapt an existing story into a target language. */
 export function storyTranslateRemote(
   project: Project,
   sourceLocale?: string,
   targetLocale?: string,
   signal?: AbortSignal,
-): Promise<StoryDraftResult> {
-  return postAi<StoryDraftResult>(
+): Promise<StoryTranslateResult> {
+  return postAi<StoryTranslateResult>(
     "/ai/story-translate",
     { project: slimProjectForRender(project, {}), sourceLocale, targetLocale },
     signal,

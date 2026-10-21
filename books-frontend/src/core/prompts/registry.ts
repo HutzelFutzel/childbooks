@@ -149,7 +149,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "output",
-        "Translate and/or adapt the title as well if provided. Keep the paragraph breaks and page-turn rhythm intact. If the language is unchanged, calibrate and polish the story to suit the target age range. Return only the adapted title and story without any translator notes or commentary.",
+        "Translate and/or adapt the title as well if provided, and the subtitle if one is provided (return an empty subtitle when none is provided). Keep the paragraph breaks and page-turn rhythm intact. If the language is unchanged, calibrate and polish the story to suit the target age range. Return only the adapted title, subtitle and story without any translator notes or commentary.",
       ),
     ],
     user: [
@@ -157,6 +157,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("sourceLang", "Source language: {{sourceLanguage}}."),
       blk("targetLang", "Target language: {{targetLanguage}}."),
       blk("currentTitle", "Original title: {{currentTitle}}", "hasTitle"),
+      blk("currentSubtitle", "Original subtitle: {{currentSubtitle}}", "hasSubtitle"),
       blk("currentStory", "Original story text:\n\n{{currentStory}}"),
     ],
   },
@@ -1701,6 +1702,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("sourceLanguage", "The language the story was originally written in.", "English (United States)"),
           V("targetLanguage", "The language to translate the story into.", "German"),
           V("currentTitle", "Original book title.", "The Sleepy Little Star"),
+          V("currentSubtitle", "Original cover subtitle, when the book has one.", "A bedtime story"),
           V(
             "currentStory",
             "The story text to translate.",
@@ -1710,6 +1712,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         ],
         sampleFlags: {
           hasTitle: true,
+          hasSubtitle: true,
           hasDevice: true,
         },
       },

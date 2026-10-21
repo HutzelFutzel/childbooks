@@ -171,7 +171,8 @@ export function StoryView({ project, locked }: { project: Project; locked: boole
               onChange={(storyText, options) => {
                 if (!locked) void updateStory({ storyText }, options);
               }}
-              writing={writing}
+              writing={writing && !run?.translating}
+              translating={writing && run?.translating === true}
               hideHeader
               onMark={setMark}
               reviewing={reviewing}

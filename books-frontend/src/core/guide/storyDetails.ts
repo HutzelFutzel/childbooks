@@ -536,6 +536,71 @@ export const detailPatchSchema = z
   })
   .strict();
 
+/**
+ * A detail's value in the one shape the validator takes.
+ *
+ * The commonest way the interpreter gets this wrong is not a misreading but a
+ * shorthand: `"about": "a flight to Frankfurt"` instead of
+ * `"about": {"text": "a flight to Frankfurt"}`. The meaning is unambiguous, so it
+ * is read rather than refused (a refusal here used to drop the whole story idea,
+ * and the draft was then written without it).
+ *
+ * Anything that is not an obvious shorthand is returned untouched, so a value
+ * that is genuinely wrong still fails the schema.
+ */
+export function coerceDetailPatch(id: StoryDetailId, raw: unknown): unknown {
+  if (raw === null || raw === undefined) return raw;
+  const def = STORY_DETAILS[id];
+  if (typeof raw === "boolean") return def.kind === "toggle" ? { on: raw } : raw;
+  if (typeof raw === "string" || (Array.isArray(raw) && raw.length > 0 && raw.every((item) => typeof item === "string"))) {
+    const text = (Array.isArray(raw) ? (raw as string[]).join("; ") : raw).trim();
+    if (!text) return undefined;
+    if (def.kind === "toggle") return { on: !/^(no|false|off|none|never)\b/i.test(text) };
+    if (!def.ownWords) return { ids: Array.isArray(raw) ? (raw as string[]).map((item) => item.trim()).filter(Boolean) : [text] };
+    return def.kind === "text" ? { add: text } : { text };
+  }
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    const value = raw as Record<string, unknown>;
+    // `"ids": "calm"` for `"ids": ["calm"]`.
+    if (typeof value.ids === "string") return { ...value, ids: value.ids.trim() ? [value.ids.trim()] : [] };
+  }
+  return raw;
+}
+
+const detailInputSchema = detailPatchSchema.nullable().optional();
+
+/**
+ * The story idea as the interpreter sent it, with each detail read on its own.
+ *
+ * One unusable detail used to refuse the whole claim, so a good "what happens"
+ * was lost along with a bad "how it's told". Details that read are kept; the
+ * rest are set aside under `rejectedDetails` with the validator's reason, so the
+ * writer can apply what it can and still report what it could not.
+ */
+export function salvageStoryIdeaInput(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const input: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+  delete input.rejectedDetails;
+  const rejected: { id: string; reason: string }[] = [];
+  for (const id of STORY_DETAIL_IDS) {
+    if (!(id in input)) continue;
+    const parsed = detailInputSchema.safeParse(coerceDetailPatch(id, input[id]));
+    if (parsed.success) {
+      if (parsed.data === undefined) delete input[id];
+      else input[id] = parsed.data;
+      continue;
+    }
+    const issue = parsed.error.issues[0];
+    delete input[id];
+    rejected.push({
+      id,
+      reason: `${id}${issue?.path.length ? `.${issue.path.join(".")}` : ""}: ${issue?.message ?? "invalid value"}`,
+    });
+  }
+  if (rejected.length > 0) input.rejectedDetails = rejected;
+  return input;
+}
+
 /** Longest own words a detail can store: its brief field's limit, else the details map's. */
 export function detailTextMax(id: StoryDetailId): number {
   return STORY_DETAILS[id].inDetails ? 500 : 1000;
@@ -557,6 +622,59 @@ export const storyDetailsSchema = z
 export function unknownDetailIds(id: StoryDetailId, ids: readonly string[], craft: Craft): string[] {
   const known = new Set(STORY_DETAILS[id].options(craft).map((option) => option.id));
   return ids.filter((optionId) => !known.has(optionId));
+}
+
+const wordsOf = (text: string): string[] =>
+  text
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word));
+
+/**
+ * The listed option a few of the parent's words name, when exactly one does:
+ * "rhymes" is the band's "Rhyme and rhythm", "bedtime" is Getting sleepy.
+ *
+ * Their words stay as they are when nothing matches or two options could be
+ * meant, so a guess never replaces what they said. Only short phrases are tried:
+ * a sentence is a plot, not a choice.
+ */
+export function matchDetailOption(id: StoryDetailId, text: string, craft: Craft): string | null {
+  const wanted = wordsOf(text);
+  if (wanted.length === 0 || wanted.length > 2) return null;
+  const options = STORY_DETAILS[id].options(craft);
+  const phrase = wanted.join(" ");
+  const exact = options.filter(
+    (option) => wordsOf(option.id).join(" ") === phrase || wordsOf(option.label).join(" ") === phrase,
+  );
+  if (exact.length === 1) return exact[0]!.id;
+  if (wanted.length !== 1) return null;
+  const named = options.filter((option) =>
+    [...wordsOf(option.id), ...wordsOf(option.label)].some((word) => word === wanted[0]),
+  );
+  return named.length === 1 ? named[0]!.id : null;
+}
+
+/**
+ * A patch that carries only the parent's own words, read as the listed option
+ * when the words name one. Anything else is returned as it came.
+ */
+export function withMatchedOption(
+  id: StoryDetailId,
+  patch: DetailPatch | null | undefined,
+  current: StoryDetailValue | null,
+  craft: Craft,
+): DetailPatch | null | undefined {
+  const def = STORY_DETAILS[id];
+  if (!patch || (def.kind !== "choice" && def.kind !== "multi")) return patch;
+  if (patch.ids !== undefined || typeof patch.text !== "string") return patch;
+  const matched = matchDetailOption(id, patch.text, craft);
+  if (!matched) return patch;
+  const { text: _words, ...rest } = patch;
+  const kept = def.kind === "multi" ? (current?.ids ?? []) : [];
+  return { ...rest, ids: [...new Set([...kept, matched])].slice(0, Math.max(def.maxIds, 1)), text: null };
 }
 
 /**

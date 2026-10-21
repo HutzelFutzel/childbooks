@@ -22,6 +22,9 @@ const FIT_CHECK_MIN_CHARS = 120;
 
 export const whenStory = (p: Project): Vars => (p.config.storyText.trim().length > 0 ? {} : null);
 export const whenNoStory = (p: Project): Vars => (!storyBegun(p) ? {} : null);
+/** The story's language can still change: nothing is writing it and no page is drawn. */
+export const whenLanguageOpen = (p: Project): Vars =>
+  authoringOf(p).storyRun?.status !== "running" && authoringOf(p).lockedAt === undefined ? {} : null;
 export const whenStoryToChange = (p: Project): Vars => (p.config.storyText.trim().length >= 20 ? {} : null);
 export const whenLongStory = (p: Project): Vars => (p.config.storyText.trim().length > 200 ? {} : null);
 

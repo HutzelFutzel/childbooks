@@ -14,10 +14,9 @@
  * recommended choice, so the cheapest path is one key.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowUp, PenLine, X } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { ArrowUp, Loader2, PenLine, X } from "lucide-react";
 import { cn } from "../../lib/cn";
-import { traceDuration } from "../motion";
 import { useGuideT } from "../intl";
 
 export function Composer({
@@ -35,7 +34,6 @@ export function Composer({
   tools,
   mentions,
   focusSignal = 0,
-  working,
   sending = false,
   quiet = false,
   autoFocus = false,
@@ -72,7 +70,8 @@ export function Composer({
   mentions?: readonly { id: string; label: string; text: string }[];
   /** Bumped by the book pane to move the cursor here. */
   focusSignal?: number;
-  working: boolean;
+  /** Keep prop optional for compatibility; composer ring no longer locks in violet during background work. */
+  working?: boolean;
   /**
    * A turn is being answered. The field stays editable, so the next message
    * can be written, but it is held rather than sent into a turn that would drop it.
@@ -128,7 +127,6 @@ export function Composer({
   return (
     <div className={cn("flex flex-col gap-2", className)}>
       <div className="relative">
-        <Trace active={working} />
         {options.length > 0 && (
           <ul
             role="listbox"
@@ -266,58 +264,24 @@ export function Composer({
           <button
             type="button"
             onClick={submit}
-            aria-label={t("send")}
-            aria-disabled={sending && value.trim() ? true : undefined}
+            aria-label={sending ? t("sendingPlaceholder") : t("send")}
+            title={sending ? t("sendingPlaceholder") : t("send")}
+            aria-disabled={sending ? true : undefined}
             className={cn(
               "flex size-9 shrink-0 items-center justify-center rounded-full bg-ink-900 text-white transition",
               "hover:bg-ink-800 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2",
-              !value.trim() && "bg-ink-900/80",
-              sending && value.trim() && "cursor-wait opacity-50",
+              !value.trim() && !sending && "bg-ink-900/80",
+              sending && "cursor-wait bg-ink-900/65",
             )}
           >
-            <ArrowUp className="size-4" strokeWidth={2.5} />
+            {sending ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+            ) : (
+              <ArrowUp className="size-4" strokeWidth={2.5} aria-hidden />
+            )}
           </button>
         </div>
       </div>
     </div>
-  );
-}
-
-/** The violet edge: traces the ring once when work starts, then rests. */
-function Trace({ active }: { active: boolean }) {
-  const reduced = useReducedMotion();
-  const [runs, setRuns] = useState(0);
-  const was = useRef(active);
-  useEffect(() => {
-    if (active && !was.current) setRuns((n) => n + 1);
-    was.current = active;
-  }, [active]);
-  return (
-    <AnimatePresence>
-      {active && (
-        <motion.svg
-          key={runs}
-          aria-hidden
-          className="pointer-events-none absolute inset-0 z-10 size-full overflow-visible"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0, transition: { duration: 0.4 } }}
-        >
-          <motion.rect
-            x="0"
-            y="0"
-            width="100%"
-            height="100%"
-            rx="17.6"
-            fill="none"
-            stroke="var(--color-magic-500)"
-            strokeWidth="1.5"
-            initial={reduced ? false : { pathLength: 0 }}
-            animate={{ pathLength: 1 }}
-            transition={{ duration: traceDuration, ease: [0.45, 0, 0.2, 1] }}
-          />
-        </motion.svg>
-      )}
-    </AnimatePresence>
   );
 }

@@ -416,6 +416,8 @@ export interface StudioAuthoringState {
     startedAt: number;
     status: "running" | "failed" | "done";
     error?: string;
+    /** The run is the written story being translated, not a draft: nothing is ever drafted over it. */
+    translating?: boolean;
   };
   hardcover?: HardcoverDecision;
   /**

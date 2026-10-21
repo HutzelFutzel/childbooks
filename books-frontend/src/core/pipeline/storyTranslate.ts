@@ -1,7 +1,7 @@
 /**
  * Story translation & cultural adaptation: translates an existing story and
- * optional title into the selected target language while preserving rhythm,
- * warmth, character names, and age-appropriateness.
+ * optional title and subtitle into the selected target language while
+ * preserving rhythm, warmth, character names, and age-appropriateness.
  */
 import { z } from "zod";
 import { getTextProvider } from "../providers";
@@ -14,6 +14,8 @@ import { restoreModelLineBreaks } from "../story/lineBreaks";
 
 const storyTranslateSchema = z.object({
   title: z.string(),
+  /** Empty when the book had no subtitle. */
+  subtitle: z.string(),
   story: z.string(),
 });
 
@@ -23,6 +25,7 @@ export interface TranslateStoryInput {
   config: BookConfig;
   story: string;
   title?: string;
+  subtitle?: string;
   sourceLocale?: string | null;
   targetLocale?: string | null;
   creds: ProviderCredentials;
@@ -32,7 +35,7 @@ export interface TranslateStoryInput {
 }
 
 export async function translateStory(input: TranslateStoryInput): Promise<StoryTranslateResult> {
-  const { config, story, title, sourceLocale, creds, model, signal, prompts } = input;
+  const { config, story, title, subtitle, sourceLocale, creds, model, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
 
   const { system, user } = buildStoryTranslatePrompt(
@@ -41,6 +44,7 @@ export async function translateStory(input: TranslateStoryInput): Promise<StoryT
     title,
     sourceLocale,
     prompts,
+    subtitle,
   );
 
   const result = await withRetry(
@@ -59,5 +63,10 @@ export async function translateStory(input: TranslateStoryInput): Promise<StoryT
     { signal },
   );
 
-  return { title: result.title.trim(), story: restoreModelLineBreaks(result.story).trim() };
+  return {
+    title: result.title.trim(),
+    // A model that ignores the subtitle (an older prompt override) returns none, never the old words.
+    subtitle: (result.subtitle ?? "").trim(),
+    story: restoreModelLineBreaks(result.story).trim(),
+  };
 }

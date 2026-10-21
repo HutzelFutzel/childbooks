@@ -56,6 +56,7 @@ import {
   STORY_DETAILS,
   detailPromptLines,
   filledDetails,
+  matchDetailOption,
   withStoryDetail,
   type DetailPatch,
   type StoryDetailId,
@@ -271,6 +272,37 @@ function sampleFor(id: StoryDetailId, project: Project): DetailPatch {
   check(refused.rejected.length > 0 && !refused.applied.includes("storyIdea"), "An option the band doesn't offer was written.");
   const badTheme = applyGuidePatch(base, { storyIdea: { about: { ids: ["no-such-theme"] } } }, context);
   check(!badTheme.applied.includes("storyIdea"), "A theme the band doesn't offer was written.");
+
+  // The interpreter's shorthand (a bare string for a detail) is read, not refused:
+  // refusing it dropped the whole idea and the story was written without it.
+  const shorthand = applyGuidePatch(
+    base,
+    { storyIdea: { about: "fly with the airplane from san francisco to frankfurt", telling: "rhymes", include: "jokes" } },
+    context,
+  );
+  check(shorthand.applied.includes("storyIdea") && shorthand.rejected.length === 0, `A story idea sent as bare strings was refused: ${JSON.stringify(shorthand.rejected)}`);
+  const shorthandBrief = briefOf(shorthand.project.config);
+  // "rhymes" names the band's rhyme option when it has exactly one; otherwise it stays as typed.
+  const rhymeOption = matchDetailOption("telling", "rhymes", craftOf(base));
+  check(
+    shorthandBrief.customTheme === "fly with the airplane from san francisco to frankfurt" &&
+      shorthandBrief.mustInclude === "jokes" &&
+      (rhymeOption
+        ? shorthandBrief.deviceIds?.includes(rhymeOption) === true && !shorthandBrief.customDevice
+        : shorthandBrief.customDevice === "rhymes"),
+    `A story idea sent as bare strings did not land in the brief: ${JSON.stringify(shorthandBrief)}`,
+  );
+  check(matchDetailOption("mood", "funny", craftOf(base)) === "funny", "A word that is an option's id isn't read as that option.");
+  check(matchDetailOption("about", "a flight from San Francisco to Frankfurt", craftOf(base)) === null, "A sentence was read as a listed option.");
+  // One unusable detail keeps the usable ones and is still reported.
+  const partial = applyGuidePatch(base, { storyIdea: { about: { text: "a trip to the sea" }, mood: { ids: 7 } } }, context);
+  check(partial.applied.includes("storyIdea") && briefOf(partial.project.config).customTheme === "a trip to the sea", "A bad detail took the good ones down with it.");
+  check(partial.rejected.some((entry) => entry.key === "storyIdea" && entry.reason.startsWith("mood")), "A detail that could not be read was not reported.");
+  const allBad = applyGuidePatch(base, { storyIdea: { mood: { ids: 7 } } }, context);
+  check(!allBad.applied.includes("storyIdea") && allBad.rejected.length > 0, "A story idea with nothing readable was not refused.");
+  // Groups sharing an age, wrapped in an object, are still groups.
+  const twins = applyGuidePatch(base, { sameAge: [{ names: ["Aren", "Amira"] }] }, context);
+  check(!twins.rejected.some((entry) => entry.reason.includes("expected array")), "A same-age group wrapped in an object was refused as a shape error.");
 
   const withMood = applyGuidePatch(base, { storyIdea: { mood: { ids: ["calm"] } } }, context).project;
   const claim = (value: unknown) => ({ slot: "storyIdea" as const, value, evidence: "", confidence: 0.5 });

@@ -2,8 +2,9 @@
 
 /**
  * The one place the book's words are typed, above the story they belong to:
- * title, subtitle and byline, with the story's language and the review
- * controls on the same line as the title. Typing never redraws a picture; once
+ * title, subtitle and byline, with the story's language (a menu that changes
+ * it until the pages are drawn) and the review controls on the same line as
+ * the title. Typing never redraws a picture; once
  * the pages start they are shown, not edited.
  *
  * The manuscript below draws no header of its own (`hideHeader`). A second
@@ -19,6 +20,7 @@ import { cn } from "../../lib/cn";
 import { setAuthor, setSubtitle, setTitle } from "../bookActions";
 import { bookTitle } from "../bookTitle";
 import { useGuideT } from "../intl";
+import { StoryLanguageMenu } from "./StoryLanguageMenu";
 
 export function TitleFields({
   project,
@@ -57,14 +59,7 @@ export function TitleFields({
         </div>
         <div className="flex shrink-0 items-center gap-2 pt-1.5">
           {trailing}
-          <span
-            aria-label={t("storyLanguage", { language: language.endonym })}
-            title={language.endonym}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-ink-500"
-          >
-            <span aria-hidden>{language.flag}</span>
-            <span className="hidden sm:inline">{language.endonym}</span>
-          </span>
+          <StoryLanguageMenu project={project} locked={locked} busy={busy} />
         </div>
       </div>
       <div className="mt-0.5 flex flex-wrap gap-x-4">

@@ -575,7 +575,7 @@ async function draftStory(): Promise<void> {
 /** Whether the story was written from facts that have since changed. */
 function storyRunSuperseded(project: Project): boolean {
   const run = authoringOf(project).storyRun;
-  if (run?.status !== "running") return false;
+  if (run?.status !== "running" || run.translating) return false;
   const c = project.config;
   return storyBriefSignature(briefOf(c), c.ageRangeId, c.readingModeId, c.contentLocale) !== run.signature;
 }
@@ -1095,7 +1095,13 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         const state = authoringOf(project);
         // A draft that was writing when the page closed has nobody waiting for
         // it. The story is text, so writing it again costs nothing.
-        if (state.storyRun?.status === "running") void draftStory();
+        // A translation that was running is not a draft: the story is still the old one, so
+        // it is left as it was and the reader can ask again. Nothing is written over it.
+        if (state.storyRun?.status === "running" && state.storyRun.translating) {
+          await patchBook((b) =>
+            authoringOf(b).storyRun?.translating ? withAuthoring(b, { storyRun: { ...authoringOf(b).storyRun!, status: "done", translating: undefined } }) : b,
+          );
+        } else if (state.storyRun?.status === "running") void draftStory();
 
         if (!journeyEntry(project) && !get().said("opening")) {
           get().say([{ key: "opening", priority: "question" }]);
@@ -1796,10 +1802,22 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     const answered = factsOf([...outcome.applied, ...outcome.unchanged]);
     const openOptional = openAskedFacts(after);
     const skipped = outcome.skip.map((id) => SKIP_FACT[id]).filter((f): f is GuideFactId => Boolean(f));
+    // The parent said what the story is about and none of it could be kept. The
+    // draft is written from the saved book alone, so going on would write a story
+    // that ignores what they just said, and say nothing about it.
+    const ideaLost =
+      outcome.rejected.some((item) => item.key === "storyIdea") &&
+      !outcome.applied.includes("storyIdea") &&
+      !outcome.unchanged.includes("storyIdea");
+    if (ideaLost) {
+      outcome.commands = outcome.commands.filter((call) => call.id !== "draftStory");
+      outcome.overflowCommands = outcome.overflowCommands.filter((call) => call.id !== "draftStory");
+    }
     await patchBook((b) => {
       const marked = withFactMarks(withFactMarks(b, "answeredFacts", [...answered, ...openOptional]), "skippedFacts", skipped);
       // Any reply answers the story question just asked, even "no idea": the next one follows.
-      return authoringOf(marked).briefOpen ? withAuthoring(marked, { briefOpen: undefined }) : marked;
+      // Except one that could not be kept: that question stays open.
+      return authoringOf(marked).briefOpen && !ideaLost ? withAuthoring(marked, { briefOpen: undefined }) : marked;
     });
     // A plain "yes" to the reading-age question keeps the suggestion, even when
     // the interpreter wrote nothing for it.
@@ -1950,7 +1968,14 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       : needsAnswer && reply && !assumesAnotherChild(reply)
         ? { key: "reply", priority: "answer", text: reply }
         : null;
-    await afterTurn(answer ?? settled, receipt);
+    if (ideaLost) {
+      // Ask again, and write nothing until they answer: neither the story card's
+      // auto-start nor a "go" in the same message gets past this.
+      set({ agentPending: { expects: "what the story is about (write it under storyIdea), or a go-ahead (draftStory)" } });
+      get().say([{ key: "ideaNotKept", priority: "question" }], receipt ? { receipt } : {});
+    } else {
+      await afterTurn(answer ?? settled, receipt);
+    }
     if (answer && settled) get().say([settled]);
     set({ sending: false });
 

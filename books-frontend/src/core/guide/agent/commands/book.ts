@@ -7,7 +7,8 @@ import { authoringOf, withAuthoring } from "../../projectState";
 import { resolveOption } from "../resolve";
 import type { CommandDef } from "../types";
 import { arg, askFor, beat } from "./shared";
-import { whenBookSetUp, whenCanWriteMyself, whenNoStory, whenStory } from "./relevance";
+import { wordCount } from "../../../story/brief";
+import { whenBookSetUp, whenCanWriteMyself, whenLanguageOpen, whenStory } from "./relevance";
 
 function cover(project: Project) {
   return authoringOf(project).cover ?? {};
@@ -142,13 +143,23 @@ export const BOOK_COMMANDS: CommandDef[] = [
   {
     id: "setBookLanguage",
     area: "book",
-    suggest: [{ id: "changeLanguage", views: ["story"], relevant: whenNoStory }],
+    suggest: [{ id: "changeLanguage", views: ["story"], relevant: whenLanguageOpen }],
     summary:
-      "Change the language the STORY is written in (not the chat). Only when the reader explicitly asks for the book or story in another language.",
+      "Change the language the STORY is written in (not the chat). Only when the reader explicitly asks for the book or story in another language. Once the story is written it is translated, with the same people, plot and tone.",
     args: [{ name: "language", kind: "language", required: true, hint: "language name or code, like 'German' or 'de-DE'" }],
-    examples: ["Write the book in Spanish", "The story should be in German"],
-    help: "Sets the language the story is written in. It can only change before the story exists.",
+    examples: ["Write the book in Spanish", "The story should be in German", "Translate the story into French"],
+    help: "Sets the language the story is written in. Once the story is written, it is translated and everything else stays the same. It can change until the pages are drawn.",
     requires: ["notLocked", "storyIdle"],
+    // The translation replaces the story's words, and Undo puts the old ones back whole.
+    undoable: true,
+    impact: (project, args, ctx) => {
+      const wanted = arg(args, "language");
+      const match = isBookLanguageId(wanted) ? ({ kind: "one", value: { id: wanted } } as const) : resolveOption(wanted, ctx.languages);
+      const changes = match.kind === "one" && match.value.id !== project.config.contentLocale;
+      return changes && project.config.storyText.trim()
+        ? { level: "destructive", effects: [{ kind: "replacesStory", words: wordCount(project.config.storyText) }] }
+        : { level: "none", effects: [] };
+    },
     run: (project, args, ctx) => {
       const wanted = arg(args, "language");
       const direct = isBookLanguageId(wanted) ? wanted : null;
@@ -160,11 +171,18 @@ export const BOOK_COMMANDS: CommandDef[] = [
       const id = match.value.id;
       if (!isBookLanguageId(id)) return { kind: "invalid", reason: `"${wanted}" is not a book language.`, say: true };
       const name = getBookLanguage(id).endonym;
-      if (storyBegun(project)) {
-        if (project.config.contentLocale === id) return { kind: "noop", beat: beat("alreadyThat") };
-        return { kind: "noop", beat: beat("languageLocked", { language: getBookLanguage(project.config.contentLocale).endonym }) };
-      }
       if (project.config.contentLocale === id) return { kind: "noop", beat: beat("alreadyThat") };
+      if (storyBegun(project)) {
+        // The story exists: it is carried into the new language, never written again.
+        if (ctx.languages.length > 0 && !ctx.languages.some((language) => language.id === id)) {
+          return { kind: "invalid", reason: `"${wanted}" is not a book language.`, say: true };
+        }
+        return {
+          kind: "effect",
+          effect: { kind: "translateStory", locale: id },
+          beat: beat("languageTranslating", { language: name }),
+        };
+      }
       return {
         kind: "write",
         project: withAuthoring({ ...project, config: { ...project.config, contentLocale: id } }, { languageSaid: true }),

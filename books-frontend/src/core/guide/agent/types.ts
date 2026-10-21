@@ -159,6 +159,8 @@ export type CommandEffect =
   /** `scoped`: the reader marked a passage, so the change may only touch that. */
   | { kind: "reviseStory"; instruction: string; scoped?: boolean }
   | { kind: "draftStory" }
+  /** Put the written story, its title and its cover words into another language, keeping everything else. */
+  | { kind: "translateStory"; locale: string }
   | { kind: "checkStory" }
   | { kind: "portraits"; castIds: string[] }
   | { kind: "redraw"; castId: string; name: string; instruction: string; mode?: RedrawMode }

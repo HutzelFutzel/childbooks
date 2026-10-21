@@ -17,7 +17,9 @@ import { storyTextHash } from "../core/story/revision";
 import { selectionForMark, type StoryMark } from "../core/story/storyMark";
 import type { StoryFitCard } from "../core/guide/session";
 import { resolveArtStyles } from "../core/config/artStyles";
-import { BOOK_LANGUAGES, getBookLanguage } from "../core/config/bookLanguages";
+import { BOOK_LANGUAGES, getBookLanguage, isBookLanguageId } from "../core/config/bookLanguages";
+import { briefOf, storyBriefSignature } from "../core/story/brief";
+import { canTranslateStory, withTranslatedStory } from "../core/guide/storyLanguage";
 import type { GuideAgentConfig } from "../core/config/guideAgent";
 import { guideCopy, type GuideCopyOverrides } from "../core/guide/copy";
 import { validateComposed } from "../core/guide/agent/compose";
@@ -48,9 +50,9 @@ import type { RedrawMode } from "../core/guide/redrawMode";
 import { castOf } from "../core/guide/agent/resolve";
 import { PICTURE_CHOICE_COMMANDS } from "../core/guide/pictureSettling";
 import type { GuideEntry, Project } from "../core/types";
-import { authoringOf } from "../core/guide/projectState";
+import { authoringOf, withAuthoring } from "../core/guide/projectState";
 import { deleteLikenessPhoto } from "../platform/likeness";
-import { guideComposeRemote, storyFitRemote } from "../platform/aiClient";
+import { guideComposeRemote, storyFitRemote, storyTranslateRemote } from "../platform/aiClient";
 import { startStoryRevision } from "../platform/storyRevisions";
 import { confirmCoverWords, setAuthor, setSubtitle, setTitle, stepPicture, updateCastMember } from "../ui/guide/bookActions";
 import { fontsForBookLanguage } from "../ui/typography/fonts";
@@ -233,6 +235,58 @@ function fitCardFor(project: Project, fit: Awaited<ReturnType<typeof storyFitRem
   };
 }
 
+/**
+ * Carry the written story into another language: the same people, plot and tone, in new
+ * words. While it runs the story is marked as being written, so it can't be edited under
+ * the translation; if anything goes wrong the story is exactly as it was.
+ */
+async function translateStoryInto(locale: string, turn: AgentTurn): Promise<void> {
+  const before = live();
+  const name = isBookLanguageId(locale) ? getBookLanguage(locale).endonym : locale;
+  const fail = (): void => {
+    turn.beats = turn.beats.filter((b) => b.key !== "languageTranslating");
+    turn.beats.push(beat("languageTranslateFailed", { language: name }, { priority: "result" }));
+  };
+  if (!before || !isBookLanguageId(locale) || !canTranslateStory(before)) {
+    fail();
+    return;
+  }
+  const brief = briefOf(before.config);
+  const prior = authoringOf(before).storyRun;
+  const startedAt = Date.now();
+  const signature = storyBriefSignature(brief, before.config.ageRangeId, before.config.readingModeId, before.config.contentLocale);
+  await useProjectsStore.getState().patchCurrent((p) => withAuthoring(p, { storyRun: { signature, startedAt, status: "running", translating: true } }));
+  try {
+    const translated = await storyTranslateRemote(before, before.config.contentLocale, locale);
+    if (!translated.story.trim()) throw new Error("The translation was empty.");
+    const landed: { project: Project | null } = { project: null };
+    await useProjectsStore.getState().patchCurrent((p) => {
+      // Only into the book and the words that were sent: anything else changed meanwhile, so nothing is written.
+      if (p.id !== before.id || p.config.storyText !== before.config.storyText || authoringOf(p).storyRun?.startedAt !== startedAt) return p;
+      const next = withTranslatedStory(p, translated, locale);
+      landed.project = withAuthoring(next, {
+        storyRun: {
+          signature: storyBriefSignature(briefOf(next.config), next.config.ageRangeId, next.config.readingModeId, locale),
+          startedAt,
+          status: "done",
+        },
+      });
+      return landed.project;
+    });
+    if (!landed.project) throw new Error("The story changed while it was being translated.");
+    // Undo puts the old words, title and cover words back whole.
+    turn.restore ??= snapshotForChange(before, landed.project);
+    turn.beats = turn.beats.filter((b) => b.key !== "languageTranslating");
+    turn.beats.push(beat("languageTranslated", { language: name }, { priority: "result", receipt: `Language: ${name}` }));
+  } catch {
+    // Back to the story as it was, if this run is still the one holding it.
+    await useProjectsStore.getState().patchCurrent((p) =>
+      authoringOf(p).storyRun?.startedAt === startedAt ? withAuthoring(p, { storyRun: prior }) : p,
+    );
+    fail();
+  }
+}
+
 async function runEffect(effect: CommandEffect, turn: AgentTurn, mark: StoryMark | null): Promise<void> {
   switch (effect.kind) {
     case "title":
@@ -280,6 +334,11 @@ async function runEffect(effect: CommandEffect, turn: AgentTurn, mark: StoryMark
       // Before the first draft this is the go-ahead; the turn's end starts the story.
       if (project && !project.config.storyText.trim()) await useChatStudio.getState().markStoryStart();
       else void useChatStudio.getState().retryStory();
+      turn.view = "story";
+      return;
+    }
+    case "translateStory": {
+      await translateStoryInto(effect.locale, turn);
       turn.view = "story";
       return;
     }
