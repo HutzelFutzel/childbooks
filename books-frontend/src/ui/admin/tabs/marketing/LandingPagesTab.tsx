@@ -1046,7 +1046,7 @@ function PageEditor({
                 }
               />
             </Field>
-            <Field label="Who said it" hint="e.g. “Sara, mum of two”">
+            <Field label="Who said it" hint="e.g. “Sara, mom of two”">
               <Input
                 value={draft.benefits.quote.attribution}
                 onChange={(e) =>

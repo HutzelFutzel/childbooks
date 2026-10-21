@@ -31,7 +31,7 @@ export const LANDING_SEED_PAGES: LandingSeed[] = [
       bullets: ["Starring your child by name", "Made in minutes", "Printed hardcover keepsake"],
       image: null,
       imagePrompt:
-        "Warm hand-drawn children's-book illustration: a mother with red hair reading a picture book to her young daughter on a cosy patterned armchair, a small dog asleep at their feet, a lamp glowing on a side table. Soft coloured-pencil texture, golden evening light, cream background.",
+        "Warm hand-drawn children's-book illustration: a mother with red hair reading a picture book to her young daughter on a cozy patterned armchair, a small dog asleep at their feet, a lamp glowing on a side table. Soft colored-pencil texture, golden evening light, cream background.",
     },
     steps: {
       heading: "How your personalized bedtime story book comes together",
