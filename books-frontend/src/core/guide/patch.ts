@@ -41,9 +41,11 @@ import type { BookConfig, Project, StoryBrief, StoryCastMember } from "../types"
 import type { GuideCommandId } from "./agent/ids";
 import type { CommandArgs } from "./agent/types";
 import { styleIsFromArtwork } from "./artworkStyle";
+import { properName } from "./nameText";
 import { noteStyleChange } from "./portrait";
 import { authoringOf, withAuthoring } from "./projectState";
 import { copySharedAges, linkSameAge } from "./sameAge";
+import { applyAgeFields, settleStatedAge, turningOf } from "./turning";
 import { GUIDE_SLOT_IDS, GUIDE_SLOTS, type GuideSlotId } from "./slots";
 import {
   STORY_DETAIL_IDS,
@@ -192,7 +194,12 @@ export interface GuidePatchResult {
   rejected: GuidePatchRejection[];
 }
 
-const nameSchema = z.string().trim().min(1).max(80);
+/**
+ * A person's name as a name is written. Every name the interpreter sends passes through here, so the cast,
+ * the same-age groups and the relations all hold the same spelling ("aren" is "Aren" everywhere, and a
+ * later case-sensitive comparison cannot tell them apart). Only a word typed wholly in lowercase changes.
+ */
+const nameSchema = z.string().trim().min(1).max(80).transform(properName);
 const proseSchema = z.string().trim().max(1000);
 
 /** Somebody the book is about. The age is optional here; `ageSchema` requires it. */
@@ -200,6 +207,12 @@ const personSchema = z.object({
   name: nameSchema,
   age: z.number().int().min(0).max(120).optional(),
   ageMonths: z.number().int().min(0).max(1200).optional(),
+  /**
+   * The age the child is about to reach, only when the parent said they are nearly there ("almost 3" is
+   * `age: 2, turning: 3`). A value that is not a sensible number is dropped, never a reason to refuse the
+   * rest of what was said.
+   */
+  turning: z.number().int().min(1).max(120).optional().catch(undefined),
 });
 
 /**
@@ -235,7 +248,7 @@ const castMemberSchema = personSchema.extend({
  * relationship without anyone being told.
  */
 const ageSchema = castMemberSchema.refine(
-  (value) => value.age !== undefined || value.ageMonths !== undefined,
+  (value) => value.age !== undefined || value.ageMonths !== undefined || value.turning !== undefined,
   { message: "an age in years or months is required" },
 );
 
@@ -423,7 +436,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
    * re-stating the list never silently drops the ages already given.
    */
   heroes: writer(
-    '["Maya", "Leo"] or [{"name": "Maya", "age": 5, "role": "big sister"}] — the COMPLETE list of who the book is about, not an addition',
+    '["Maya", "Leo"] or [{"name": "Maya", "age": 5, "role": "big sister"}] — the COMPLETE list of who the book is about, not an addition. An age is the years COMPLETED: a child who is nearly 3 is {"age": 2, "turning": 3}',
     /**
      * Names, or names with their ages attached.
      *
@@ -448,18 +461,14 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         if (seen.has(key)) continue;
         seen.add(key);
         const kept = findByName(existing, name);
+        // A name the author capitalised on purpose ("DeShawn") is not flattened by a lowercase restatement.
+        const keptName = kept && /\p{Lu}/u.test(kept.name) ? kept.name.trim() : name;
         const member: StoryCastMember = kept
-          ? { ...kept, name }
+          ? { ...kept, name: keptName }
           : { ...newCastMember(), name };
         // An age only when this turn gave one. Re-stating the cast to add a
         // sibling must not blank the ages of the children already in it.
-        if ("ageMonths" in named && named.ageMonths !== undefined) {
-          member.ageMonths = named.ageMonths;
-          delete member.age;
-        } else if ("age" in named && named.age !== undefined) {
-          member.age = named.age;
-          delete member.ageMonths;
-        }
+        if (typeof person !== "string") applyAgeFields(member, settleStatedAge(person));
         // Same rule for the relationship, and for the same reason: a turn that
         // re-lists the cast to add a sibling has not withdrawn what it said last
         // time about everyone else. An empty string is a model artefact rather
@@ -524,7 +533,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
    * of thing a reader has to notice to undo.
    */
   heroAges: writer(
-    '[{"name": "Maya", "age": 5}, {"name": "Leo", "ageMonths": 30}] — only for names already in the cast; use ageMonths for under-twos',
+    '[{"name": "Maya", "age": 5}, {"name": "Leo", "ageMonths": 30}] — only for names already in the cast; use ageMonths for under-twos. "age" is the years COMPLETED, never rounded up: a child who is nearly 3 is {"age": 2, "turning": 3}. Add "turning" only when the message says the child is about to reach that age, in any language',
     z.array(ageSchema).min(1).max(12),
     (project, ages) => {
       const brief = briefOf(project.config);
@@ -554,18 +563,13 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         const next: StoryCastMember = { ...member };
         // One unit at a time: months and years for the same person disagree the
         // moment either is edited, and `characterAgeMonths` prefers months.
-        if (update.ageMonths !== undefined) {
-          next.ageMonths = update.ageMonths;
-          delete next.age;
-        } else {
-          next.age = update.age;
-          delete next.ageMonths;
-        }
+        applyAgeFields(next, settleStatedAge(update));
         const role = update.role?.trim();
         if (role) next.role = role;
         if (
           next.age !== member.age ||
           next.ageMonths !== member.ageMonths ||
+          next.turning !== member.turning ||
           next.role !== member.role
         ) {
           changed = true;
@@ -603,6 +607,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
           ...(member.ageMonths !== undefined
             ? { ageMonths: member.ageMonths }
             : { age: member.age }),
+          ...(turningOf(member) !== undefined ? { turning: turningOf(member) } : {}),
         }));
       return aged.length > 0 ? aged : undefined;
     },
@@ -621,6 +626,20 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         note: "Months for under-twos; the name comes from who is already in the story.",
       },
       { said: "Leo just turned 7", value: [{ name: "Leo", age: 7 }] },
+      {
+        said: "both almost 3",
+        value: [
+          { name: "Maya", age: 2, turning: 3 },
+          { name: "Leo", age: 2, turning: 3 },
+        ],
+        note: "Nearly 3 is two years completed. Never round up to 3; `turning` keeps what was said.",
+      },
+      {
+        said: "Mia wird bald 4",
+        value: [{ name: "Mia", age: 3, turning: 4 }],
+        note: "The same in any language: the age completed, and the age she is about to reach.",
+      },
+      { said: "she is two and a half", value: [{ name: "Maya", age: 2 }], note: "Not nearly 3: no `turning`." },
     ],
   ),
 
@@ -1288,6 +1307,7 @@ function sameCast(a: StoryCastMember[], b: StoryCastMember[]): boolean {
       member.name.trim() === other.name.trim() &&
       member.age === other.age &&
       member.ageMonths === other.ageMonths &&
+      member.turning === other.turning &&
       // Compared even though nothing branches on it: a turn whose only news is
       // "Leo is her little brother" has to count as a write, or the writer
       // reports nothing changed and the relationship is dropped while the reply

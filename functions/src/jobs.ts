@@ -295,6 +295,15 @@ const MAX_DISPATCHES_PER_SEC = Number(process.env.FAN_MAX_PER_SEC) || 5;
 const TASK_MAX_ATTEMPTS = Number(process.env.FAN_MAX_ATTEMPTS) || 3;
 
 /**
+ * Whether a portrait edit first asks a vision model which part to change, to repaint only there.
+ * Off: a portrait is one person on a plain background, the current portrait already goes in as the
+ * reference, and the extra call could hang for minutes (and retried the whole task when it did) while
+ * a mask around the *current* hair or shirt cannot grow longer hair or a hoodie. Page edits still
+ * locate. Set PORTRAIT_EDIT_LOCATE=on to go back without a code change.
+ */
+const PORTRAIT_EDIT_LOCATES_PART = process.env.PORTRAIT_EDIT_LOCATE === "on";
+
+/**
  * Text queue shape. Screenplay drafting is one structured call — no shared
  * provider rate limit with images and a fraction of the memory — so it can run
  * far wider than the image fleet without endangering anything.
@@ -1299,8 +1308,11 @@ async function portraitEditMask(args: {
 }> {
   const { uid, name, instruction, blobId, models, prompts, signal } = args;
   const logContext = { jobId: args.jobId, taskId: args.taskId, instruction };
-  if (!args.canMask) {
-    logger.info("[portrait-edit] whole-picture edit", { ...logContext, reason: "cannot_mask" });
+  if (!args.canMask || !PORTRAIT_EDIT_LOCATES_PART) {
+    logger.info("[portrait-edit] whole-picture edit", {
+      ...logContext,
+      reason: args.canMask ? "locate_off" : "cannot_mask",
+    });
     return { region: null, events: [], stats: { calls: 0, failures: 0 } };
   }
   const model = models.bindingModel ?? models.textModel;

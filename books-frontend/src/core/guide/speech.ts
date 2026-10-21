@@ -136,13 +136,21 @@ export function assumesAnotherChild(text: string): boolean {
   return UNNAMED_OTHER_CHILD.test(text);
 }
 
+/** Whether the text says the name as a whole word, in any case and any script. */
+function mentionsName(text: string, name: string): boolean {
+  const word = name.trim();
+  if (!word) return false;
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "iu").test(text);
+}
+
 /**
  * Whether a model-written follow-up may replace the fallback question.
  *
  * The model chooses the sentence. It may not ask for a fact that is not still
  * missing, and it may not stay silent while a required fact is empty. People
  * who share an age have to be named together. It may not invent a child the
- * reader did not name.
+ * reader did not name, nor ask the age of someone whose age is already known.
  */
 export function acceptGuideQuestion(args: {
   text: string;
@@ -155,6 +163,8 @@ export function acceptGuideQuestion(args: {
   sameAgeGroups: readonly (readonly string[])[];
   /** People already in the book. Fewer than two: there is no "other child". */
   knownNames?: readonly string[];
+  /** People whose age is already known: an age question that names them asks again for what the reader said. */
+  agedNames?: readonly string[];
 }): boolean {
   const text = args.text.trim();
   if (!text) return false;
@@ -164,6 +174,7 @@ export function acceptGuideQuestion(args: {
   if (args.requiredMissing.length > 0 && args.asks.length === 0) return false;
   if (!args.asks.includes("ages")) return true;
   if (args.ageNames.length > 0 && !args.ageNames.some((name) => text.includes(name))) return false;
+  if ((args.agedNames ?? []).some((name) => !args.ageNames.includes(name) && mentionsName(text, name))) return false;
   for (const group of args.sameAgeGroups) {
     const pending = group.filter((name) => args.ageNames.includes(name));
     if (pending.length >= 2 && !pending.every((name) => text.includes(name))) return false;

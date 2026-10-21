@@ -15,6 +15,12 @@
  * Offline and deterministic: pure functions over synthesized books.
  */
 import { GUIDE_COMMANDS } from "../books-frontend/src/core/guide/agent/registry";
+import { planTurn } from "../books-frontend/src/core/guide/agent/plan";
+import { parseAge } from "../books-frontend/src/core/guide/agent/commands/shared";
+import { turningFields } from "../books-frontend/src/core/guide/readingAge";
+import { settleStatedAge, turningOf } from "../books-frontend/src/core/guide/turning";
+import { acceptGuideQuestion } from "../books-frontend/src/core/guide/speech";
+import { audienceProfileForMonths } from "../books-frontend/src/core/config/audience";
 import { REQUIREMENTS } from "../books-frontend/src/core/guide/agent/requirements";
 import type { CommandContext } from "../books-frontend/src/core/guide/agent/types";
 import { personFollowUp } from "../books-frontend/src/core/guide/agent/followUps";
@@ -77,6 +83,8 @@ function book(cast: StoryCastMember[], storyText = ""): Project {
   );
 }
 
+const written = (result: { kind: string; project?: Project }): Project | null =>
+  result.kind === "write" && result.project ? result.project : null;
 const castOf = (project: Project): StoryCastMember[] => project.config.storyBrief?.cast ?? [];
 const maya: StoryCastMember = { id: "c1", name: "Maya", age: 5 };
 const bello: StoryCastMember = { id: "c2", name: "Bello", kind: "animal", species: "golden retriever" };
@@ -325,6 +333,91 @@ function pagesOutOfDate(project: Project): string[] {
   check(shiloh?.age === 2 && castOf(written.project).length === 1, "Writing shiloh, 2 did not leave one child aged 2.");
   check(!missingGuideFacts(written.project, policies).includes("names"), "Shiloh was written and the guide still asks who is in the book.");
   check(!missingGuideFacts(written.project, policies).includes("ages"), "Shiloh's age was written and the guide still asks for an age.");
+}
+
+// --- "Almost 3": completed years plus the age they are about to be ---------------------------------------
+//
+// A child who is almost 3 is 2 — the 2-year group — but the parent may well want the 3-year group.
+// The interpreter understands the words in any language; the code only holds numbers.
+
+{
+  const near = applyGuidePatch(book([]), { heroes: [{ name: "Aren", age: 2, turning: 3 }] }, patchContext);
+  const aren = castOf(near.project)[0];
+  check(aren?.age === 2 && aren.turning === 3, "'Almost 3' was not stored as 2 completed years turning 3.");
+  check(turningOf(aren!) === 3, "turningOf lost an almost-3.");
+
+  const only = applyGuidePatch(book([]), { heroes: [{ name: "Aren", turning: 3 }] }, patchContext);
+  check(castOf(only.project)[0]?.age === 2, "A bare 'turning 3' did not become 2 completed years.");
+  const same = applyGuidePatch(book([]), { heroes: [{ name: "Aren", age: 3, turning: 3 }] }, patchContext);
+  check(castOf(same.project)[0]?.age === 2 && castOf(same.project)[0]?.turning === 3, "age equal to turning was not settled as 2 turning 3.");
+  const plain = applyGuidePatch(book([]), { heroes: [{ name: "Aren", age: 3 }] }, patchContext);
+  check(castOf(plain.project)[0]?.age === 3 && castOf(plain.project)[0]?.turning === undefined, "A plain 3 gained a turning.");
+  const nonsense = applyGuidePatch(book([]), { heroes: [{ name: "Aren", age: 2, turning: 9 }] }, patchContext);
+  check(castOf(nonsense.project)[0]?.age === 2 && castOf(nonsense.project)[0]?.turning === undefined, "A turning that is not the next age was kept.");
+
+  const grown = applyGuidePatch(near.project, { heroAges: [{ name: "Aren", age: 3 }] }, patchContext);
+  check(castOf(grown.project)[0]?.age === 3 && castOf(grown.project)[0]?.turning === undefined, "Telling the real age left the 'almost' behind.");
+  const nearAgain = applyGuidePatch(book([maya]), { heroAges: [{ name: "Maya", age: 4, turning: 5 }] }, patchContext);
+  check(castOf(nearAgain.project)[0]?.age === 4 && castOf(nearAgain.project)[0]?.turning === 5, "heroAges did not store an almost-5.");
+
+  const typed = settleStatedAge({ age: 2, turning: 3 });
+  check(typed.age === 2 && typed.turning === 3, "settleStatedAge changed a consistent almost-3.");
+  check(parseAge("2.5")?.age === 2, "Two and a half years became 3.");
+
+  const viaSkill = written(GUIDE_COMMANDS.setPersonAge.run(book([{ id: "c9", name: "Aren" }]), { person: "Aren", age: "2", turning: "3" }, ctx));
+  check(viaSkill !== null && castOf(viaSkill)[0]?.age === 2 && castOf(viaSkill)[0]?.turning === 3, "setPersonAge did not store an almost-3.");
+  const exact = viaSkill && written(GUIDE_COMMANDS.setPersonAge.run(viaSkill, { person: "Aren", age: "3" }, ctx));
+  check(exact !== null && castOf(exact!)[0]?.age === 3 && castOf(exact!)[0]?.turning === undefined, "Setting 3 after almost 3 kept the 'almost'.");
+
+  // The age-group question offers both groups when they differ.
+  const fields = turningFields(3, audienceProfileForMonths(24, null).id);
+  check(fields.turning === 3 && Boolean(fields.turningBandId) && fields.turningBandId !== audienceProfileForMonths(24, null).id, "The question did not offer the group they are about to enter.");
+  check(turningFields(undefined, "x").turning === undefined, "A plain age got a second group.");
+
+  // Twins who are 'both almost 3' stay together.
+  const pair = applyGuidePatch(
+    book([{ id: "t1", name: "Myla" }, { id: "t2", name: "Shilo" }]),
+    { heroAges: [{ name: "Myla", age: 2, turning: 3 }, { name: "Shilo", age: 2, turning: 3 }] },
+    patchContext,
+  );
+  check(castOf(pair.project).every((m) => m.age === 2 && m.turning === 3), "'Both almost 3' did not reach both children.");
+
+  // 'aren almost 3' is not a name: the interpreter reads it.
+  check(statedCast("aren almost 3") === null, "A name with words around the age was read as a cast list.");
+}
+
+// --- Names are capitalised once, at the door --------------------------------------------------------------
+
+{
+  const lower = applyGuidePatch(book([]), { heroes: [{ name: "papa", age: 40 }, { name: "anne", age: 38 }] }, patchContext);
+  check(castOf(lower.project).map((m) => m.name).join(",") === "Papa,Anne", "Lowercase names were stored lowercase.");
+  const kept = applyGuidePatch(book([]), { heroes: [{ name: "DeShawn", age: 7 }] }, patchContext);
+  check(castOf(kept.project)[0]?.name === "DeShawn", "A name capitalised on purpose was flattened.");
+  const again = applyGuidePatch(lower.project, { heroes: [{ name: "papa" }, { name: "anne" }] }, patchContext);
+  check(castOf(again.project).length === 2, "Writing the lowercase names again made new people.");
+  const added = written(GUIDE_COMMANDS.addPerson.run(book([]), { name: "mia", age: "4" }, ctx));
+  check(added !== null && castOf(added)[0]?.name === "Mia", "addPerson stored a lowercase name.");
+}
+
+// --- A reply is not 'already that way' when the message changed things ------------------------------------
+
+{
+  const start = book([maya]);
+  const config = createDefaultGuideAgentConfig();
+  const noop = [{ id: "setPersonAge", args: { person: "Maya", age: "5" }, evidence: "", confidence: 1, source: "model" as const }];
+  const quiet = planTurn({ project: start, calls: noop, ctx, config });
+  const afterWrite = planTurn({ project: start, calls: noop, ctx, config, factsWritten: true });
+  check(quiet.beats.length > 0, "An unchanged request is no longer answered.");
+  check(afterWrite.beats.length === 0, "'Already that way' follows a message that did change things.");
+}
+
+// --- A rephrased question never asks again for an age that is known ---------------------------------------
+
+{
+  const open = { asks: ["ages"], missing: ["ages"], requiredMissing: [], ageNames: ["Mia"], sameAgeGroups: [] as string[][] };
+  check(acceptGuideQuestion({ ...open, text: "How old is Mia?", agedNames: ["Aren"] }), "A question about the missing age was refused.");
+  check(!acceptGuideQuestion({ ...open, text: "How old are Mia and Aren?", agedNames: ["Aren"] }), "A question asked again for a known age.");
+  check(acceptGuideQuestion({ ...open, text: "How old is Mia? (Not Arena.)", agedNames: ["Aren"] }), "A different name that contains a known name was refused.");
 }
 
 report.push("Characters and how they belong together");

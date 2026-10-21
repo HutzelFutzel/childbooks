@@ -84,7 +84,8 @@ export function parseAge(raw: string): { age?: number; ageMonths?: number } | nu
   }
   if (value > 120) return null;
   if (value < 1 && value > 0) return { ageMonths: Math.round(value * 12) };
-  return { age: Math.round(value) };
+  // Whole years completed: "2.5" is two, never three.
+  return { age: Math.floor(value) };
 }
 
 export function formatAge(age: { age?: number; ageMonths?: number }): string {
@@ -100,7 +101,13 @@ export function withCast(project: Project, map: (cast: StoryCastMember[]) => Sto
 /** `updateCastMember` from the book pane, as a pure function: ages clear estimates and reach the anchors. */
 export function withMemberChanges(project: Project, id: string, changes: Partial<StoryCastMember>): Project {
   const clearsEstimate = typeof changes.age === "number" || typeof changes.ageMonths === "number";
-  const nextChanges = clearsEstimate ? { ...changes, visualAge: undefined } : changes;
+  // "Almost 3" belongs to the age it was said with: a new age without it is a plain age.
+  const restatesAge = ("age" in changes || "ageMonths" in changes) && !("turning" in changes);
+  const nextChanges: Partial<StoryCastMember> = {
+    ...changes,
+    ...(clearsEstimate ? { visualAge: undefined } : {}),
+    ...(restatesAge ? { turning: undefined } : {}),
+  };
   const previous = briefOf(project.config).cast?.find((member) => member.id === id);
   let next = withCastResolved(
     withCast(project, (cast) => cast.map((member) => (member.id === id ? { ...member, ...nextChanges } : member))),

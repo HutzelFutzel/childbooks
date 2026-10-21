@@ -472,6 +472,8 @@ export async function executeAgentCalls(
   options: {
     overflow?: readonly CommandCall[];
     confirmed?: boolean;
+    /** The message already saved facts before these calls ran: a call with nothing left to change is not "already that way". */
+    factsWritten?: boolean;
     later: (beats: Beat[]) => void;
     /**
      * The passage the reader marked for this message, taken when they sent it.
@@ -557,7 +559,15 @@ export async function executeAgentCalls(
     ...(staleNow.length > 0 ? { stalePages: staleNow } : {}),
     ...(drawingNow.busy ? { drawingReason: busyReason(drawingNow) } : {}),
   };
-  const plan = planTurn({ project, calls, ctx, config, overflow: options.overflow, confirmed: options.confirmed });
+  const plan = planTurn({
+    project,
+    calls,
+    ctx,
+    config,
+    overflow: options.overflow,
+    confirmed: options.confirmed,
+    factsWritten: options.factsWritten,
+  });
   if (scoped && scoped.missing.length > 0 && scoped.ids.length > 0) {
     plan.beats.push(beat("pagesSkipped", { what: describePageNumbers(scoped.missing) }, { priority: "result" }));
   }

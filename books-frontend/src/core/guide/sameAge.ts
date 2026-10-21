@@ -10,6 +10,7 @@
 import type { Project, StoryCastMember } from "../types";
 import { briefOf, namedCast } from "../story/brief";
 import { authoringOf, withAuthoring } from "./projectState";
+import { turningOf } from "./turning";
 
 function keyOf(name: string): string {
   return name.trim().toLowerCase();
@@ -29,6 +30,9 @@ function giveAge(target: StoryCastMember, source: StoryCastMember): void {
     target.age = source.age;
     delete target.ageMonths;
   }
+  // "Both almost 3": the twin was almost 3 too.
+  if (turningOf(source) !== undefined) target.turning = source.turning;
+  else delete target.turning;
 }
 
 /**
@@ -123,10 +127,10 @@ export function linkSameAge(
     JSON.stringify(authoringOf(copied).sameAge ?? []) === JSON.stringify(authoringOf(project).sameAge ?? []);
   const sameAges =
     namedCast(briefOf(copied.config))
-      .map((member) => `${member.id}:${member.age ?? ""}:${member.ageMonths ?? ""}`)
+      .map((member) => `${member.id}:${member.age ?? ""}:${member.ageMonths ?? ""}:${member.turning ?? ""}`)
       .join("|") ===
     namedCast(briefOf(project.config))
-      .map((member) => `${member.id}:${member.age ?? ""}:${member.ageMonths ?? ""}`)
+      .map((member) => `${member.id}:${member.age ?? ""}:${member.ageMonths ?? ""}:${member.turning ?? ""}`)
       .join("|");
   if (sameGroups && sameAges) return { project, unknown };
   return { project: copied, unknown };

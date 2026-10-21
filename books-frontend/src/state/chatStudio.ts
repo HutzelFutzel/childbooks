@@ -834,6 +834,9 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           ageNames: [...ageQuestionNames(current), ...(kindQuestion(current) ? [kindQuestion(current)!.name] : [])],
           sameAgeGroups: authoringOf(current).sameAge ?? [],
           knownNames: castNames(current),
+          agedNames: namedCast(briefOf(current.config))
+            .filter((m) => !missingDetails(m).includes("age"))
+            .map((m) => m.name.trim()),
         });
         if (accepted && isPending(messageId)) refined.add(messageId);
         releaseLine(messageId, accepted ? { text: result.text, localized: undefined } : undefined);
@@ -2091,6 +2094,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
   ): Promise<void> {
     const turn = await executeAgentCalls(calls, {
       ...(said ? { said } : {}),
+      ...(receipt?.parts.length ? { factsWritten: true } : {}),
       overflow,
       later: speakLater,
       mark,

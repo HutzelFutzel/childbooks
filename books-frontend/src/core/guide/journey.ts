@@ -31,7 +31,7 @@ import {
   type GuideFactPolicies,
 } from "./factPolicy";
 import { peopleNeedingStatedAge } from "./agent/requirements";
-import { ownAudienceQuestion, readingAgeOf, readingAgeSource, suggestedAudience } from "./readingAge";
+import { ownAudienceQuestion, readingAgeOf, readingAgeSource, suggestedAudience, turningFields } from "./readingAge";
 import type { HardcoverCheck } from "./hardcover";
 import { ownWordsStatus, storyHandedOver } from "./ownWords";
 import {
@@ -100,6 +100,10 @@ export type WellItem =
       name: string;
       age: number;
       months: boolean;
+      /** The parent said the child is almost this age (`age` is the years completed). */
+      turning?: number;
+      /** The age group the child is about to enter, when it differs from `bandId`: offered next to the suggestion. */
+      turningBandId?: string;
       bandId: string;
       bandLabel: string;
       /** Own words: about the pages, not the writing. */
@@ -311,6 +315,7 @@ export function audienceQuestion(
     name: hero.name.trim(),
     age: age.n,
     months: age.months,
+    ...turningFields(age.turning, band.id, signals.audience),
     bandId: band.id,
     bandLabel: band.label,
   };

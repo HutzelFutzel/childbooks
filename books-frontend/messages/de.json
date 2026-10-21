@@ -831,6 +831,7 @@
       "drawingPage": "Seite {n} wird gezeichnet …",
       "pageQueued": "In der Warteschlange – gleich an der Reihe",
       "pageAppearsWhenReady": "Das Bild erscheint hier automatisch, sobald es fertig ist",
+      "takingLonger": "Das dauert länger als sonst …",
       "storySource": "Geschichtsquelle",
       "guidedSource": "Guide schreibt",
       "ownSource": "Meine Worte",

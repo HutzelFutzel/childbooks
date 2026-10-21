@@ -12,6 +12,8 @@ import {
 } from "../../../story/relations";
 import { linkSameAge } from "../../sameAge";
 import { changePersonAge } from "../../ageSync";
+import { properName } from "../../nameText";
+import { settleStatedAge, turningOf } from "../../turning";
 import { cleanName, renameMentions, renamePersonEverywhere } from "../../rename";
 import { manuscriptHash, withCastResolved } from "../../ownWords";
 import {
@@ -156,7 +158,13 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
       { name: "name", kind: "text", required: true, hint: "the name, as written" },
       { name: "kind", kind: "choice", required: false, hint: "what they are; leave empty for a person", options: [...CAST_KINDS] },
       { name: "species", kind: "text", required: false, hint: "for an animal, toy or creature: which one, like 'dog' or 'teddy bear'" },
-      { name: "age", kind: "age", required: false, hint: "age as a number of years, or 'N months'" },
+      { name: "age", kind: "age", required: false, hint: "age as a number of years COMPLETED, never rounded up, or 'N months'" },
+      {
+        name: "turning",
+        kind: "age",
+        required: false,
+        hint: "only when the reader says the person is nearly that age, in any language: the age they are about to reach, with age set to the one before it",
+      },
       { name: "role", kind: "text", required: false, hint: "who they are to the child, like 'big sister' or 'our dog'" },
       { name: "look", kind: "text", required: false, hint: "how they look, only if described" },
     ],
@@ -165,9 +173,15 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
     requires: ["notLocked"],
     prepare: (args) => (args.id ? args : { ...args, id: newCastMember().id }),
     run: (project, args) => {
-      const name = arg(args, "name").slice(0, 60);
+      const name = properName(arg(args, "name").slice(0, 60));
       if (!name) return askFor("name", "askName");
-      const age = arg(args, "age") ? parseAge(arg(args, "age")) : null;
+      const statedAge = arg(args, "age") ? parseAge(arg(args, "age")) : null;
+      const turningStated = arg(args, "turning") ? parseAge(arg(args, "turning")) : null;
+      // "Almost 3" is two years completed, kept with the 3 it was said with (`core/guide/turning.ts`).
+      const settled = statedAge
+        ? settleStatedAge({ ...statedAge, ...(turningStated?.age !== undefined ? { turning: turningStated.age } : {}) })
+        : null;
+      const age: Pick<StoryCastMember, "age" | "ageMonths" | "turning"> | null = settled ? { ...settled } : null;
       const role = arg(args, "role").slice(0, 80);
       const look = arg(args, "look").slice(0, 400);
       const kind = kindArg(args);
@@ -330,9 +344,15 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
       "Set or change how old a person is. When the story states a different age for them, the story is revised to match.",
     args: [
       { name: "person", kind: "person", required: true, hint: "whose age" },
-      { name: "age", kind: "age", required: true, hint: "years as a number, or 'N months' for babies" },
+      { name: "age", kind: "age", required: true, hint: "years COMPLETED as a number, never rounded up, or 'N months' for babies" },
+      {
+        name: "turning",
+        kind: "age",
+        required: false,
+        hint: "only when the reader says the child is nearly that age, in any language: the age they are about to reach, with age set to the one before it (nearly 3 is age 2, turning 3)",
+      },
     ],
-    examples: ["Amanda is 2 years old", "Make Leo 5", "The baby is 9 months"],
+    examples: ["Amanda is 2 years old", "Make Leo 5", "The baby is 9 months", "Aren is almost 3"],
     help: "Sets someone's age. The pictures follow it, and if the story says another age for them, I'll update the story too and you'll see each change before it lands.",
     requires: ["notLocked"],
     impact: (project, args) => {
@@ -344,18 +364,32 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
       if ("result" in picked) return picked.result;
       const { member } = picked;
       const name = member.name.trim();
-      const age = parseAge(arg(args, "age"));
-      if (!age) return askFor("age", "missingAges", [], { names: name });
-      if (member.age === age.age && member.ageMonths === age.ageMonths) {
+      const stated = parseAge(arg(args, "age"));
+      if (!stated) return askFor("age", "missingAges", [], { names: name });
+      // "Almost 3" is two years completed, kept with the 3 it was said with (`core/guide/turning.ts`).
+      const turningStated = arg(args, "turning") ? parseAge(arg(args, "turning")) : null;
+      const settled = settleStatedAge({
+        ...stated,
+        ...(turningStated?.age !== undefined ? { turning: turningStated.age } : {}),
+      });
+      const age = { age: settled.age, ageMonths: settled.ageMonths };
+      if (member.age === age.age && member.ageMonths === age.ageMonths && turningOf(member) === settled.turning) {
         return { kind: "noop", beat: beat("alreadyThat") };
       }
       const changed = changePersonAge(project, member.id, age);
       if (!changed) return { kind: "invalid", reason: "That person is not in the book.", say: true };
-      const shown = formatAge(age);
+      let written = changed.project;
+      if (settled.turning !== undefined) {
+        for (const who of [name, ...changed.alongside]) {
+          const person = resolvePerson(written, who);
+          if (person.kind === "one") written = withMemberChanges(written, person.value.id, { turning: settled.turning });
+        }
+      }
+      const shown = settled.turning !== undefined ? `almost ${settled.turning}` : formatAge(age);
       const receipt = [name, ...changed.alongside].map((who) => `${who}: ${shown}`).join(" · ");
       return {
         kind: "write",
-        project: changed.project,
+        project: written,
         beat: beat(changed.revise ? "ageSetStory" : "ageSet", { names: name, n: shown }, { mustSay: [name], receipt }),
         ...(changed.revise ? { then: { kind: "reviseStory" as const, instruction: changed.revise } } : {}),
         view: "cast",

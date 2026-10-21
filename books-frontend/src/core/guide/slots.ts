@@ -28,6 +28,7 @@ import { currentAnchorImage } from "../pipeline/provenance";
 import { illustrationUnits } from "../book/units";
 import { unitIsDone } from "../book/pageCompletion";
 import { getCursor } from "../versioning";
+import { turningOf } from "./turning";
 import { briefOf, namedCast, namedHeroes, wordCount } from "../story/brief";
 import { CAST_KIND_SPECS, castKindOf, isPerson } from "../story/castKinds";
 import { relationChip, relationsOf } from "../story/relations";
@@ -100,11 +101,13 @@ export const GUIDE_SLOTS: Record<GuideSlotId, GuideSlot> = {
       const cast = namedCast(briefOf(p.config));
       const known = cast.filter((person) => person.age !== undefined || person.ageMonths !== undefined);
       if (known.length === 0) return null;
-      const parts = known.map((person) =>
-        person.ageMonths !== undefined && (person.ageMonths < 24 || person.ageMonths % 12 !== 0)
+      const parts = known.map((person) => {
+        const turning = turningOf(person);
+        if (turning !== undefined) return `${person.name} almost ${turning}`;
+        return person.ageMonths !== undefined && (person.ageMonths < 24 || person.ageMonths % 12 !== 0)
           ? `${person.name} ${person.ageMonths}m`
-          : `${person.name} ${person.age}`,
-      );
+          : `${person.name} ${person.age}`;
+      });
       return `${joinNames(parts)}${known.length < cast.length ? " (some missing)" : ""}`;
     },
   },

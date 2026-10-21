@@ -60,6 +60,7 @@ import { commandPromptLines } from "../guide/agent/registry";
 import { screenCommandCalls, type RawCommandCall, type RefusedCommand } from "../guide/agent/screen";
 import type { CommandCall } from "../guide/agent/types";
 import { castOf } from "../guide/agent/resolve";
+import { turningOf } from "../guide/turning";
 import { portraitStatus } from "../guide/portrait";
 
 /**
@@ -228,8 +229,10 @@ export function describeGuidePeople(project: Project): string {
   if (cast.length === 0) return "(nobody yet)";
   return cast
     .map((member) => {
-      const age =
+      const turning = turningOf(member);
+      const completed =
         member.age !== undefined ? `${member.age}` : member.ageMonths !== undefined ? `${member.ageMonths} months` : "age not set";
+      const age = turning !== undefined ? `${completed}, almost ${turning}` : completed;
       const role = member.role?.trim() ? `, ${member.role.trim()}` : "";
       const portrait = portraitStatus(project, member.id);
       const drawn = portrait === "current" ? "portrait drawn" : portrait === "stale" ? "portrait out of date" : "no portrait";

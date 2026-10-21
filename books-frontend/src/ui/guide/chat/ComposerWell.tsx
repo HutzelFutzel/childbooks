@@ -472,6 +472,7 @@ function WellBody({
       return (
         <AudienceConfirm
           bandId={well.bandId}
+          turningBandId={well.turningBandId}
           optional={well.optional}
           differ={well.differ}
           onDefault={onDefault}
@@ -911,11 +912,14 @@ function HardcoverChoice({
 /** "Is it for 3-year-olds?": yes, or another age group. Typing an age answers it too. */
 function AudienceConfirm({
   bandId,
+  turningBandId,
   optional,
   differ,
   onDefault,
 }: {
   bandId: string;
+  /** The group a child who is almost the next age is about to enter: offered beside the suggestion. */
+  turningBandId?: string;
   optional?: boolean;
   differ?: boolean;
   onDefault: (run: (() => void) | null) => void;
@@ -941,11 +945,13 @@ function AudienceConfirm({
   const yes = () => pick(suggested, t("audienceYes", { band: bandText(suggested) }));
   useDefault(onDefault, yes);
   const current = resolveAudienceProfile(currentId, audience);
-  const others = bands.filter((band) => band.id !== suggested.id);
+  const turningBand = turningBandId && turningBandId !== suggested.id ? bands.find((band) => band.id === turningBandId) : undefined;
+  const others = bands.filter((band) => band.id !== suggested.id && band.id !== turningBand?.id);
   return (
     <div className="flex w-full flex-col items-start gap-3">
       <div className="flex flex-wrap gap-2">
         <Quiet onClick={yes}>{t("audienceYes", { band: bandText(suggested) })}</Quiet>
+        {turningBand ? <Quiet onClick={() => pick(turningBand, bandText(turningBand))}>{bandText(turningBand)}</Quiet> : null}
         {differ ? (
           <Quiet subtle onClick={() => void tap(t("audienceKeep", { band: bandText(current) }), keepOwnAudience, { undoable: true })}>
             {t("audienceKeep", { band: bandText(current) })}

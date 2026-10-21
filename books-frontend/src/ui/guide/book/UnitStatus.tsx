@@ -9,6 +9,7 @@
  * the reader is not asked to.
  */
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { useEffect, useState } from "react";
 import { AlertTriangle, Clock, Sparkles } from "lucide-react";
 import { useJobsStore } from "../../../state/jobsStore";
 import { usePortraitStartStore } from "../../../state/portraitAutoStart";
@@ -29,6 +30,23 @@ export function useUnitWorking(unitId: string, extraUnitId?: string, bookPage = 
   const working = active || (bookPage && drawingBook && (failed || !hasArt));
   const preparing = extraActive && !jobActive && !portraitStarting;
   return { working, active, preparing, failed, drawPhase };
+}
+
+/** A picture normally takes well under a minute; past this the reader is told it is slow, not stuck. */
+const SLOW_AFTER_MS = 3 * 60_000;
+
+/** True once `active` has been true for {@link SLOW_AFTER_MS} without a break. */
+function useSlowWhile(active: boolean): boolean {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setSlow(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlow(true), SLOW_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [active]);
+  return active && slow;
 }
 
 export function UnitStatus({
@@ -62,16 +80,22 @@ export function UnitStatus({
     hasArt,
   );
 
+  // Not for book pages: a queued page of a long book legitimately waits its turn for many minutes.
+  const slow = useSlowWhile(working && !bookPage);
+
   const activeHeading = preparing
     ? t("preparingUnit")
     : title ?? t("working");
-  const activeSubtitle =
-    bookPage && drawPhase === "cast"
+  const activeSubtitle = slow
+    ? t("takingLonger")
+    : bookPage && drawPhase === "cast"
       ? t("preparingBook")
       : subtitle ?? (bookPage ? t("pageAppearsWhenReady") : undefined);
 
   const badgeLabel = working
-    ? activeHeading
+    ? slow && hasArt
+      ? t("takingLonger")
+      : activeHeading
     : failed
       ? t("failed")
       : stale

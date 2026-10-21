@@ -25,6 +25,7 @@ import type { Project, ReadingModeId, StoryCastMember } from "../types";
 import type { WellItem } from "./journey";
 import { authoringOf } from "./projectState";
 import type { GuideLineCandidate } from "./speech";
+import { turningOf } from "./turning";
 
 /** The child the suggestion comes from: the first named one, once their age is known. */
 export function readingAgeSource(project: Project): StoryCastMember | undefined {
@@ -120,7 +121,8 @@ export function ownAudienceQuestion(project: Project, audience?: AudienceConfig 
   const current = resolveAudienceProfile(project.config.ageRangeId, audience ?? null);
   const spoken = hero ? readingAgeOf(hero) : null;
   const fromStoryYears = hero?.visualAge?.source === "story" ? hero.visualAge.years : undefined;
-  const age = spoken ?? (fromStoryYears !== undefined ? { n: fromStoryYears, months: false } : null);
+  const age: { n: number; months: boolean; turning?: number } | null =
+    spoken ?? (fromStoryYears !== undefined ? { n: fromStoryYears, months: false } : null);
   const base = {
     kind: "audienceConfirm" as const,
     castId: hero?.id ?? "",
@@ -131,10 +133,15 @@ export function ownAudienceQuestion(project: Project, audience?: AudienceConfig 
   };
   if (audienceSettled(project)) {
     if (!fromCast || fromCast.id === current.id) return null;
-    return { ...base, bandId: fromCast.id, bandLabel: fromCast.label, differ: true };
+    return { ...base, ...turningFields(age?.turning, fromCast.id, audience), bandId: fromCast.id, bandLabel: fromCast.label, differ: true };
   }
   const band = fromCast ?? current;
-  return { ...base, bandId: band.id, bandLabel: band.label, optional: !fromCast };
+  return { ...base, ...turningFields(fromCast ? age?.turning : undefined, band.id, audience), bandId: band.id, bandLabel: band.label, optional: !fromCast };
+}
+
+/** How the question names the child's age: "3", or "almost 3" when that is what the parent said. */
+function ageShown(question: AudienceQuestion): number | string {
+  return question.turning !== undefined ? `almost ${question.turning}` : question.age;
 }
 
 /** "Mila is 3, so I'll write the story for children aged 3 years. Is that right…?" */
@@ -143,7 +150,7 @@ export function readingAgeAskLine(question: AudienceQuestion): GuideLineCandidat
     return {
       key: "readingAgeAskOwnDiffer",
       priority: "question",
-      vars: { names: question.name, n: question.age, what: question.bandLabel },
+      vars: { names: question.name, n: ageShown(question), what: question.bandLabel },
     };
   }
   if (question.own && question.optional) {
@@ -153,14 +160,14 @@ export function readingAgeAskLine(question: AudienceQuestion): GuideLineCandidat
     return {
       key: "readingAgeAskOwnFromAge",
       priority: "question",
-      vars: { names: question.name, n: question.age, what: question.bandLabel },
+      vars: { names: question.name, n: ageShown(question), what: question.bandLabel },
     };
   }
   if (question.own) return { key: "readingAgeAskOwn", priority: "question", vars: { what: question.bandLabel } };
   return {
-    key: question.months ? "readingAgeAskMonths" : "readingAgeAsk",
+    key: question.months && question.turning === undefined ? "readingAgeAskMonths" : "readingAgeAsk",
     priority: "question",
-    vars: { names: question.name, n: question.age, what: question.bandLabel },
+    vars: { names: question.name, n: ageShown(question), what: question.bandLabel },
   };
 }
 
@@ -175,12 +182,31 @@ export function readingAgeExpectation(question: AudienceQuestion): string {
   return base;
 }
 
-/** How the question names the child's age: months for under-twos, else years. */
-export function readingAgeOf(member: StoryCastMember): { n: number; months: boolean } | null {
+/**
+ * How the question names the child's age: months for under-twos, else years.
+ * `turning` is set when the parent said the child is almost the next age.
+ */
+export function readingAgeOf(member: StoryCastMember): { n: number; months: boolean; turning?: number } | null {
+  const turning = turningOf(member);
+  const near = turning !== undefined ? { turning } : {};
   if (member.ageMonths !== undefined && member.age === undefined && member.ageMonths < 24) {
-    return { n: member.ageMonths, months: true };
+    return { n: member.ageMonths, months: true, ...near };
   }
-  if (member.age !== undefined) return { n: member.age, months: false };
-  if (member.ageMonths !== undefined) return { n: Math.floor(member.ageMonths / 12), months: false };
+  if (member.age !== undefined) return { n: member.age, months: false, ...near };
+  if (member.ageMonths !== undefined) return { n: Math.floor(member.ageMonths / 12), months: false, ...near };
   return null;
+}
+
+/**
+ * The question's fields for a child who is almost the next age: that age, and the
+ * age group they are about to enter, when it is not the one already suggested.
+ */
+export function turningFields(
+  turning: number | undefined,
+  suggestedBandId: string,
+  audience?: AudienceConfig | null,
+): { turning?: number; turningBandId?: string } {
+  if (turning === undefined) return {};
+  const next = audienceProfileForMonths(turning * 12, audience ?? null);
+  return { turning, ...(next && next.id !== suggestedBandId ? { turningBandId: next.id } : {}) };
 }

@@ -34,6 +34,9 @@ import {
 } from "../../books-frontend/src/core/config/generationTuning";
 import { loadLikenessPhotoForSubject } from "./likeness";
 
+/** Longest a single text/vision call inside a render step may run (images keep their own limit). */
+const STEP_TEXT_TIMEOUT_MS = Number(process.env.PIPELINE_STEP_TIMEOUT_MS) || 60_000;
+
 function apiKeyFor(provider: ProviderId): string {
   const cfg = serverConfig();
   const key = provider === "openai" ? cfg.openaiApiKey : cfg.googleApiKey;
@@ -127,7 +130,16 @@ export function backendPipelineEnv(
     },
     // A text call inside a render runs with its own action's parameters (the
     // binding pass's "low" reasoning), not the provider's slow default.
-    runStep: (step, fn) => withStep(step, () => withTextParams(stepParams[step], fn)),
+    // Every text call inside a render step (locate, binding, lettering, checks) is a quick look at a
+    // picture, not a screenplay. Without a bound timeout it ran for the provider's 210s default, and
+    // when it hung the task burned its whole lease and was retried. The admin's own timeout for the
+    // step still wins.
+    runStep: (step, fn) => {
+      const own = stepParams[step];
+      return withStep(step, () =>
+        withTextParams({ ...own, timeoutMs: own?.timeoutMs ?? STEP_TEXT_TIMEOUT_MS }, fn),
+      );
+    },
     composite: {
       async compositeMaskedRegion(input) {
         const out = await compositeMaskedRegion({

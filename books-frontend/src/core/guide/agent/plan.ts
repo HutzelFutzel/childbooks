@@ -77,6 +77,11 @@ export interface PlanInput {
   overflow?: readonly CommandCall[];
   /** The reader tapped "yes" on this confirmation: these calls run without asking again. */
   confirmed?: boolean;
+  /**
+   * The same message already saved facts (people, ages) before these calls ran. A call that then finds
+   * nothing left to change is not "already that way": the message did land, just not through a call.
+   */
+  factsWritten?: boolean;
 }
 
 function stableJson(value: unknown): string {
@@ -243,7 +248,7 @@ export function planTurn(input: PlanInput): Plan {
     );
   }
   const acted = plan.steps.length > 0 || plan.ask || plan.confirm || plan.blocked.length > 0;
-  if (!acted && noops.length > 0) plan.beats.push(noops[0]!);
+  if (!acted && !input.factsWritten && noops.length > 0) plan.beats.push(noops[0]!);
   if (!acted && noops.length === 0 && plan.refused.length > 0 && input.calls.length > 0) {
     plan.beats.push(beat("cannotDoThat", undefined, { priority: "answer", ...(sayable[0] ? { text: sayable[0] } : {}) }));
   }

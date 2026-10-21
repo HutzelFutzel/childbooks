@@ -831,6 +831,7 @@
       "drawingPage": "Drawing page {n}…",
       "pageQueued": "Queued — will be drawn next",
       "pageAppearsWhenReady": "Artwork appears here automatically as soon as it's ready",
+      "takingLonger": "Taking longer than usual…",
       "storySource": "Story source",
       "guidedSource": "Guide writes",
       "ownSource": "My words",

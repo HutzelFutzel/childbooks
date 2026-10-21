@@ -108,7 +108,9 @@ export function statedCast(message: string): StatedPerson[] | null {
 
 function isName(raw: string): boolean {
   const words = raw.trim().split(/\s+/);
-  if (words.length === 0 || words.length > 2) return false;
+  // One word. A second word before an age ("aren almost 3", "aren fast 3") is a remark about the age in
+  // some language, not part of a name; whoever wrote it is read by the interpreter, which knows the language.
+  if (words.length !== 1) return false;
   return words.every((word) => {
     const key = word.toLowerCase().replace(/['’.-]/g, "");
     return key.length >= 2 && !STOP.has(key);

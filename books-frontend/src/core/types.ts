@@ -196,6 +196,12 @@ export interface StoryCastMember {
    */
   ageMonths?: number;
   /**
+   * "Almost 3": `age` holds the years completed (2) and this the age the parent
+   * said the child is about to reach (3). Only read while it is still one more
+   * than the stored age (`turningOf`); never used to draw anyone.
+   */
+  turning?: number;
+  /**
    * A transparent drawing-only fallback when the manuscript does not state an
    * age. It shapes portraits and reference sheets, but never silently changes
    * the target reading audience or pretends to be a fact supplied by the family.
