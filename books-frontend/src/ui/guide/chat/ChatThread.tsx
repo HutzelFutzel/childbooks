@@ -127,7 +127,10 @@ export function ChatThread({
   }, [taskKey]);
 
   return (
-    <div
+    // `layoutScroll`: the lines below animate their position, and framer must account for this
+    // element's own scrolling or content ends up drawn away from where it can be clicked.
+    <motion.div
+      layoutScroll
       ref={scroller}
       onWheel={markReaderScroll}
       onTouchMove={markReaderScroll}
@@ -213,7 +216,7 @@ export function ChatThread({
           </div>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }
 

@@ -20,6 +20,13 @@ import { resolveArtStyles } from "../core/config/artStyles";
 import { BOOK_LANGUAGES, getBookLanguage, isBookLanguageId } from "../core/config/bookLanguages";
 import { briefOf, storyBriefSignature } from "../core/story/brief";
 import { canTranslateStory, withTranslatedStory } from "../core/guide/storyLanguage";
+import {
+  hasCurrentVersion,
+  languageOf,
+  withLanguageRemembered,
+  withTranslationKept,
+  withVersionRestored,
+} from "../core/guide/storyVersions";
 import type { GuideAgentConfig } from "../core/config/guideAgent";
 import { guideCopy, type GuideCopyOverrides } from "../core/guide/copy";
 import { validateComposed } from "../core/guide/agent/compose";
@@ -251,6 +258,24 @@ async function translateStoryInto(locale: string, turn: AgentTurn): Promise<void
     fail();
     return;
   }
+  // A language the book was already written in, from the same story, is a lookup: instant, free,
+  // and the same words as before. Only a language that was never written, or whose story has since
+  // changed, is translated.
+  if (hasCurrentVersion(before, locale)) {
+    const landed: { project: Project | null } = { project: null };
+    await useProjectsStore.getState().patchCurrent((p) => {
+      if (p.id !== before.id || p.config.storyText !== before.config.storyText || !canTranslateStory(p)) return p;
+      landed.project = withVersionRestored(p, locale);
+      return landed.project ?? p;
+    });
+    if (landed.project) {
+      turn.restore ??= snapshotForChange(before, landed.project);
+      turn.beats = turn.beats.filter((b) => b.key !== "languageTranslating");
+      turn.beats.push(beat("languageRestored", { language: name }, { priority: "result", receipt: `Language: ${name}` }));
+      return;
+    }
+    // The book moved under it: nothing is written, and it is translated as usual.
+  }
   const brief = briefOf(before.config);
   const prior = authoringOf(before).storyRun;
   const startedAt = Date.now();
@@ -263,7 +288,9 @@ async function translateStoryInto(locale: string, turn: AgentTurn): Promise<void
     await useProjectsStore.getState().patchCurrent((p) => {
       // Only into the book and the words that were sent: anything else changed meanwhile, so nothing is written.
       if (p.id !== before.id || p.config.storyText !== before.config.storyText || authoringOf(p).storyRun?.startedAt !== startedAt) return p;
-      const next = withTranslatedStory(p, translated, locale);
+      // The words it had are kept for their language, and the new ones for theirs, as one story.
+      const remembered = withLanguageRemembered(p);
+      const next = withTranslationKept(remembered, withTranslatedStory(remembered, translated, locale), translated, languageOf(p));
       landed.project = withAuthoring(next, {
         storyRun: {
           signature: storyBriefSignature(briefOf(next.config), next.config.ageRangeId, next.config.readingModeId, locale),
@@ -278,7 +305,9 @@ async function translateStoryInto(locale: string, turn: AgentTurn): Promise<void
     turn.restore ??= snapshotForChange(before, landed.project);
     turn.beats = turn.beats.filter((b) => b.key !== "languageTranslating");
     turn.beats.push(beat("languageTranslated", { language: name }, { priority: "result", receipt: `Language: ${name}` }));
-  } catch {
+  } catch (error) {
+    // The reader sees only "it didn't come through"; the reason is for whoever looks into it.
+    console.error("[translate] The story could not be translated.", error);
     // Back to the story as it was, if this run is still the one holding it.
     await useProjectsStore.getState().patchCurrent((p) =>
       authoringOf(p).storyRun?.startedAt === startedAt ? withAuthoring(p, { storyRun: prior }) : p,

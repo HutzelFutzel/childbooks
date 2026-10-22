@@ -19,6 +19,8 @@ export interface BeatCardProps {
   language: BookLanguageDefinition;
   placeholder?: string;
   isHighlighted?: boolean;
+  /** The story is being written or translated: the words can be read and not changed. */
+  readOnly?: boolean;
   onChangeTitle: (title: string) => void;
   onChangeText: (text: string) => void;
   onRemove: () => void;
@@ -36,6 +38,7 @@ export function BeatCard({
   language,
   placeholder,
   isHighlighted = false,
+  readOnly = false,
   onChangeTitle,
   onChangeText,
   onRemove,
@@ -93,6 +96,7 @@ export function BeatCard({
           dir={language.direction}
           style={{ fontFamily: fontStack("Lora"), hyphens: "auto" }}
           value={beat.text}
+          readOnly={readOnly}
           onChange={handleTextChange}
           onSelect={handleSelect}
           onKeyDown={(e) => {
@@ -142,6 +146,7 @@ export function BeatCard({
             ref={titleInputRef}
             type="text"
             value={beat.title}
+            readOnly={readOnly}
             onChange={(e) => onChangeTitle(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -207,6 +212,7 @@ export function BeatCard({
           dir={language.direction}
           style={{ fontFamily: fontStack("Lora"), hyphens: "auto" }}
           value={beat.text}
+          readOnly={readOnly}
           onChange={handleTextChange}
           onSelect={handleSelect}
           onKeyDown={(e) => {

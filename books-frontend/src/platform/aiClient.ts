@@ -186,6 +186,8 @@ export interface StoryTranslateResult {
   /** Empty when the book had no subtitle. */
   subtitle: string;
   story: string;
+  /** What the translation renamed, from names the book has. */
+  names?: { from: string; to: string }[];
 }
 
 /** Ask the backend to translate and adapt an existing story into a target language. */
@@ -214,9 +216,20 @@ export function storyFitRemote(
   );
 }
 
-export function analyzeStoryRemote(project: Project, signal?: AbortSignal): Promise<AnalyzeResult> {
-  // Text-only: needs config.storyText; drop all version history/design.
-  return postAi<AnalyzeResult>("/ai/analyze", { project: slimProjectForRender(project, {}) }, signal);
+export function analyzeStoryRemote(
+  project: Project,
+  signal?: AbortSignal,
+  /** Recurring things the page plan found that the book has no anchor for. */
+  missing?: string[],
+): Promise<AnalyzeResult> {
+  // Text-only: needs config.storyText; drop all version history/design. The
+  // anchors ride along (without their pictures) so the reading can say which
+  // of them it found again.
+  return postAi<AnalyzeResult>(
+    "/ai/analyze",
+    { project: slimProjectForRender(project, {}), ...(missing?.length ? { missing } : {}) },
+    signal,
+  );
 }
 
 /**

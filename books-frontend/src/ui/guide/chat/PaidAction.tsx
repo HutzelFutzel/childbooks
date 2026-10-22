@@ -80,8 +80,9 @@ export function PaidAction({
         disabled={!quote || starting}
         className={cn(
           "inline-flex min-h-11 items-center gap-2 rounded-full bg-linear-to-b from-brand-400 to-brand-500 px-5 text-[15px] font-semibold text-white shadow-[0_4px_14px_-4px_rgba(249,106,77,0.5),inset_0_1px_0_rgba(255,255,255,0.28)] ring-1 ring-brand-600/80 transition",
-          "hover:-translate-y-0.5 hover:from-brand-500 hover:to-brand-600 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2",
-          "disabled:cursor-default disabled:opacity-70 disabled:hover:translate-y-0",
+          // No lift on hover: a button that moves out from under the pointer flickers at its edge.
+          "hover:from-brand-500 hover:to-brand-600 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2",
+          "disabled:cursor-default disabled:opacity-70",
         )}
       >
         {starting && <Loader2 className="size-4 animate-spin" />}

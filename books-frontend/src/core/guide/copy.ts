@@ -123,6 +123,7 @@ export const GUIDE_LINE_KEYS = [
   "castConfirmed",
   "languageTranslating",
   "languageTranslated",
+  "languageRestored",
   "languageTranslateFailed",
   "askWhich",
   "briefOffer",
@@ -333,6 +334,7 @@ export const DEFAULT_GUIDE_COPY: Record<GuideCopyKey, string> = {
   castConfirmed: "Great, that's everyone.",
   languageTranslating: "I'm translating the story into {language}. Everyone and everything in it stays the same.",
   languageTranslated: "The story is now in {language}. The people, the plot and the tone are the same.",
+  languageRestored: "The story is back in {language}, the way it was written. Nothing needed translating.",
   languageTranslateFailed: "The translation didn't come through, and the story is as it was. Try again in a moment.",
   askWhich: "Which one do you mean?",
   briefOffer:
@@ -498,6 +500,7 @@ export const GUIDE_COPY_HELP: Partial<Record<GuideCopyKey, string>> = {
   lookNoted: "Said when a look change is saved before any portrait exists.",
   languageTranslating: "Said when the story is being translated into another language after it was written. The people, plot and tone do not change.",
   languageTranslated: "Said when the translated story is in place. The reader can take it back with Undo.",
+  languageRestored: "Said when the story is put back into a language it was already written in, with no translation needed. The reader can take it back with Undo.",
   languageTranslateFailed: "Said when translating the story failed. The story is untouched.",
   tooMany: "Said when a message asked for more than the per-message limit. {count} is how many were done.",
   personAdded: "Said after a person is added in chat.",

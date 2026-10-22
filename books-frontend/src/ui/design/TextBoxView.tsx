@@ -138,7 +138,9 @@ export function TextBoxView({
       >
         <div style={clipStyle}>
           {box.paragraphs.map((para, pi) => (
-            <p key={pi} style={{ textAlign: para.align ?? box.align, margin: 0, width: "100%" }}>
+            // `pre-line` keeps a line break inside a paragraph (a line of verse)
+            // while collapsing spaces as before, so it matches the canvas layout.
+            <p key={pi} style={{ textAlign: para.align ?? box.align, margin: 0, width: "100%", whiteSpace: "pre-line" }}>
               {para.spans.map((span, si) => {
                 const selected = selectedSpan?.p === pi && selectedSpan?.i === si;
                 return (

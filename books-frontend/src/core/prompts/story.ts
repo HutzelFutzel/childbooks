@@ -226,6 +226,8 @@ export function buildStoryTranslatePrompt(
   sourceLocale?: string | null,
   ctx?: PromptContext | null,
   subtitle?: string,
+  /** The book's people, places and things, one per line, when it has any. */
+  knownNames?: string,
 ): StoryPromptParts {
   const baseCraft = resolveStoryCraftFor(config.ageRangeId, ctx);
   const targetLanguage = getBookLanguage(config.contentLocale);
@@ -237,6 +239,10 @@ export function buildStoryTranslatePrompt(
   const deviceGuidance = brief
     ? optionsGuidance(baseCraft.devices, effectiveDeviceIds, brief.customDevice)
     : "";
+  // The same limits a draft in this language is written to. A story the reader wrote is theirs, so
+  // its length is never pushed into a range; the sentence cap and the never-include list still hold.
+  const minWords = Math.max(1, Math.round(baseCraft.structure.minWords * targetLanguage.wordCountFactor));
+  const maxWords = Math.max(1, Math.round(baseCraft.structure.maxWords * targetLanguage.wordCountFactor));
 
   const { system, user } = renderTextPrompt(resolvePromptsConfig(ctx), "storyDraft/translate", {
     vars: {
@@ -249,11 +255,20 @@ export function buildStoryTranslatePrompt(
       currentSubtitle: subtitle?.trim() ?? "",
       currentStory: story.trim(),
       deviceGuidance,
+      knownNames: knownNames?.trim() ?? "",
+      minWords: String(minWords),
+      maxWords: String(maxWords),
+      maxSentenceWords: String(baseCraft.structure.maxSentenceWords),
+      safetyList: baseCraft.safety.avoid.join("; "),
+      safetyNote: baseCraft.safety.note,
     },
     flags: {
+      hasLength: Boolean(brief) && brief?.mode !== "own",
+      hasSentenceLimit: baseCraft.structure.maxSentenceWords > 0,
       hasTitle: Boolean(title?.trim()),
       hasSubtitle: Boolean(subtitle?.trim()),
       hasDevice: Boolean(deviceGuidance),
+      hasKnownNames: Boolean(knownNames?.trim()),
     },
   });
 

@@ -61,6 +61,9 @@ export function layoutTextBox(
     let line: Tok[] = [];
     let lineWidth = 0;
     let maxFont = 0;
+    // True while the last thing laid out was a line break, so a paragraph that
+    // ends on one does not add an empty line of its own.
+    let endedOnBreak = false;
 
     // `lastOfParagraph` is only true for the flush that ends the paragraph
     // (not one forced by wrapping) — justify uses this to leave a paragraph's
@@ -86,7 +89,23 @@ export function layoutTextBox(
       const parts = span.text.match(/\s+|\S+/g) ?? [];
       for (const part of parts) {
         const space = /^\s+$/.test(part);
+
+        // A line break inside a paragraph is a real break: one line of verse
+        // ends and the next begins. Only a run of spaces used to be seen here,
+        // so a couplet written on two lines wrapped as one and the rhyme words
+        // left the ends of their lines. Each extra break leaves a blank line,
+        // as pre-wrapped text does.
+        if (space && /[\r\n]/.test(part)) {
+          const breaks = part.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length - 1;
+          while (line.length && line[line.length - 1].space) {
+            lineWidth -= line.pop()!.width;
+          }
+          for (let b = 0; b < breaks; b++) flush(true);
+          endedOnBreak = true;
+          continue;
+        }
         const width = c.measureText(part).width;
+        endedOnBreak = false;
 
         if (!space && line.length > 0 && lineWidth + width > inner.w) {
           // Drop a trailing space before wrapping so alignment stays correct.
@@ -117,7 +136,9 @@ export function layoutTextBox(
         maxFont = Math.max(maxFont, fontSize);
       }
     }
-    flush(true); // every paragraph ends a line (keeps empty paragraphs spaced)
+    // Every paragraph ends a line (keeps empty paragraphs spaced), unless a
+    // line break already did.
+    if (!(endedOnBreak && line.length === 0 && lines.length > 0)) flush(true);
   }
 
   const totalHeight = lines.reduce((s, l) => s + l.height, 0);

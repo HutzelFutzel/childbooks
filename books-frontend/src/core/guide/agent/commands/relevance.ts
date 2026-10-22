@@ -76,6 +76,71 @@ export function unreadStoryOffer(p: Project, messages: readonly GuideMessage[]):
   return messages.some((message) => message.fit?.textHash === hash) ? null : hash;
 }
 
+/** A name as the story would spell it, for comparing: no accents, case or punctuation. */
+const folded = (value: string): string =>
+  value
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/['’`]s\b/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+
+/** A word as the story spells it, without accents, so a capital can be compared with a small letter. */
+const plainWords = (value: string): string[] =>
+  value
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+
+/**
+ * People in the cast whom the story never names. A person is named when the
+ * story has their full name, or any other name the book knows them by (the
+ * story's own word for the person they are linked to, which is how a
+ * translated story still names them). Before the story has been read there is
+ * only the cast, so the first name stands for "Mia Schmidt" too, but only when
+ * it is not a common word of the story ("the" in "The Doctor" is also spelled
+ * with a small letter). This only compares text, so it holds in any language.
+ * A story too short to be one names nobody.
+ */
+export function castMissingFromStory(p: Project): { id: string; name: string }[] {
+  if (p.config.storyText.trim().length < 20) return [];
+  const story = ` ${folded(p.config.storyText)} `;
+  const words = new Set(plainWords(p.config.storyText));
+  return castOf(p).flatMap((member) => {
+    const name = folded(member.name);
+    if (!name) return [];
+    const linked = (p.anchors ?? []).filter((anchor) => anchor.castId === member.id);
+    const names = [name, ...linked.flatMap((anchor) => [anchor.name, ...(anchor.aliasNames ?? [])]).map(folded)].filter(Boolean);
+    if (names.some((known) => story.includes(` ${known} `))) return [];
+    if (linked.length === 0) {
+      const first = plainWords(member.name)[0] ?? "";
+      const small = first.toLowerCase();
+      if (first.length >= 2 && story.includes(` ${folded(first)} `) && !(small !== first && words.has(small))) return [];
+    }
+    return [{ id: member.id, name: member.name.trim() }];
+  });
+}
+
+/** Someone who is in the book's cast and not in its story, so the story can be asked to take them in. */
+export function whenPersonMissingFromStory(p: Project): Vars {
+  const missing = castMissingFromStory(p)[0];
+  return missing ? { name: missing.name } : null;
+}
+
+/**
+ * The same, offered first. Only for a story the guide wrote with the reader: a
+ * story they wrote themselves is theirs, and gets the chip but never the
+ * first place. Setting it aside holds for these people, so a new person
+ * brings it back and nothing else does.
+ */
+export function personMissingOffer(p: Project): string | null {
+  if (journeyEntry(p) !== "guided") return null;
+  const missing = castMissingFromStory(p);
+  return missing.length > 0 ? missing.map((member) => member.id).sort().join(",") : null;
+}
+
 /** Someone whose portrait has an earlier picture to go back to. */
 export function whenEarlierPortrait(p: Project): Vars {
   const member = castOf(p).find((m) => hasEarlier(p, { kind: "person", castId: m.id, name: m.name.trim() }));

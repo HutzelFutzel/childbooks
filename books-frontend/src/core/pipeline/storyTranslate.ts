@@ -6,7 +6,8 @@
 import { z } from "zod";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
-import type { BookConfig } from "../types";
+import type { Anchor, BookConfig } from "../types";
+import { castOf, knownNameKeys, knownNameLines, validNamePairs, type NamePair } from "../book/anchorIdentity";
 import { withRetry } from "./retry";
 import type { PromptContext } from "../prompts/context";
 import { buildStoryTranslatePrompt } from "../prompts/story";
@@ -17,15 +18,28 @@ const storyTranslateSchema = z.object({
   /** Empty when the book had no subtitle. */
   subtitle: z.string(),
   story: z.string(),
+  /**
+   * Everything from the book's list of names that the story now says differently,
+   * so the same person, place or thing is found again under its new words.
+   */
+  names: z.array(z.object({ from: z.string(), to: z.string() })).nullish(),
 });
 
-export type StoryTranslateResult = z.infer<typeof storyTranslateSchema>;
+export interface StoryTranslateResult {
+  title: string;
+  subtitle: string;
+  story: string;
+  /** The renames the translation reports, each from a name the book has. */
+  names: NamePair[];
+}
 
 export interface TranslateStoryInput {
   config: BookConfig;
   story: string;
   title?: string;
   subtitle?: string;
+  /** The book's people, places and things, so the translation can say how it renamed them. */
+  anchors?: Anchor[];
   sourceLocale?: string | null;
   targetLocale?: string | null;
   creds: ProviderCredentials;
@@ -35,8 +49,10 @@ export interface TranslateStoryInput {
 }
 
 export async function translateStory(input: TranslateStoryInput): Promise<StoryTranslateResult> {
-  const { config, story, title, subtitle, sourceLocale, creds, model, signal, prompts } = input;
+  const { config, story, title, subtitle, sourceLocale, creds, model, signal, prompts, anchors } = input;
   const provider = getTextProvider(config.textModel!.provider);
+  const cast = castOf(config);
+  const known = knownNameLines(anchors, cast);
 
   const { system, user } = buildStoryTranslatePrompt(
     config,
@@ -45,11 +61,12 @@ export async function translateStory(input: TranslateStoryInput): Promise<StoryT
     sourceLocale,
     prompts,
     subtitle,
+    known,
   );
 
   const result = await withRetry(
     () =>
-      provider.generateStructured<StoryTranslateResult>(creds, {
+      provider.generateStructured<z.infer<typeof storyTranslateSchema>>(creds, {
         model,
         schema: storyTranslateSchema,
         schemaName: "story_translate",
@@ -68,5 +85,6 @@ export async function translateStory(input: TranslateStoryInput): Promise<StoryT
     // A model that ignores the subtitle (an older prompt override) returns none, never the old words.
     subtitle: (result.subtitle ?? "").trim(),
     story: restoreModelLineBreaks(result.story).trim(),
+    names: known ? validNamePairs(result.names, knownNameKeys(anchors, cast)) : [],
   };
 }

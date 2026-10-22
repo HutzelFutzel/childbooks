@@ -1737,6 +1737,7 @@ async function renderTask(
         model: model.id,
         prompts,
         signal,
+        review: true,
       }),
       model.params,
     );

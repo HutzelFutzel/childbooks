@@ -48,6 +48,21 @@ export interface PageLayoutInput {
   mode?: CompositionMode;
   /** Admin overlay: treatments and allowed modes. */
   layoutsConfig?: LayoutsConfig | null;
+  /**
+   * The page carries no words. Its picture fills the page and no space is kept
+   * for text, whatever the layout does on pages that have words.
+   */
+  wordless?: boolean;
+}
+
+/** The plan for a page with no words: the art takes the whole page, no text slot remains. */
+function withoutText(plan: LayoutPlan): LayoutPlan {
+  return {
+    ...plan,
+    mode: "full-bleed",
+    artRect: { x: 0, y: 0, w: 1, h: 1 },
+    slots: plan.slots.filter((slot) => slot.role !== "text"),
+  };
 }
 
 function applySlotTreatmentOverrides(
@@ -90,5 +105,6 @@ export function planPageLayout(project: Project, input: PageLayoutInput): Layout
     mode,
     textLength: input.textLength,
   });
-  return { ...applySlotTreatmentOverrides(plan, input.layoutsConfig), safe };
+  const planned = applySlotTreatmentOverrides(plan, input.layoutsConfig);
+  return { ...(input.wordless && !input.isCover ? withoutText(planned) : planned), safe };
 }

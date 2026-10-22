@@ -647,6 +647,16 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
       if (redrawing?.kind === "drawBook" || redrawing?.kind === "portraits") {
         fail("While the portraits redraw, neither the redraw card nor the book's button should show.");
       }
+      // A redraw of a portrait that is already current changes nothing until the new one lands:
+      // the book's button still has to wait for it.
+      cases += 1;
+      if (journeyOf(setupChosen, { planReady: true, activeUnitIds: new Set([castIds[0]!]) }).well?.kind === "drawBook") {
+        fail("Create illustrated book must wait while a current portrait is being redrawn.");
+      }
+      cases += 1;
+      if (journeyOf(setupChosen, { planReady: true, activeUnitIds: new Set() }).well?.kind !== "drawBook") {
+        fail("Create illustrated book should come back once no portrait is drawing.");
+      }
       const back = withStyleReverted(restyled);
       cases += 1;
       if (

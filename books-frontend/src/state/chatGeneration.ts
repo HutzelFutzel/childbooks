@@ -277,6 +277,9 @@ export async function startDrawBook(quote: GenerationQuote): Promise<boolean> {
   // A stale tab or quote must not bypass the journey's portrait checkpoint.
   // Every later character sheet is seeded from a portrait the reader could see.
   if (portraitsToDraw(before).length > 0) return false;
+  // Nor while someone's portrait is still being drawn, redraws of a current one included.
+  const drawing = useJobsStore.getState().activeUnitIds;
+  if (namedCast(briefOf(before.config)).some((member) => drawing.has(member.id))) return false;
   const languages = useAppConfigStore.getState().bookLanguages;
   const masks = useAppConfigStore.getState().imageMasks;
   await store.patchCurrent((live) => {

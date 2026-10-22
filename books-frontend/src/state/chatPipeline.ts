@@ -23,6 +23,8 @@ import {
 import { authoringOf, withAuthoring } from "../core/guide/projectState";
 import { isRealStoryChange } from "../core/guide/storyChange";
 import { guideCopy } from "../core/guide/copy";
+import { isOlderBasis, planBasis, planBasisMatches, stamp } from "../core/guide/planBasis";
+import { getCursor } from "../core/versioning";
 import { withInventedTitle, withManuscriptHeading } from "../ui/guide/bookTitle";
 import { readManuscript, withoutHeading } from "../core/story/manuscriptShape";
 import type { Project } from "../core/types";
@@ -112,13 +114,18 @@ export function needsAnalysis(project: Project): boolean {
   return isRealStoryChange(analysis.sourceStoryText ?? "", project.config.storyText);
 }
 
-/** Who is in the story, from the text on screen. An older run is dropped. */
-export async function runAnalysis(projectId: string): Promise<boolean> {
+/**
+ * Who is in the story, from the text on screen. An older run is dropped.
+ * `missing` asks for a read the story did not need: the page plan found these
+ * recurring in it, so the story is read again with them named.
+ */
+export async function runAnalysis(projectId: string, options: { missing?: string[] } = {}): Promise<boolean> {
   const project = live(projectId);
-  if (!project || !needsAnalysis(project)) return false;
+  const asked = Boolean(options.missing?.length);
+  if (!project || (asked ? !storyOpen(project) : !needsAnalysis(project))) return false;
   const token = ++analysisToken;
   const story = project.config.storyText;
-  const result = await analyzeStoryRemote(project);
+  const result = await analyzeStoryRemote(project, undefined, options.missing);
   if (token !== analysisToken) return false;
   const current = live(projectId);
   if (!current || !storyOpen(current) || isRealStoryChange(story, current.config.storyText)) return false;
@@ -202,26 +209,13 @@ export function hardcoverFor(project: Project): HardcoverCheck | null {
   return hardcoverCheck(project.config, profile.density, authoringOf(project).hardcover);
 }
 
-function planBasis(project: Project, check: HardcoverCheck): string {
-  // Physical trim does not affect pagination or the screenplay prompt. Keeping
-  // it out means choosing a format remains an instant, non-generative decision.
-  const notesAt = authoringOf(project).planNotesAt;
-  return [
-    project.analysis?.generatedAt ?? 0,
-    check.pages,
-    check.case,
-    project.config.layoutId,
-    ...(notesAt ? [`notes${notesAt}`] : []),
-  ].join("|");
-}
-
 /** Whether the visible screenplay matches the currently reviewed book setup. */
 export function planIsCurrent(project: Project): boolean {
   if (!project.screenplay) return false;
   const setup = authoringOf(project).bookSetup;
   if (!setup?.formatConfirmedAt || !setup.layoutConfirmedAt) return false;
   const check = hardcoverFor(project);
-  return Boolean(check && authoringOf(project).planBasis === planBasis(project, check));
+  return Boolean(check && planBasisMatches(project, check));
 }
 
 export function planRunning(project: Project): boolean {
@@ -233,6 +227,31 @@ export function planRunning(project: Project): boolean {
     if (!jobs.jobsLoaded) return true;
   }
   return job?.status === "pending" || job?.status === "running";
+}
+
+/**
+ * The plan found people, places or things recurring in the story that the book
+ * has no reference for. Read the story again with them named, once per story: a
+ * plan that keeps reporting the same thing must never keep the reading running.
+ * The new reading changes who is in the book, which plans the pages again.
+ */
+async function readForUnlisted(project: Project, check: HardcoverCheck): Promise<void> {
+  const doc = project.screenplay ? getCursor(project.screenplay)?.content : undefined;
+  const missing = doc?.unlisted ?? [];
+  const story = stamp(project.config.storyText);
+  if (missing.length === 0 || !planBasisMatches(project, check) || authoringOf(project).unlistedReadFor === story) return;
+  const chat = useChatStudio.getState();
+  // Another reading is under way: this one waits for the next look, unmarked.
+  if (chat.analysisRunning) return;
+  await useProjectsStore.getState().patchCurrent((p) => (p.id === project.id ? withAuthoring(p, { unlistedReadFor: story }) : p));
+  chat.setAnalysisRunning(true);
+  try {
+    await runAnalysis(project.id, { missing });
+  } catch {
+    // Advisory: the plan stands as it is, and the story is not read for this again.
+  } finally {
+    useChatStudio.getState().setAnalysisRunning(false);
+  }
 }
 
 /**
@@ -261,14 +280,22 @@ export async function ensurePlan(
   if (planRunning(project)) return;
   const check = hardcoverFor(project);
   if (!check) return;
+  await readForUnlisted(project, check);
+  if (!live(projectId)) return;
   const target = pageTargetFor(check);
   const same = project.config.pageTarget;
   if (!same || same.pages !== target.pages || same.case !== target.case || same.wordsPerPage !== target.wordsPerPage) {
     await useProjectsStore.getState().updateConfig({ pageTarget: target });
   }
-  const current = live(projectId);
+  let current = live(projectId);
   if (!current) return;
   const basis = planBasis(current, check);
+  if (current.screenplay && isOlderBasis(current, check)) {
+    // Made before the words and the people counted: it stands, and from now on they are watched.
+    await useProjectsStore.getState().patchCurrent((p) => withAuthoring(p, { planBasis: basis }));
+    current = live(projectId);
+    if (!current) return;
+  }
   if (!current.screenplay) {
     const screenplayJob = useJobsStore.getState().screenplayJob;
     if (authoringOf(current).planBasis === basis && screenplayJob) {

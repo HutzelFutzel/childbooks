@@ -400,6 +400,16 @@ export { IntentAmbiguousError } from "./intentResolve";
  * synthesized spreads not present in the paginated doc, so they skip interior
  * layout guidance.
  */
+function bookArtDirection(project: Project): string {
+  const tree = project.screenplay;
+  if (!tree) return "";
+  try {
+    return getCursor(tree).content.notes?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
 function resolvePageSide(project: Project, spread: ScreenplaySpread): PageSide | undefined {
   if (spread.kind === "spread") return "spread";
   const tree = project.screenplay;
@@ -431,6 +441,8 @@ export function resolveLayoutPlan(
       side,
       textLength: spread.text?.length ?? 0,
       layoutsConfig,
+      // A picture-only page is drawn to fill its page, with no band kept calm.
+      wordless: !(spread.text ?? "").trim() && !spread.blankCanvas,
     });
   } catch {
     return undefined;
@@ -1537,7 +1549,12 @@ async function renderPage(
   const effectiveIds = effectiveAnchorIds(project.anchors, spread);
   const anchors = effectiveIds
     .map((id) => byId.get(id))
-    .filter((a): a is Anchor => Boolean(a));
+    // Someone the reader chose not to draw stays out of the picture, even on a
+    // page planned before they were left out.
+    .filter((a): a is Anchor => Boolean(a) && a!.include !== false)
+    // The people come first: when the model takes fewer pictures than the page
+    // has subjects, it is a place or a prop that is described, never a hero.
+    .sort((a, b) => Number(b.type === "character") - Number(a.type === "character"));
   const embeddedPairs = embeddedPairsAmong(project.anchors ?? [], effectiveIds);
 
   // For inpainting, the mask must align to the FIRST reference image, so we
@@ -2175,6 +2192,7 @@ async function renderPage(
     subjectInset,
     calmOvershoot: calm?.overshoot ?? composition.calmOvershoot,
     calmRetry: calm?.retry ?? false,
+    artDirection: bookArtDirection(project),
   }), letteringProblems);
 
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());

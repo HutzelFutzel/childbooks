@@ -11,6 +11,7 @@ import { getBookLanguage } from "../config/bookLanguages";
 import { stripNumericAgeFromDescription } from "../book/anchorDescription";
 import { defaultCharacterAge } from "../book/characterAge";
 import { refineAnalyzedAnchors } from "../book/anchorMerge";
+import { acceptedClaims, existingSubjectLines } from "../book/anchorIdentity";
 import { anchorNameKeys, mergeAliasNames, normalizeAnchorName } from "../book/anchorRefs";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
@@ -65,6 +66,13 @@ const anchorItemSchema = z.object({
     .describe(
       "Other phrases in the story that refer to this same subject, such as 'the blue toy elephant' for Bluey. Empty when the name is the only label.",
     ),
+  /** The id of the existing subject this is, when the book already has it. */
+  sameAs: z
+    .string()
+    .nullish()
+    .describe(
+      "The id of the entry in the EXISTING SUBJECTS list that is this same person, place or thing, however the story words it now. Empty for a subject that is new, or that only replaces another.",
+    ),
 });
 
 const embeddingItemSchema = z.object({
@@ -109,6 +117,14 @@ export interface AnalyzeStoryInput {
   prompts?: PromptContext;
   /** Appearance already read from uploaded character drawings. */
   artworkLooks?: ArtworkLookHint[];
+  /**
+   * The book's anchors as they are now. The reading is shown them and says which
+   * ones it found again, so a subject the story now words differently (another
+   * language, a better name) stays the same subject instead of becoming a new one.
+   */
+  previousAnchors?: Anchor[];
+  /** Recurring things the page plan found in the story that the book has no anchor for. */
+  missing?: string[];
 }
 
 /**
@@ -167,9 +183,16 @@ export async function analyzeStory(
   anchors: Anchor[];
   embeddings: AnalyzedEmbedding[];
 }> {
-  const { story, config, creds, model, signal, prompts, artworkLooks } = input;
+  const { story, config, creds, model, signal, prompts, artworkLooks, previousAnchors } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const age = ageBandLabel(config.ageRangeId);
+  const existingSubjects = existingSubjectLines(previousAnchors);
+  const missingSubjects = (input.missing ?? [])
+    .map((name) => name.trim().slice(0, 80))
+    .filter(Boolean)
+    .slice(0, 6)
+    .map((name) => `- ${name}`)
+    .join("\n");
   const language = getBookLanguage(config.contentLocale);
   const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
   // Guided and co-written stories may carry facts about real people. Handing
@@ -194,8 +217,12 @@ export async function analyzeStory(
       castHints,
       artLooks,
       artworkNames,
+      existingSubjects,
+      missingSubjects,
     },
     flags: {
+      hasExistingSubjects: existingSubjects.length > 0,
+      hasMissingSubjects: missingSubjects.length > 0,
       hasCastHints: castHints.length > 0,
       hasArtLooks: artLooks.length > 0,
       hasArtworkNames: artworkNames.length > 0,
@@ -233,7 +260,10 @@ export async function analyzeStory(
       .map((member) => normalizeAnchorName(member.name))
       .filter(Boolean),
   );
-  const anchors: Anchor[] = result.anchors.map((a) => {
+  // The reading's claims that a subject is one the book already has: only those that check out.
+  const claims = acceptedClaims(result.anchors, previousAnchors);
+  const anchors: Anchor[] = result.anchors.map((a, index) => {
+    const claimed = claims[index];
     const isCharacter = a.type === "character";
     // Body plan and height only mean anything for characters; a model that
     // fills them in for a place or object is answering a question we didn't
@@ -271,9 +301,11 @@ export async function analyzeStory(
         : (a.aliasNames ?? undefined),
     );
     return {
-      id: uid(),
+      id: claimed?.id ?? uid(),
       name: a.name,
       source: "analysis",
+      // A person the cast names stays that person when the story words them differently.
+      ...(claimed?.castId ? { castId: claimed.castId } : {}),
       type: a.type as AnchorType,
       description: isCharacter
         ? stripNumericAgeFromDescription(a.description)
@@ -297,7 +329,7 @@ export async function analyzeStory(
   const looks = artworkLooks?.length ? artworkLooks : fromCast;
   const withCast = applyArtworkLooksToAnchors(
     attachCastArtToAnchors(
-      injectNamedCastAnchors(refineAnalyzedAnchors(anchors), config),
+      linkAnchorsToCast(injectNamedCastAnchors(refineAnalyzedAnchors(anchors), config, previousAnchors), config, previousAnchors),
       config,
     ),
     looks,
@@ -311,6 +343,50 @@ export async function analyzeStory(
     anchors: withCast,
     embeddings: validateEmbeddings(result.embeddings ?? [], withCast),
   };
+}
+
+/**
+ * Every name a cast member goes by: their own, and any the book already knows
+ * them by (an earlier reading's anchor linked to them), so a person the story
+ * now words differently is still found as that person.
+ */
+function castNameKeys(people: { id: string; name: string }[], previous: Anchor[] | undefined): Map<string, Set<string>> {
+  const keys = new Map<string, Set<string>>();
+  for (const member of people) {
+    const own = new Set<string>();
+    const key = normalizeAnchorName(member.name);
+    if (key) own.add(key);
+    for (const anchor of previous ?? []) {
+      if (anchor.castId === member.id) for (const alias of anchorNameKeys(anchor)) own.add(alias);
+    }
+    keys.set(member.id, own);
+  }
+  return keys;
+}
+
+/**
+ * Tie each character to the cast member they are, by id, so the approved
+ * portrait is found again however the story spells the name. A character
+ * already tied to someone still in the cast keeps that tie.
+ */
+export function linkAnchorsToCast(anchors: Anchor[], config: BookConfig, previous?: Anchor[]): Anchor[] {
+  const people = namedCast(briefOf(config));
+  if (people.length === 0) return anchors;
+  const keysOf = castNameKeys(people, previous);
+  const byName = new Map<string, string>();
+  for (const member of people) {
+    for (const key of keysOf.get(member.id) ?? []) {
+      if (!byName.has(key)) byName.set(key, member.id);
+    }
+  }
+  return anchors.map((anchor) => {
+    if (anchor.type !== "character") return anchor;
+    if (anchor.castId && people.some((member) => member.id === anchor.castId)) return anchor;
+    const castId = anchorNameKeys(anchor)
+      .map((key) => byName.get(key))
+      .find(Boolean);
+    return castId ? { ...anchor, castId } : anchor;
+  });
 }
 
 function attachCastArtToAnchors(anchors: Anchor[], config: BookConfig): Anchor[] {
@@ -369,19 +445,20 @@ function applyArtworkLooksToAnchors(
  * the screenplay never puts them on a page. The model is asked to include them;
  * this is the belt-and-suspenders copy if it still omits someone.
  */
-function injectNamedCastAnchors(anchors: Anchor[], config: BookConfig): Anchor[] {
+function injectNamedCastAnchors(anchors: Anchor[], config: BookConfig, previous?: Anchor[]): Anchor[] {
   const people = namedCast(briefOf(config));
   if (people.length === 0) return anchors;
-  const existing = new Set(
-    anchors
-      .filter((anchor) => anchor.type === "character")
-      .flatMap((anchor) => anchorNameKeys(anchor)),
-  );
+  const characters = anchors.filter((anchor) => anchor.type === "character");
+  const existing = new Set(characters.flatMap((anchor) => anchorNameKeys(anchor)));
+  const linked = new Set(characters.map((anchor) => anchor.castId).filter(Boolean));
+  const keysOf = castNameKeys(people, previous);
   const extra: Anchor[] = [];
   for (const member of people) {
     const name = member.name.trim();
     const key = normalizeAnchorName(name);
-    if (!key || existing.has(key)) continue;
+    if (!key) continue;
+    // Already there: under their own name, under a name the book knows them by, or as the person the cast says.
+    if (linked.has(member.id) || [...(keysOf.get(member.id) ?? [])].some((known) => existing.has(known))) continue;
     const look = member.lookFromArt?.trim();
     const note = [castKindPhrase(member), member.role?.trim(), member.note?.trim()].filter(Boolean).join(". ");
     const description = look || note || `${name}, as named by the author.`;

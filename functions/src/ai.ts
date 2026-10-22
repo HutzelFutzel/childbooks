@@ -409,6 +409,7 @@ export function registerAiRoutes(app: Express): void {
           story,
           title: project.title,
           subtitle: coverLinesOf(project).subtitle,
+          anchors: project.anchors,
           sourceLocale,
           targetLocale: target,
           creds: { apiKey: apiKeyFor(model.provider) },
@@ -477,7 +478,7 @@ export function registerAiRoutes(app: Express): void {
 
   app.post("/ai/analyze", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { project } = req.body as { project: Project };
+      const { project, missing } = req.body as { project: Project; missing?: unknown };
       const [model, prompts] = await Promise.all([resolveText("storyAnalysis"), loadPromptContext()]);
       let artworkLooks: { name: string; description: string; bodyPlan?: BodyPlan }[] = [];
       const sourceCharacters = await loadSourceArtCharacters(req.uid!, project).catch(() => []);
@@ -522,6 +523,8 @@ export function registerAiRoutes(app: Express): void {
           model: model.id,
           prompts,
           artworkLooks,
+          previousAnchors: project.anchors,
+          missing: Array.isArray(missing) ? missing.filter((name): name is string => typeof name === "string") : undefined,
           signal: requestDeadline(),
         }),
         // Without the bound action's parameters the analysis ran at the provider's

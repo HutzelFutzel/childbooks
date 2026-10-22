@@ -11,6 +11,7 @@
  */
 import { Check, ChevronDown } from "lucide-react";
 import { enabledBookLanguages, getBookLanguage } from "../../../core/config/bookLanguages";
+import { languageStatus } from "../../../core/guide/storyVersions";
 import type { Project } from "../../../core/types";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useChatStudio } from "../../../state/chatStudio";
@@ -57,7 +58,8 @@ export function StoryLanguageMenu({
     close();
     if (id === current.id) return;
     const chat = useChatStudio.getState();
-    void chat.tap(t(written ? "translateStoryTap" : "writeStoryTap", { language: `${endonym} (${region})` }), () =>
+    const tapKey = !written ? "writeStoryTap" : languageStatus(project, id) === "current" ? "switchStoryTap" : "translateStoryTap";
+    void chat.tap(t(tapKey, { language: `${endonym} (${region})` }), () =>
       chat.runSkill({ id: "setBookLanguage", args: { language: id } }),
     );
   };
@@ -87,6 +89,8 @@ export function StoryLanguageMenu({
           {written && <p className="px-2 pb-1.5 pt-1 text-[11px] leading-snug text-ink-500">{t("storyLanguageMenuHint")}</p>}
           {options.map((language) => {
             const selected = language.id === current.id;
+            // Only once the story is written: what is saved, and what would be translated again.
+            const status = written ? languageStatus(project, language.id) : "none";
             return (
               <button
                 key={language.id}
@@ -101,6 +105,16 @@ export function StoryLanguageMenu({
               >
                 <span aria-hidden>{language.flag}</span>
                 <span className="min-w-0 flex-1 truncate">{language.endonym}</span>
+                {status === "current" && (
+                  <span title={t("storyLanguageKeptTitle")} className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-emerald-100">
+                    {t("storyLanguageKept")}
+                  </span>
+                )}
+                {status === "stale" && (
+                  <span title={t("storyLanguageStaleTitle")} className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 ring-1 ring-amber-100">
+                    {t("storyLanguageStale")}
+                  </span>
+                )}
                 <span className="shrink-0 text-[11px] text-ink-400">{language.regionShort}</span>
                 {selected && <Check className="size-3.5 text-ink-500" aria-hidden />}
               </button>

@@ -124,6 +124,9 @@ export function StoryManuscript({
   // Helper to commit beats state and notify parent
   const commitBeats = useCallback(
     (nextBeats: StoryBeatItem[], options?: StoryHistoryOptions) => {
+      // While the story is written or translated its words are the run's: a change made now would
+      // make the result unable to land.
+      if (busy) return;
       setBeats(nextBeats);
       const nextSerialized = serializeStoryBeats(nextBeats);
       lastSerializedRef.current = nextSerialized;
@@ -131,7 +134,7 @@ export function StoryManuscript({
       onMark?.(null);
       onChange(nextSerialized, options);
     },
-    [onChange, onMark],
+    [busy, onChange, onMark],
   );
 
   /** The reader selected text in a section: a passage worth marking, or nothing. */
@@ -478,6 +481,7 @@ export function StoryManuscript({
                       : undefined
                   }
                   isHighlighted={highlightedBeatId === beat.id}
+                  readOnly={busy}
                   onChangeTitle={(nextTitle) => handleTitleChange(index, nextTitle)}
                   onChangeText={(nextText) => handleTextChange(index, nextText)}
                   onRemove={() => handleRemoveBeat(index)}
@@ -514,7 +518,8 @@ export function StoryManuscript({
                   <button
                     type="button"
                     onClick={() => handleSplitBeat(0)}
-                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink-600 transition hover:bg-white hover:text-brand-700"
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink-600 transition hover:bg-white hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
                     title="Split story at current cursor position"
                   >
                     <Scissors className="size-3 text-brand-600" />
@@ -523,7 +528,8 @@ export function StoryManuscript({
                   <button
                     type="button"
                     onClick={() => handleAddBeat()}
-                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink-600 transition hover:bg-white hover:text-brand-700"
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink-600 transition hover:bg-white hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
                     title="Add a new section to organize your story"
                   >
                     <Plus className="size-3 text-brand-600" />

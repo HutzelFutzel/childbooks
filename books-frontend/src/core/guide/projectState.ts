@@ -253,6 +253,7 @@ export function normalizeStudioAuthoringState(input: unknown): StudioAuthoringSt
     planRequestedFor: typeof raw.planRequestedFor === "string" && raw.planRequestedFor ? raw.planRequestedFor : undefined,
     planBasis: typeof raw.planBasis === "string" && raw.planBasis ? raw.planBasis.slice(0, 200) : undefined,
     planNotesAt: time(raw.planNotesAt),
+    unlistedReadFor: typeof raw.unlistedReadFor === "string" && raw.unlistedReadFor ? raw.unlistedReadFor.slice(0, 40) : undefined,
     bookSetup:
       bookSetup && Object.keys(bookSetup).length > 0 ? bookSetup : undefined,
     sameAge: sameAgeGroups(raw.sameAge),

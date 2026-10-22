@@ -172,6 +172,16 @@ export interface BuildIllustrationPromptInput {
   calmOvershoot?: number;
   /** This is the redraw after the calm area came back too busy. */
   calmRetry?: boolean;
+  /** The screenplay's book-wide art direction (recurring motifs, palette, camera habits). */
+  artDirection?: string;
+}
+
+/** Enough of a page's words to tell what happens, not a second story in the prompt. */
+const PAGE_WORDS_MAX = 600;
+
+function clip(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max).trimEnd()}…`;
 }
 
 export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): string {
@@ -204,6 +214,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     subjectInset = 0,
     calmOvershoot = 0,
     calmRetry = false,
+    artDirection,
   } = input;
   const styleText = resolveArtStyleText(config.artStyle, prompts);
 
@@ -332,6 +343,26 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   // it used to reach the image model at all.
   const audience = resolveAudienceOverlays(config.ageRangeId, config.readingModeId, prompts);
 
+  // What the page is about beyond its brief. A page drawn from the brief alone
+  // loses the story around it: the light, the weather, what the words say, the
+  // book's look. None of this applies to a cover, a masked edit or a drawing
+  // that keeps its composition: those already have their picture.
+  const freshPage = !isCover && !maskMode && !hasCompositionRef;
+  const pageWords = freshPage ? clip(spread.text ?? "", PAGE_WORDS_MAX) : "";
+  const artDirectionText = freshPage ? clip(artDirection ?? "", 400) : "";
+  const continuityNote = freshPage ? clip(spread.continuity ?? "", 200) : "";
+  const pageAnchors = [...referencedAnchors, ...keptAnchors, ...describedAnchors];
+  const wardrobeList = freshPage
+    ? (spread.wardrobe ?? [])
+        .flatMap((entry) => {
+          const who = pageAnchors.find((a) => a.id === entry.anchorId);
+          const outfit = entry.outfit.trim();
+          return who && outfit ? [`${who.name} wears ${outfit}`] : [];
+        })
+        .join("; ")
+    : "";
+  const safetyVisual = isCover ? "" : audience.safetyList.trim();
+
   const prompt = renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/default", {
     vars: {
       illustrationBrief: spread.illustration.trim(),
@@ -359,6 +390,11 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       changedClause,
       addedClause,
       keptList,
+      pageWords,
+      artDirection: artDirectionText,
+      continuityNote,
+      wardrobeList,
+      safetyVisual,
     },
     flags: {
       isSpread: spread.kind === "spread",
@@ -373,6 +409,11 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       hasCast: castNames.length > 0,
       hasRemoved: removedAnchors.length > 0,
       hasKept: keptAnchors.length > 0,
+      hasPageWords: Boolean(pageWords),
+      hasArtDirection: Boolean(artDirectionText),
+      hasContinuity: Boolean(continuityNote),
+      hasWardrobe: Boolean(wardrobeList),
+      hasSafetyVisual: Boolean(safetyVisual),
       // When baking cover text, suppress the "leave clean negative space" +
       // "no text" clauses and instead instruct the model to render typography.
       hasLayoutNote: Boolean(pageNote) && !bakeTextActive,

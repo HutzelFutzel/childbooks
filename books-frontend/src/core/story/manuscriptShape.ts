@@ -181,6 +181,9 @@ const BREAK: Record<ManuscriptSplit, string> = {
   sections: "--- section break ---",
 };
 
+/** The lines `storyForPages` puts between parts; they say where a page begins and are never story text. */
+export const BREAK_MARKERS: readonly string[] = Object.values(BREAK);
+
 /** The story as the page plan reads it: the parts, joined by explicit breaks. */
 export function storyForPages(shape: ManuscriptShape): string {
   if (!shape.split) return shape.parts.join("\n\n");

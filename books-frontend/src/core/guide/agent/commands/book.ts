@@ -4,6 +4,7 @@ import type { HardcoverDecision, Project } from "../../../types";
 import { coverCardLines, coverWordsSettled } from "../../coverWords";
 import { journeyEntry, storyBegun } from "../../journey";
 import { authoringOf, withAuthoring } from "../../projectState";
+import { hasCurrentVersion } from "../../storyVersions";
 import { resolveOption } from "../resolve";
 import type { CommandDef } from "../types";
 import { arg, askFor, beat } from "./shared";
@@ -156,7 +157,9 @@ export const BOOK_COMMANDS: CommandDef[] = [
       const wanted = arg(args, "language");
       const match = isBookLanguageId(wanted) ? ({ kind: "one", value: { id: wanted } } as const) : resolveOption(wanted, ctx.languages);
       const changes = match.kind === "one" && match.value.id !== project.config.contentLocale;
-      return changes && project.config.storyText.trim()
+      // A language the book was already written in comes back from where it was kept: nothing is lost or paid for.
+      const kept = match.kind === "one" && hasCurrentVersion(project, match.value.id);
+      return changes && !kept && project.config.storyText.trim()
         ? { level: "destructive", effects: [{ kind: "replacesStory", words: wordCount(project.config.storyText) }] }
         : { level: "none", effects: [] };
     },

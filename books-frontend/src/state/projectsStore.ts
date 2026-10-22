@@ -716,7 +716,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
               const aliasNames = Array.from(
                 new Set([...(a.aliasNames ?? []), a.name].filter((n) => n !== trimmed)),
               );
-              return { ...a, name: trimmed, aliasNames };
+              return { ...a, name: trimmed, aliasNames, nameEdited: true };
             }),
           }
         : p,

@@ -30,7 +30,7 @@ import type {
 } from "../types";
 import { LIKENESS_PHOTOS_MAX, SOURCE_ART_MAX } from "../types";
 import { describesSomeoneElse } from "../book/anchorDescription";
-import { normalizeAnchorName } from "../book/anchorRefs";
+import { anchorNameKeys, normalizeAnchorName } from "../book/anchorRefs";
 import { ageShifted, beingChanged, drawnAgeParts, isBareRestart, visualChange } from "./redrawMode";
 import { ageOfSignature, ageShiftMatters, type AgeParts } from "./visualAge";
 import { addVersion, createVersionTree, getCursor } from "../versioning";
@@ -379,10 +379,12 @@ export function withPortraitAnchorReferences(project: Project): Project {
   let changed = false;
   const anchors = (project.anchors ?? []).map((anchor) => {
     if (anchor.type !== "character") return anchor;
-    const member = cast.find(
-      (candidate) =>
-        normalizeAnchorName(candidate.name) === normalizeAnchorName(anchor.name),
-    );
+    // By id first (it survives a renamed or reworded character); the name,
+    // or any alias the story uses, is the way in for books made before the id.
+    const keys = anchorNameKeys(anchor);
+    const member =
+      (anchor.castId ? cast.find((candidate) => candidate.id === anchor.castId) : undefined) ??
+      cast.find((candidate) => keys.includes(normalizeAnchorName(candidate.name)));
     const portrait = member ? currentPortrait(project, member.id) : null;
     if (!member || !portrait || !portraitIsCurrent(project, portrait)) return anchor;
     const sourceArt = [

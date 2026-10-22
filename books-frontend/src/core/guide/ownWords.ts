@@ -317,6 +317,8 @@ export function withAnalysisCharacters(
     aliasNames?: string[];
     description?: string;
     bodyPlan?: string;
+    /** The cast member this character is, when the reading knows. */
+    castId?: string;
   }[],
 ): Project {
   const brief = briefOf(project.config);
@@ -336,9 +338,12 @@ export function withAnalysisCharacters(
             source: anchor.ageSource === "story" ? ("story" as const) : ("suggested" as const),
           }
         : undefined;
-    const existingIndex = cast.findIndex((member) =>
-      keys.includes(member.name.trim().toLowerCase()),
-    );
+    // A person the cast already has, however the story words them now, is that person.
+    const linkedIndex = anchor.castId ? cast.findIndex((member) => member.id === anchor.castId) : -1;
+    const existingIndex =
+      linkedIndex >= 0
+        ? linkedIndex
+        : cast.findIndex((member) => keys.includes(member.name.trim().toLowerCase()));
     if (existingIndex >= 0) {
       let existing = cast[existingIndex]!;
       if (

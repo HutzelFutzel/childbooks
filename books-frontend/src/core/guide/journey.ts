@@ -561,10 +561,9 @@ export function deriveJourney(
       (signals.planReady ?? Boolean(project.screenplay)) &&
       !signals.planRunning &&
       !signals.analysisRunning;
-    const portraitsReady =
-      missingPortraits.length === 0 &&
-      outOfDate.length === 0 &&
-      !missingPortraits.some((member) => active.has(member.id));
+    // Anyone still being drawn holds the book back, whether their portrait is missing, out of date
+    // or current (a redraw of a portrait that is already right changes nothing until the new one lands).
+    const portraitsReady = missingPortraits.length === 0 && outOfDate.length === 0 && !portraitsRunning;
     const hc = signals.hardcover;
     const bookReady = planReady && portraitsReady && !needsCastFix && (!hc || hc.printable || hc.case === "short");
     // The question stands alone: its two answers sit directly under it, and the

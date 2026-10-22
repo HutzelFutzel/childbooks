@@ -179,6 +179,9 @@ function withScreenplayRenamed(project: Project, from: string, to: string, swap:
       text: swap(spread.text),
       illustration: swap(spread.illustration),
       ...(spread.layoutNote ? { layoutNote: swap(spread.layoutNote) } : {}),
+      // The place, the light and the outfits are written with the names in them.
+      ...(spread.continuity ? { continuity: swap(spread.continuity) } : {}),
+      ...(spread.wardrobe ? { wardrobe: spread.wardrobe.map((w) => ({ ...w, outfit: swap(w.outfit) })) } : {}),
       ...(spread.anchorNames ? { anchorNames: swapNames(spread.anchorNames) } : {}),
     })),
     // The front cover's title and subtitle are the book's own words, written through the store.
@@ -216,7 +219,7 @@ function withAnchorsRenamed(anchors: Anchor[], from: string, to: string, swap: (
       const key = normalizeAnchorName(name);
       return key !== toKey;
     });
-    return { ...described, name: to, aliasNames };
+    return { ...described, name: to, aliasNames, nameEdited: true };
   });
 }
 

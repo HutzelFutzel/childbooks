@@ -61,6 +61,23 @@ export function mergeAliasNames(
   return out.length > 0 ? out : undefined;
 }
 
+/** The most names an anchor keeps besides its own; the newest stay. */
+export const ALIAS_LIMIT = 8;
+
+/** Aliases bounded to `ALIAS_LIMIT`, so a book moved between languages does not collect them without end. */
+export function boundedAliases(aliases: string[] | undefined): string[] | undefined {
+  return aliases && aliases.length > ALIAS_LIMIT ? aliases.slice(-ALIAS_LIMIT) : aliases;
+}
+
+/**
+ * Whether this anchor's name is the story's, so it moves with the story into a
+ * newer reading or another language. A name the reader chose, and a person the
+ * cast names, stay as they are; their other names are only added as aliases.
+ */
+export function followsStory(anchor: Pick<Anchor, "source" | "castId" | "nameEdited">): boolean {
+  return anchor.source === "analysis" && !anchor.castId && !anchor.nameEdited;
+}
+
 /** Index current anchors by normalized name, including any past names from
  * renames (first occurrence wins). */
 function anchorsByName(anchors: Anchor[]): Map<string, Anchor> {
@@ -90,6 +107,7 @@ function anchorsByName(anchors: Anchor[]): Map<string, Anchor> {
  * (description/importance) without discarding the user's customization.
  */
 export function reconcileAnchorIds(next: Anchor[], prev: Anchor[]): Anchor[] {
+  const prevById = new Map(prev.map((a) => [a.id, a]));
   const prevByName = new Map<string, Anchor[]>();
   const index = (key: string, a: Anchor) => {
     if (!key) return;
@@ -103,22 +121,42 @@ export function reconcileAnchorIds(next: Anchor[], prev: Anchor[]): Anchor[] {
   }
   const used = new Set<string>();
   const reconciled = next.map((a) => {
-    let match: Anchor | undefined;
-    for (const key of anchorNameKeys(a)) {
-      match = (prevByName.get(key) ?? []).find((c) => !used.has(c.id));
-      if (match) break;
+    // An id that is already the book's means the reading was shown that subject
+    // and said it is the same one, whatever the story calls it now. It counts
+    // only for the same kind of subject, and once.
+    const named = prevById.get(a.id);
+    const claimed = named && !used.has(named.id) && named.type === a.type ? named : undefined;
+    let match: Anchor | undefined = claimed;
+    if (!match) {
+      for (const key of anchorNameKeys(a)) {
+        match = (prevByName.get(key) ?? []).find((c) => !used.has(c.id));
+        if (match) break;
+      }
     }
-    if (!match) return a;
+    if (!match) {
+      // An id taken from the book that could not be honoured must not stand twice.
+      return named ? { ...a, id: `${a.id}-${Math.random().toString(36).slice(2, 6)}` } : a;
+    }
     used.add(match.id);
+    // The story's own word for it has changed (another language, a better name):
+    // a name the story chose follows, and the old one stays findable.
+    const renamed =
+      Boolean(claimed) && followsStory(match) && normalizeAnchorName(a.name) !== normalizeAnchorName(match.name);
     const keepAuthorAge =
       match.ageYears !== undefined &&
       (match.ageSource === "author" || match.ageSource === undefined);
     return {
       ...a,
       id: match.id,
-      name: match.name,
-      aliasNames: mergeAliasNames(match.name, match.aliasNames, [a.name], a.aliasNames),
+      name: renamed ? a.name : match.name,
+      aliasNames: boundedAliases(
+        renamed
+          ? mergeAliasNames(a.name, match.aliasNames, [match.name], a.aliasNames)
+          : mergeAliasNames(match.name, match.aliasNames, [a.name], a.aliasNames),
+      ),
+      ...(match.nameEdited ? { nameEdited: true } : {}),
       source: match.source ?? a.source,
+      ...((a.castId ?? match.castId) ? { castId: a.castId ?? match.castId } : {}),
       mode: match.mode,
       include: match.include,
       description: match.descriptionUserEdited

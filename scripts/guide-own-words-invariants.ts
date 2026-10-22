@@ -328,7 +328,8 @@ function ownBook(storyText: string, options: { handedOver?: boolean; read?: bool
 
   const guidedConfig = { ...book.config, storyBrief: createDefaultStoryBrief("guided"), textHandling: "creative" as const };
   const guidedPlan = pagePlanInput(guidedConfig);
-  check(guidedPlan.config.textHandling === "creative", "A guided story's text handling is changed.");
+  // The parent read and approved a guided story in the chat, so its words are printed as written too.
+  check(guidedPlan.config.textHandling === "exact" && guidedPlan.exact, "A guided story the parent approved may be reworded by the page plan.");
   check(guidedPlan.story.startsWith("The Frost Garden"), "A guided story loses its first lines.");
 }
 

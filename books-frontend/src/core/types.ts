@@ -406,6 +406,12 @@ export interface StudioAuthoringState {
    */
   planNotesAt?: number;
   /**
+   * The story (as a stamp of its words) the plan has already sent back to be
+   * read again for the things it found missing. Once per story, so a plan that
+   * keeps finding one can never loop.
+   */
+  unlistedReadFor?: string;
+  /**
    * Decisions the reader explicitly reviewed in Chat. BookConfig always has
    * defaults, so these receipts distinguish a real choice from an untouched
    * default without creating a second source of truth for the value itself.
@@ -911,12 +917,23 @@ export interface Anchor {
   /** Where this reference originated; legacy projects may omit it. */
   source?: "analysis" | "user";
   /**
+   * The person in the story brief's cast this character is. Their approved
+   * portrait is the reference the pages are drawn from, so the link is by id:
+   * a name can be renamed, shortened or spelled another way in the story.
+   */
+  castId?: string;
+  /**
    * Prior name(s) this anchor has been renamed from. Lets a fresh story
    * re-analysis — which only knows the name as it appears in the story text —
    * still match this anchor by an old name and preserve the rename instead of
    * minting a duplicate and orphaning this one's art/custom details.
    */
   aliasNames?: string[];
+  /**
+   * The reader chose this name. A name the analysis made follows the story into
+   * another language; one the reader chose never does (`core/book/anchorRefs.ts`).
+   */
+  nameEdited?: boolean;
   type: AnchorType;
   /** Description derived from the story analysis (editable). */
   description: string;
@@ -1002,6 +1019,22 @@ export interface ScreenplaySpread {
    * was created, so a stale id can self-heal by name if anchor ids ever drift.
    */
   anchorNames?: string[];
+  /**
+   * Where and when this page happens, and what changed since the page before:
+   * place, time of day, weather. English, art-direction only; never printed.
+   */
+  continuity?: string;
+  /**
+   * Clothing that differs from a character's reference sheet on this page, set
+   * only when the page's own words change what someone wears (pyjamas at
+   * bedtime, a swimsuit at the lake). Everything else follows the reference.
+   */
+  wardrobe?: { anchorId: string; outfit: string }[];
+  /**
+   * The picture carries this page alone: no words, a full-bleed picture. Set on
+   * purpose by the page plan or the reader, never because text went missing.
+   */
+  wordless?: boolean;
   /** True for blank filler pages inserted to keep spreads printable. */
   placeholder?: boolean;
   /**
@@ -1071,6 +1104,34 @@ export interface ScreenplayDoc {
   frontCover?: CoverSpec;
   backCover?: CoverSpec;
   spine?: SpineSpec;
+  /**
+   * Recurring people, places or things the plan found in the story that the
+   * book has no reference for. Written by the plan, read once by the guide, which
+   * reads the story again with these named (`state/chatPipeline.ts`).
+   */
+  unlisted?: string[];
+}
+
+/**
+ * The story as it was written in one language, kept when the book moves to another
+ * so coming back is instant and free. See `core/guide/storyVersions.ts` for when
+ * one still tells the same story as the words on the book.
+ */
+export interface StoryLanguageVersion {
+  storyText: string;
+  /** The book's title in this language; empty when it has none. */
+  title: string;
+  /** The cover subtitle in this language; empty for none. */
+  subtitle: string;
+  /** What each person, place or thing (by anchor id) was called in this language. */
+  names: Record<string, string>;
+  /** Versions with the same id tell the same story. */
+  syncId: string;
+  /** The words this version had when its id was made: later edits are measured against them. */
+  syncText: string;
+  /** The language this one was translated from, when it was translated. */
+  translatedFrom?: BookLanguageId;
+  savedAt: number;
 }
 
 export interface Project {
@@ -1103,6 +1164,11 @@ export interface Project {
   design?: BookDesign;
   /** Chat studio authoring state (see `core/guide/projectState.ts`). */
   authoringState?: StudioAuthoringState;
+  /**
+   * The story in each language it has been written in. Kept on the book itself,
+   * outside the undoable fields, so a few stories never push Undo past its size limit.
+   */
+  storyLanguages?: Partial<Record<BookLanguageId, StoryLanguageVersion>>;
 }
 
 export interface ProjectSummary {

@@ -91,16 +91,32 @@ function protagonistSentence(profile: AudienceProfile): string {
     .replace(/\{\{\s*max\s*\}\}/g, String(profile.protagonist.maxAge));
 }
 
-function densitySentence(profile: AudienceProfile): string {
+/** How a book's own facts change what the band's numbers mean for it. */
+export interface OverlayOptions {
+  /**
+   * The book language's word-count factor. The same page holds more or fewer
+   * words in another language, exactly as a whole story does.
+   */
+  wordFactor?: number;
+  /**
+   * A page count was already asked for. The band's own range is then left out,
+   * so the plan is not given two different numbers to land on.
+   */
+  hasPageTarget?: boolean;
+}
+
+function densitySentence(profile: AudienceProfile, options: OverlayOptions = {}): string {
   const { density, structure } = profile;
+  const factor = options.wordFactor && options.wordFactor > 0 ? options.wordFactor : 1;
+  const scale = (n: number) => Math.max(1, Math.round(n * factor));
   const parts: string[] = [];
   if (density.targetWordsPerPage > 0) {
     parts.push(
-      `Aim for about ${density.targetWordsPerPage} words on a typical page` +
-        (density.maxWordsPerPage > 0 ? `, and never more than ${density.maxWordsPerPage}` : ""),
+      `Aim for about ${scale(density.targetWordsPerPage)} words on a typical page` +
+        (density.maxWordsPerPage > 0 ? `, and never more than ${scale(density.maxWordsPerPage)}` : ""),
     );
   } else if (density.maxWordsPerPage > 0) {
-    parts.push(`Never put more than ${density.maxWordsPerPage} words on a page`);
+    parts.push(`Never put more than ${scale(density.maxWordsPerPage)} words on a page`);
   }
   if (density.targetSentencesPerPage > 0) {
     parts.push(
@@ -110,7 +126,7 @@ function densitySentence(profile: AudienceProfile): string {
     );
   }
   if (structure.maxSentenceWords > 0) {
-    parts.push(`no sentence longer than ${structure.maxSentenceWords} words`);
+    parts.push(`no sentence longer than ${scale(structure.maxSentenceWords)} words`);
   }
   if (density.maxFocalCharactersPerScene > 0) {
     parts.push(
@@ -121,7 +137,7 @@ function densitySentence(profile: AudienceProfile): string {
   }
   if (parts.length === 0) return "";
   const budget =
-    density.minPages > 0 && density.maxPages > 0
+    !options.hasPageTarget && density.minPages > 0 && density.maxPages > 0
       ? ` Plan the book to land between ${density.minPages} and ${density.maxPages} pages; add or merge pages to hit that, rather than overloading a page.`
       : "";
   return `PAGE PACING: ${parts.join("; ")}.${budget}`;
@@ -138,6 +154,7 @@ export function resolveAudienceOverlays(
   ageRangeId: string,
   readingModeId?: ReadingModeId | string | null,
   src?: AudienceSource | AudienceConfig | null,
+  options: OverlayOptions = {},
 ): AudienceOverlays {
   const profile = resolveAudienceProfile(ageRangeId, src);
   const mode = resolveModeGuidance(profile, readingModeId);
@@ -152,7 +169,10 @@ export function resolveAudienceOverlays(
     storyBlocks.push(`HOW THIS AGE READS — hold every one of these:\n${storyDims.join("\n")}`);
   }
 
-  const screenplayBlocks = sectionsFor(profile, "screenplay");
+  // How the book is read (aloud, with help, alone) decides how much a page may
+  // ask of the reader, which the page plan sets as much as the prose does.
+  const readingBlock = mode.storyGuidance.trim() ? `HOW THIS BOOK IS READ:\n${mode.storyGuidance.trim()}` : "";
+  const screenplayBlocks = [readingBlock, ...sectionsFor(profile, "screenplay")].filter(Boolean);
   const screenplayDims = dimensionLines(profile, "screenplay");
   if (screenplayDims.length > 0) {
     screenplayBlocks.push(`PAGE-LEVEL TARGETS:\n${screenplayDims.join("\n")}`);
@@ -188,7 +208,7 @@ export function resolveAudienceOverlays(
         ? `TYPICAL FOR THIS AGE:\n${evaluationDims.join("\n")}`
         : "",
     ]),
-    density: densitySentence(profile),
+    density: densitySentence(profile, options),
     safetyList: resolveAvoidList(profile).join("; "),
     safetyNote: profile.safety.note.trim(),
     protagonist: protagonistSentence(profile),

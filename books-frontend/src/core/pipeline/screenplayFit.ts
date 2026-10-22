@@ -56,19 +56,22 @@ const OVER_LIMIT_TOLERANCE = 1.15;
 export function inspectScreenplayDensity(
   screenplay: ScreenplayDoc,
   profile: AudienceProfile,
+  /** The book language's word-count factor: the same page holds more or fewer words in another language. */
+  wordFactor = 1,
 ): ScreenplayDensityReport {
   const { density } = profile;
+  const factor = wordFactor > 0 ? wordFactor : 1;
   const spreads = screenplay.spreads ?? [];
   const perPage = spreads.map((s) => wordCount(s.text ?? ""));
   const totalWords = perPage.reduce((a, b) => a + b, 0);
 
-  const ceiling =
-    density.maxWordsPerPage > 0 ? Math.round(density.maxWordsPerPage * OVER_LIMIT_TOLERANCE) : 0;
+  const maxWords = Math.round(density.maxWordsPerPage * factor);
+  const ceiling = maxWords > 0 ? Math.round(maxWords * OVER_LIMIT_TOLERANCE) : 0;
   const overLimit: PageDensityIssue[] = [];
   if (ceiling > 0) {
     perPage.forEach((words, i) => {
       if (words > ceiling) {
-        overLimit.push({ index: i + 1, words, limit: density.maxWordsPerPage });
+        overLimit.push({ index: i + 1, words, limit: maxWords });
       }
     });
   }
@@ -91,7 +94,7 @@ export function inspectScreenplayDensity(
     summary.push(
       `${overLimit.length} page${overLimit.length === 1 ? "" : "s"} carry more text than ${
         profile.label
-      } usually holds (up to ${density.maxWordsPerPage} words; page ${worst.index} has ${
+      } usually holds (up to ${maxWords} words; page ${worst.index} has ${
         worst.words
       }).`,
     );

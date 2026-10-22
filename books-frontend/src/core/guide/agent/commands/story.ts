@@ -4,7 +4,14 @@ import { journeyEntry } from "../../journey";
 import { storyHandedOver } from "../../ownWords";
 import type { CommandDef } from "../types";
 import { arg, askFor, beat } from "./shared";
-import { unreadStoryOffer, whenLongStory, whenStory, whenStoryToChange } from "./relevance";
+import {
+  personMissingOffer,
+  unreadStoryOffer,
+  whenLongStory,
+  whenPersonMissingFromStory,
+  whenStory,
+  whenStoryToChange,
+} from "./relevance";
 
 export const STORY_COMMANDS: CommandDef[] = [
   {
@@ -48,6 +55,15 @@ export const STORY_COMMANDS: CommandDef[] = [
     id: "reviseStory",
     area: "story",
     suggest: [
+      // Someone was added after the story was written: the pages only draw people the words name.
+      // It shows beside the people too, since that is where they were added.
+      {
+        id: "workInPerson",
+        views: ["story", "cast"],
+        instant: true,
+        relevant: whenPersonMissingFromStory,
+        offer: personMissingOffer,
+      },
       { id: "shorterStory", instant: true, relevant: whenLongStory },
       { id: "simplerStory", instant: true, relevant: whenStoryToChange },
       { id: "warmerEnding", instant: true, relevant: whenStoryToChange },

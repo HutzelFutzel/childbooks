@@ -108,7 +108,13 @@ export function buildDesignPages(
     doc.spreads.forEach((s) => {
       if (s.placeholder) return;
       const side = sideOf(s);
-      const plan = planPageLayout(project, { side, textLength: s.text.length, layoutsConfig });
+      const plan = planPageLayout(project, {
+        side,
+        textLength: s.text.length,
+        layoutsConfig,
+        // A picture-only page keeps no room for words.
+        wordless: !s.text.trim() && !s.blankCanvas,
+      });
       pages.push({
         id: s.id,
         // The PHYSICAL page number, not the position in the spread list. They

@@ -110,6 +110,28 @@ function makeFiller(): ScreenplaySpread {
 }
 
 /**
+ * Makes a plan printable without adding a page: a double-page spread that would
+ * start on a right-hand page becomes a single page. The story keeps its words
+ * and its order, and no empty leaf lands in the middle of the book. Pages after
+ * the change are re-read in order, since each change shifts which side the next
+ * page falls on.
+ */
+export function fitSpreadsToPages(doc: ScreenplayDoc): { doc: ScreenplayDoc; changed: number[] } {
+  const changed: number[] = [];
+  let page = 1;
+  const spreads = doc.spreads.map((spread, index) => {
+    if (spread.kind === "spread" && !spread.placeholder && page % 2 === 1) {
+      changed.push(index);
+      page += 1;
+      return { ...spread, kind: "single" as const };
+    }
+    page += spread.kind === "spread" ? 2 : 1;
+    return spread;
+  });
+  return changed.length === 0 ? { doc, changed } : { doc: { ...doc, spreads }, changed };
+}
+
+/**
  * Returns a printable version of the doc by inserting blank single pages before
  * any spread that would otherwise start on a right-hand (odd) page.
  */

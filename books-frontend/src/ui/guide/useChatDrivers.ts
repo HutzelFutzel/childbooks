@@ -90,10 +90,17 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
   const bookSetup = authoringOf(project).bookSetup;
   const analysisAt = project.analysis?.generatedAt;
   const planNotesAt = authoringOf(project).planNotesAt;
+  // Someone added or left out after the plan was made is not in it: the plan is made again.
+  const whoIsIn = (project.anchors ?? [])
+    .filter((anchor) => anchor.include)
+    .map((anchor) => `${anchor.id}:${anchor.type}`)
+    .sort()
+    .join("|");
   useEffect(() => {
     if (!loaded || locked) return;
     void ensurePlan(projectId).catch(() => {});
   }, [
+    whoIsIn,
     loaded,
     locked,
     projectId,

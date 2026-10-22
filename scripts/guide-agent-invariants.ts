@@ -810,6 +810,34 @@ const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "chang
     check(lookup(styled, "pages").some((i) => i.id === id), `The Pages tab misses "${id}".`);
   }
 
+  // Someone added after the story was written is offered to the story, first, until the reader sets it aside.
+  {
+    const cast = twins.config.storyBrief!.cast ?? [];
+    const added = book([...cast, { id: "c3", name: "Opa", age: 70 }], STORY);
+    for (const view of ["story", "cast"] as const) {
+      const first = suggestionsFor(added, wide, { guest: false, view, messages: [] })[0];
+      check(first?.id === "workInPerson" && first.next === true && first.vars?.name === "Opa", `The ${view} tab does not offer to work the person added after the story into it first: ${first?.id}.`);
+      check(first?.instant === true, "Working someone into the story needs a typed sentence, though the story's changes are reviewed anyway.");
+    }
+    const offer = suggestionsFor(added, wide, { guest: false, view: "story", messages: [] })[0]!;
+    const aside = suggestionsFor(added, wide, { guest: false, view: "story", messages: [], dismissed: [offer.dismissKey!] });
+    check(aside[0]?.id !== "workInPerson" || aside[0].next !== true, "A set-aside offer to work someone into the story comes back.");
+    check(aside.some((i) => i.id === "workInPerson"), "Setting the offer aside takes the suggestion away too.");
+    const another = book([...cast, { id: "c3", name: "Opa", age: 70 }, { id: "c4", name: "Oma", age: 68 }], STORY);
+    check(suggestionsFor(another, wide, { guest: false, view: "story", messages: [], dismissed: [offer.dismissKey!] })[0]?.id === "workInPerson", "A second person added after the story is not offered.");
+
+    // Named in full, by first name, or without the accents the cast has: nobody is missing.
+    const named = book([{ id: "c1", name: "Amanda Lee", age: 4 }, { id: "c2", name: "Zoë", age: 6 }], "Amanda and Zoe went to the sea. Zoe found a shell and gave it to Amanda.");
+    check(!suggestionsFor(named, wide, { guest: false, view: "story", messages: [] }).some((i) => i.id === "workInPerson"), "Someone the story names by first name, or without accents, is offered to the story.");
+    check(!suggestionsFor(twins, wide, { guest: false, view: "story", messages: [] }).some((i) => i.id === "workInPerson"), "A story that names everyone is offered to take someone in.");
+    check(!suggestionsFor(book(cast, ""), wide, { guest: false, view: "story", messages: [] }).some((i) => i.id === "workInPerson"), "A book with no story is offered to take someone into it.");
+
+    // A story the reader wrote is theirs: the suggestion is there, but never first.
+    const own = withAuthoring(added, { entry: "own" });
+    const ownList = suggestionsFor(own, wide, { guest: false, view: "story", messages: [] });
+    check(ownList.some((i) => i.id === "workInPerson") && !ownList.some((i) => i.id === "workInPerson" && i.next), "Someone's own story is offered rewriting first.");
+  }
+
   // Nothing is offered that the book is not ready for: a size or layout can be changed once it was chosen,
   // a look is offered once there is a story to draw in it.
   const sizeChosen = withAuthoring(styled, { bookSetup: { formatConfirmedAt: 1 } });

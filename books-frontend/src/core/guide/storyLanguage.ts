@@ -8,6 +8,7 @@
  * in the story are made from the story's words, so the pipeline reruns them
  * from the new text the way it does after any real change.
  */
+import { carryNames, castOf, knownNameKeys, validNamePairs, type NamePair } from "../book/anchorIdentity";
 import { applyBookTitle, applyCoverLine } from "../book/coverEdits";
 import { coverLinesOf } from "../book/coverLines";
 import type { BookLanguageId } from "../config/bookLanguages";
@@ -21,6 +22,12 @@ export interface TranslatedStory {
   title: string;
   subtitle: string;
   story: string;
+  /**
+   * What the translation renamed (the lamp is now "die Lampe"), each from a name
+   * the book has. They keep every person, place and thing the same one in the
+   * new words, so its sheet, its place on the pages and its being left out stay.
+   */
+  names?: NamePair[];
 }
 
 /**
@@ -70,6 +77,9 @@ export function withTranslatedStory(project: Project, translated: TranslatedStor
     ...project,
     config: { ...project.config, contentLocale: locale, storyText: translated.story, storyBrief },
   };
+  const cast = castOf(project.config);
+  const names = validNamePairs(translated.names, knownNameKeys(project.anchors, cast));
+  if (project.anchors && names.length > 0) next = { ...next, anchors: carryNames(project.anchors, cast, names) };
   if (translated.title) next = applyBookTitle(next, translated.title);
   // A subtitle the reader chose is carried over; one only the page plan invented is made again by the plan.
   if (chosenSubtitle) next = applyCoverLine(next, "subtitle", translated.subtitle);

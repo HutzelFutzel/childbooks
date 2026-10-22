@@ -54,6 +54,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("device", "STYLISTIC DEVICE (follow it throughout): {{deviceGuidance}}", "hasDevice"),
       blk("safety", "NEVER include: {{safetyList}}. {{safetyNote}}"),
       blk(
+        "verseLines",
+        "If the story rhymes or is set in verse, write each verse line on its own line and put a blank line between stanzas (a stanza is two to six lines, and a refrain is its own stanza). Prose is written as short paragraphs with no line breaks inside a paragraph.",
+      ),
+      blk(
         "output",
         "Also invent a catchy, short book title. Then offer three subtitle ideas for the front cover in 'subtitles': each only a few words, each from a different angle (who the book is for, the occasion, a playful promise), none repeating the title. Separate each story beat with a blank line, so the story reads as short paragraphs rather than one unbroken block — this also marks where a page turn could happen. Do not include chapter headings, page numbers, author notes, or any commentary — return only the title, the subtitle ideas and the story text.",
       ),
@@ -108,6 +112,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("device", "STYLISTIC DEVICE (follow it throughout): {{deviceGuidance}}", "hasDevice"),
       blk("safety", "NEVER include: {{safetyList}}. {{safetyNote}}"),
       blk(
+        "verseLines",
+        "If the story rhymes or is set in verse, write each verse line on its own line and put a blank line between stanzas (a stanza is two to six lines, and a refrain is its own stanza). Prose is written as short paragraphs with no line breaks inside a paragraph.",
+      ),
+      blk(
         "output",
         "Also invent a catchy, short book title that suits this particular family. Then offer three subtitle ideas for the front cover in 'subtitles': each only a few words, each from a different angle (who the book is for, the occasion, a playful promise), none repeating the title. Separate each story beat with a blank line, so the story reads as short paragraphs rather than one unbroken block — this also marks where a page turn could happen. Do not include chapter headings, page numbers, author notes, or any commentary — return only the title, the subtitle ideas and the story text.",
       ),
@@ -148,8 +156,20 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "hasDevice",
       ),
       blk(
+        "length",
+        "LENGTH: the {{targetLanguage}} story should run about as long as the original and stay between {{minWords}} and {{maxWords}} words, the range for this age in {{targetLanguage}}. Never add or drop story events to get there; tighten or loosen the phrasing instead.",
+        "hasLength",
+      ),
+      blk("sentences", "Keep sentences at or under {{maxSentenceWords}} words.", "hasSentenceLimit"),
+      blk("safety", "NEVER include: {{safetyList}}. {{safetyNote}}"),
+      blk(
         "output",
-        "Translate and/or adapt the title as well if provided, and the subtitle if one is provided (return an empty subtitle when none is provided). Keep the paragraph breaks and page-turn rhythm intact. If the language is unchanged, calibrate and polish the story to suit the target age range. Return only the adapted title, subtitle and story without any translator notes or commentary.",
+        "Translate and/or adapt the title as well if provided, and the subtitle if one is provided (return an empty subtitle when none is provided). Keep the paragraph breaks and page-turn rhythm intact, and keep verse as verse: one line of the poem per line, a blank line between stanzas, in the same shape as the original even when the words are new. If the language is unchanged, calibrate and polish the story to suit the target age range. Return only the adapted title, subtitle, story and names without any translator notes or commentary.",
+      ),
+      blk(
+        "names",
+        "NAMES: the book already has a list of its people, places and things (below the story). Return \"names\": one {from, to} for every item on that list that your story now calls by different words, whether a descriptive name, a role or an object (\"the lamp\" becomes \"die Lampe\"). \"from\" is the list's entry exactly as written (or one of its \"also called\" names); \"to\" is exactly how your story says it. Leave out anything that stays the same, and never invent an entry that is not on the list. Keep one item as one item: never use the same new words for two entries.",
+        "hasKnownNames",
       ),
     ],
     user: [
@@ -159,6 +179,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("currentTitle", "Original title: {{currentTitle}}", "hasTitle"),
       blk("currentSubtitle", "Original subtitle: {{currentSubtitle}}", "hasSubtitle"),
       blk("currentStory", "Original story text:\n\n{{currentStory}}"),
+      blk("knownNames", "\nThe book's list of people, places and things:\n{{knownNames}}", "hasKnownNames"),
     ],
   },
 
@@ -179,7 +200,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "formatting",
-        "Preserve existing paragraph breaks for local edits. When writing a new or substantially expanded passage, format it as short semantic paragraphs separated by a blank line. Never hard-wrap lines merely to fit a visual width.",
+        "Preserve existing paragraph breaks for local edits. When writing a new or substantially expanded passage, format it as short semantic paragraphs separated by a blank line. Never hard-wrap prose lines merely to fit a visual width. Where the manuscript is set in verse (short lines that are the poem's own), keep each verse line on its own line with a blank line between stanzas, and set a new verse passage the same way.",
       ),
       blk("language", "{{languageInstruction}} Keep the manuscript in its current language."),
       blk("ageGuidance", "{{ageGuidance}}"),
@@ -277,6 +298,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "The story is written in {{languageName}}. Understand names and details in that language, preserve every proper name exactly, and return visual descriptions and the summary in English for the illustration pipeline.",
       ),
       blk(
+        "sameSubject",
+        'EXISTING SUBJECTS: the book already has the subjects listed below the story, with an id each. When a subject you return is the SAME person, place or thing as one of them, set "sameAs" to that entry\'s id exactly, even when the story now words it differently (another language, a new phrase for the same thing): "die Lampe" is the lamp. A subject that only takes the place of another (a different object, someone new) is NEW: leave "sameAs" empty. Use each id at most once and only for the same kind of subject (a character for a character). When unsure, leave it empty.',
+        "hasExistingSubjects",
+      ),
+      blk(
         "bookTitle",
         "Also return title: a short book title in {{languageName}}, the language of the story. Make it specific to this story. It is a name for the book, not a sentence and not a translation of the English summary. If the story opens with its own title, return that title exactly. Also return subtitles: up to three short subtitle ideas in {{languageName}} for the cover, each a few words that add to the title without repeating it.",
       ),
@@ -298,6 +324,16 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "artworkNames",
         "\nThese characters have author-supplied drawings that will be attached later: {{artworkNames}}. Do not invent a different species, body type, or costume for them. If no extracted look is listed above, describe each only as \"as in the author's character artwork\".",
         "hasArtworkNames",
+      ),
+      blk(
+        "existingSubjects",
+        "\nEXISTING SUBJECTS (id | kind | name):\n{{existingSubjects}}",
+        "hasExistingSubjects",
+      ),
+      blk(
+        "missingSubjects",
+        "\nThe page plan found these recurring in the story with no subject for them. Add each as its own subject when it comes back and has to look the same every time, and skip it when it appears only once:\n{{missingSubjects}}",
+        "hasMissingSubjects",
       ),
       blk("story", "\nSTORY:\n{{story}}"),
     ],
@@ -352,11 +388,36 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "anchorContract",
         "Illustration briefs must be concrete and reference the named anchors so the art stays consistent. Match each anchor's visual description — species, body, clothing, and the actual shape of objects. An anchor's NAME is a label only: do not turn an animal into a human child, or a round balloon into a star, because of its name.",
       ),
+      // Who may appear is a rule of every plan. It used to ride only on the
+      // page-count blocks below, so an ordinary book never heard it.
+      blk(
+        "castScope",
+        "CAST: never add a named or recurring person, animal, creature, place or object that is not in the story and in the ANCHORS list. Anyone else a picture needs is an anonymous background figure, and is never named in a brief.",
+      ),
+      blk(
+        "unlisted",
+        "UNLISTED: return \"unlisted\": every person, animal, place or object that the story names or shows on more than one page and that is NOT in the ANCHORS list (use the story's own words for it). Anything that appears once, and anything the list already has under another name, is not unlisted. Return an empty list when nothing recurring is missing. This is only a report: do not name them in a picture.",
+      ),
       blk("spread", "{{spreadGuidance}}"),
       blk("text", "{{textGuidance}}"),
+      blk(
+        "verse",
+        "VERSE: parts of this story are written as lines. Keep every line break exactly as written, in the page text. A stanza (lines with no blank line between them) is never divided between pages, and neither is a repeated refrain: a page may only begin between stanzas or between paragraphs.",
+        "hasVerse",
+      ),
+      blk(
+        "device",
+        "STYLE OF THIS BOOK (it is already in the story: keep it intact across the pages and never reword to achieve it): {{deviceGuidance}}",
+        "hasDevice",
+      ),
       blk("placement", "{{placementGuidance}}"),
       blk("ageGuidance", "WRITING FOR THIS READER:\n{{ageGuidance}}"),
       blk("density", "{{densityGuidance}}", "hasDensity"),
+      blk(
+        "safety",
+        "NEVER write, show or describe, in a page's words or in any illustration brief: {{safetyList}}. {{safetyNote}}",
+        "hasSafety",
+      ),
       blk(
         "pageTarget",
         "PAGE COUNT: aim for {{targetPages}} interior pages, about {{wordsPerPage}} words on a page for this reader. This is a {{pageCase}} book.",
@@ -364,7 +425,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "pageSpread",
-        "Reach that count only by giving the moments the story already has more room — split a moment across pages, let a repetition this reader enjoys carry onto the next page. Never add an event, a character or a place the story does not have.",
+        "Reach that count only by giving the moments the story already has more room — split a moment across pages between its sentences or paragraphs (never inside a stanza), let a repetition this reader enjoys carry onto the next page. Never add an event, a character or a place the story does not have.",
         "isSpread",
       ),
       blk(
@@ -374,7 +435,29 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "pacing",
-        "Pace the story well across the pages. Where the text does not fit the pacing above, split a long passage across two pages or merge two thin ones — do not overload a single page.",
+        "Pace the story well across the pages. Where the text does not fit the pacing above, split a long passage across two pages between its sentences or paragraphs (never inside a stanza) or merge two thin ones — do not overload a single page.",
+      ),
+      blk(
+        "staging",
+        "PICTURES: each illustration brief shows what its page's words say — every person, animal and object the words name is in it, doing what the words say. Vary the distance and angle from page to page (wide, medium, close) so two neighbouring pages are never staged alike, and let a picture add what the words leave out instead of repeating them.",
+      ),
+      blk(
+        "pageTurns",
+        "PAGE TURNS: page 1 is a right-hand page and the page turn comes after every right-hand page. Set a surprise up before a turn and show it after it. Give the high point of the story the most room (a double-page spread where the layout allows), and end on a calm, warm picture.",
+      ),
+      blk(
+        "continuity",
+        "CONTINUITY: for every page write 'continuity' in English: the place, the time of day and the weather in a few words, and what changed since the page before. A character's clothes stay as on their reference unless the page's own words change them (pyjamas at bedtime, a swimsuit at the lake): then list that character and the outfit in 'wardrobe' for that page. Otherwise leave 'wardrobe' empty.",
+      ),
+      blk(
+        "wordless",
+        "WORDLESS PAGES: a page may carry no words when its picture alone holds the moment (a reveal just after a page turn, a quiet pause). For such a page set 'wordless' to true and 'text' to an empty string. Use at most {{wordlessMax}} in the whole book, never as page 1 and never two in a row. Every other page has its words and 'wordless' false.",
+        "allowsWordless",
+      ),
+      blk(
+        "noWordless",
+        "Every page carries words: set 'wordless' to false on every page.",
+        "!allowsWordless",
       ),
       blk(
         "covers",
@@ -390,9 +473,12 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "printability",
-        "PRINTABILITY: page 1 is a single right-hand page. A double-page spread occupies a facing pair, so the number of single pages BEFORE any spread must be even (insert a single page if needed). Never let a spread start on a right-hand page.",
+        "PRINTABILITY: page 1 is a single right-hand page. A double-page spread occupies a facing pair, so the number of single pages BEFORE any spread must be even. Never let a spread start on a right-hand page: make it a single page instead. Never add an empty page.",
       ),
-      blk("notes", "Write a short overall 'notes' field with art-direction guidance."),
+      blk(
+        "notes",
+        "Write a short overall 'notes' field with art-direction guidance for the whole book, in English: the palette, the light, the places that come back, and the feeling of the pictures. It is read by every page's illustrator.",
+      ),
       blk(
         "language",
         "BOOK LANGUAGE: {{languageInstruction}} Keep all reader-facing text in that language: narrative text, front-cover title and subtitle, back-cover blurb, and spine text. Keep illustration briefs, layout notes and overall art-direction notes in English. Preserve every supplied proper name exactly.",
@@ -403,10 +489,40 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("anchors", "\nANCHORS (use exact names):\n{{anchorsList}}"),
       blk("story", "\nSTORY:\n{{story}}"),
       blk(
+        "fixedPages",
+        "\nTHE PAGES ARE ALREADY CUT. Return exactly {{fixedCount}} spreads, in this order, one for each of the texts below. Copy each text exactly into that spread's 'text' (it is not changed, shortened or moved). Write for each page only the kind, the illustration brief, the layout note, the continuity and the anchors; set 'wordless' to false.\n{{fixedPages}}",
+        "hasFixedPages",
+      ),
+      blk(
         "revision",
         "\nCURRENT SCREENPLAY (JSON) to revise:\n{{previousJson}}\n\nREVISION REQUEST: {{edit}}\nReturn the full revised screenplay.",
         "isRevision",
       ),
+    ],
+  },
+
+  // core/pipeline/screenplay.ts → reviewScreenplay
+  screenplayReview: {
+    system: [
+      blk(
+        "role",
+        "You are the editor who reads a children's picture-book plan before it is drawn and printed. You are given the story, who is in the book, the reader's age and the page plan. Report only a problem that is clear and that a parent would notice. Do not report taste, style or something that is merely plain.",
+      ),
+      blk(
+        "checks",
+        "Check each page's PICTURE BRIEF (never its words, which belong to the author) for: AGE — it shows or suggests something unfit for this reader; INVENTED — it adds a named or important person, animal, place or event the story does not have, or leaves out someone its own words name; CONTRADICTION — it disagrees with its own words or with how a person in the book is described; CROWDED — it needs more figures than one picture can hold for this reader.",
+      ),
+      blk("safety", "NEVER-INCLUDE list for this reader: {{safetyList}}.", "hasSafety"),
+      blk(
+        "output",
+        "Return one issue per problem: the page number, its kind (age, invented, contradiction or crowded), what is wrong in one sentence, and how the picture brief should change in one sentence. Return at most {{maxIssues}} issues, the most important first, and an empty list when the plan is sound.",
+      ),
+    ],
+    user: [
+      blk("reader", "Reader: {{reader}}"),
+      blk("anchors", "\nWHO IS IN THE BOOK:\n{{anchorsList}}"),
+      blk("story", "\nSTORY:\n{{story}}"),
+      blk("plan", "\nPAGE PLAN:\n{{planText}}"),
     ],
   },
 
@@ -1181,6 +1297,21 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk("kindSingle", "Single-page illustration.", "!isSpread"),
       blk("brief", "{{illustrationBrief}}"),
+      blk(
+        "continuity",
+        "Setting and time: {{continuityNote}}. Keep the place, the light and the weather consistent with it, and the same as the pages around this one.",
+        "hasContinuity",
+      ),
+      blk(
+        "pageWords",
+        "The words printed on this page, for understanding only: {{pageWords}} Draw what they describe, with the moment, mood and who is present the same as in the words. Never write these words, or any others, in the picture.",
+        "hasPageWords",
+      ),
+      blk(
+        "artDirection",
+        "Art direction for the whole book, the same on every page: {{artDirection}}",
+        "hasArtDirection",
+      ),
       // The image models had no age signal at all before this. Composition
       // legibility, how many figures a scene can hold and how much the picture
       // has to carry are all age-dependent, and none of it was reaching here.
@@ -1207,8 +1338,13 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "characters",
-        "Keep these characters looking exactly like their provided reference images — {{charactersList}}. Match each one's species, body type, face, hair, colors, outfit and overall design to its own reference image; only their pose, expression and camera angle may change to fit the scene. If this page's description mentions clothes, species or body type that disagree with a reference, follow the image.",
+        "Keep these characters looking exactly like their provided reference images — {{charactersList}}. Match each one's species, body type, face, hair, colors, outfit and overall design to its own reference image; only their pose, expression and camera angle may change to fit the scene. If this page's description mentions clothes, species or body type that disagree with a reference, follow the image, except for an outfit change listed for this page below.",
         "hasCharacters",
+      ),
+      blk(
+        "wardrobe",
+        "Outfit for this page, the one thing that changes from the reference sheets: {{wardrobeList}}. Draw exactly this outfit on that character, and keep everything else about them as in their reference.",
+        "hasWardrobe",
       ),
       blk(
         "settings",
@@ -1255,6 +1391,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "noText",
         "Do NOT render any text, letters, captions, words, or numbers in the image.",
         "!bakeText",
+      ),
+      blk(
+        "safetyVisual",
+        "Nothing in the picture may show or suggest: {{safetyVisual}}. Keep it gentle and right for the youngest reader of this book.",
+        "hasSafetyVisual",
       ),
       blk(
         "bakeText",
@@ -1709,11 +1850,24 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
             "Once upon a time, high up above the soft clouds, a little star yawned and rubbed its sleepy eyes.",
           ),
           V("deviceGuidance", "The chosen stylistic device's guidance.", DEVICE_SAMPLE),
+          V(
+            "knownNames",
+            "The book's people, places and things, one per line, so the translation can report which it renamed.",
+            "- the lamp [object]\n- Mia's Mom [character] (also called: Grandma)",
+          ),
+          V("minWords", "Lower bound for story length in the target language.", "150"),
+          V("maxWords", "Upper bound for story length in the target language.", "320"),
+          V("maxSentenceWords", "Sentence-length ceiling for the band.", "16"),
+          V("safetyList", "The age band's 'never include' list, semicolon-joined.", SAFETY_SAMPLE),
+          V("safetyNote", "Closing safety sentence from Story craft.", "Tension must resolve warmly."),
         ],
         sampleFlags: {
           hasTitle: true,
           hasSubtitle: true,
           hasDevice: true,
+          hasKnownNames: true,
+          hasLength: true,
+          hasSentenceLimit: true,
         },
       },
     ],
@@ -1812,8 +1966,24 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
             "Names of characters who have uploaded drawings.",
             "Hugo, Momo",
           ),
+          V(
+            "existingSubjects",
+            "The book's anchors as they are now, one per line with their id, so the reading can say which it found again.",
+            "- id a1b2c3 | object | the lamp\n- id d4e5f6 | character | Mia's Mom | also called: Grandma",
+          ),
+          V(
+            "missingSubjects",
+            "Recurring things the page plan found with no anchor, one per line.",
+            "- the red kite",
+          ),
         ],
-        sampleFlags: { hasCastHints: true, hasArtLooks: false, hasArtworkNames: false },
+        sampleFlags: {
+          hasCastHints: true,
+          hasArtLooks: false,
+          hasArtworkNames: false,
+          hasExistingSubjects: true,
+          hasMissingSubjects: false,
+        },
       },
     ],
   },
@@ -1873,8 +2043,40 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("targetPages", "Chat studio: the page count to aim at (hardcover check).", "24"),
           V("wordsPerPage", "Chat studio: the age band's words per page.", "20"),
           V("pageCase", "Chat studio: natural length, spread, or thin stretch.", "spread"),
+          V("deviceGuidance", "The book's chosen stylistic device (rhyme, refrain, cumulative…), when there is one.", "Write in confident rhyming couplets with a steady beat."),
+          V("safetyList", "The age band's 'never include' list, semicolon-joined.", SAFETY_SAMPLE),
+          V("safetyNote", "The age band's closing safety sentence.", "Tension must resolve warmly."),
+          V("wordlessMax", "How many wordless pages the book may have.", "2"),
+          V("fixedCount", "When the pages were already cut: how many.", "12"),
+          V("fixedPages", "When the pages were already cut: each page's exact text, numbered.", "Page 1:\nMia woke up.\n\nPage 2:\nThe sun was out."),
         ],
-        sampleFlags: { isRevision: false, hasDensity: true, hasPageTarget: true, isSpread: true, isThin: false },
+        sampleFlags: {
+          isRevision: false,
+          hasDensity: true,
+          hasPageTarget: true,
+          isSpread: true,
+          isThin: false,
+          hasVerse: true,
+          hasDevice: true,
+          hasSafety: true,
+          allowsWordless: false,
+          hasFixedPages: false,
+        },
+      },
+      {
+        key: "screenplayReview",
+        label: "Screenplay review",
+        description:
+          "A second reading of the finished plan for a picture that is unfit for the age, invents someone, contradicts its page or is crowded. What it finds is sent back as one request to fix those pictures.",
+        variables: [
+          V("reader", "The reader's age band and reading mode.", "Age range: 3–5."),
+          V("anchorsList", "Included anchors, one per line.", "- Amanda [character]: a curious girl"),
+          V("story", "The story the plan is made from.", "Once upon a time…"),
+          V("planText", "The plan, one page per block: its words, its picture brief and who is in it.", "Page 1 (single)\nWords: Mia woke up.\nPicture: Mia in bed.\nPeople: Mia"),
+          V("maxIssues", "The most issues to report.", "5"),
+          V("safetyList", "The age band's 'never include' list.", SAFETY_SAMPLE),
+        ],
+        sampleFlags: { hasSafety: true },
       },
     ],
   },
@@ -2452,10 +2654,24 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("refreshClause", "Appended when subjects also need refreshing.", ""),
           V("changedClause", "Appended when subjects changed (no-edit refresh).", ""),
           V("addedClause", "Appended when subjects were newly added to the page.", ""),
+          V(
+            "pageWords",
+            "The words printed on this page (up to 600 characters), so the picture shows the same moment. Empty on covers, edits and wordless pages.",
+            "Mia looked out of the window. The garden was white with frost.",
+          ),
+          V("artDirection", "The screenplay's book-wide art direction.", "Soft morning light; a red scarf returns on every page."),
+          V("continuityNote", "The page's place, time of day, weather and what changed since the page before.", "the kitchen, early morning, frost outside; Mia is now awake"),
+          V("wardrobeList", "A character's outfit on this page when it differs from the reference sheet.", "Mia wears blue pyjamas with stars"),
+          V("safetyVisual", "The age band's 'never include' list, for the picture.", SAFETY_SAMPLE),
         ],
         sampleFlags: {
           isSpread: false,
           hasStyleRef: false,
+          hasPageWords: true,
+          hasArtDirection: true,
+          hasContinuity: true,
+          hasWardrobe: false,
+          hasSafetyVisual: true,
           hasAgeVisual: true,
           hasCharacters: true,
           hasSettings: false,
