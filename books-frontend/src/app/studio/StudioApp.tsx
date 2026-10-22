@@ -103,6 +103,8 @@ export default function StudioApp() {
   const closeGuide = useChatStudio((s) => s.close);
   const [projectsOwnerUid, setProjectsOwnerUid] = useState<string | null>(null);
   const rejectedBookRef = useRef<string | null>(null);
+  const [libraryLoadFailed, setLibraryLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   useEffect(() => {
     initAuth();
   }, [initAuth]);
@@ -119,25 +121,34 @@ export default function StudioApp() {
     if (!uid) return;
     const loadingUid = uid;
     setProjectsOwnerUid(null);
+    setLibraryLoadFailed(false);
     closeProject();
     const initialRoute = parseStudioPath(window.location.pathname);
     if (initialRoute.kind === "project") {
       // Fast-path direct `/studio/{bookId}` entry: fetch the single requested
       // book first so the workspace can mount without waiting for the entire
-      // library list to download and parse.
-      void loadSingleProject(initialRoute.bookId).then((found) => {
-        if (found && useAuthStore.getState().user?.uid === loadingUid) {
+      // library list to download and parse. If it fails, the full load below
+      // is the one that reports the problem.
+      void loadSingleProject(initialRoute.bookId)
+        .then((found) => {
+          if (found && useAuthStore.getState().user?.uid === loadingUid) {
+            setProjectsOwnerUid(loadingUid);
+          }
+        })
+        .catch(() => {});
+    }
+    void loadProjects()
+      .then(() => {
+        if (useAuthStore.getState().user?.uid === loadingUid) {
           setProjectsOwnerUid(loadingUid);
         }
+      })
+      .catch(() => {
+        // Without this the studio would sit on "Loading your library…" forever.
+        if (useAuthStore.getState().user?.uid === loadingUid) setLibraryLoadFailed(true);
       });
-    }
-    void loadProjects().then(() => {
-      if (useAuthStore.getState().user?.uid === loadingUid) {
-        setProjectsOwnerUid(loadingUid);
-      }
-    });
-    void loadSettings();
-  }, [uid, closeProject, loadProjects, loadSingleProject, loadSettings]);
+    void loadSettings().catch(() => {});
+  }, [uid, loadAttempt, closeProject, loadProjects, loadSingleProject, loadSettings]);
 
   // The route is the source of truth for both the active book and workflow
   // destination. A route id is never trusted on its own: it can only select a
@@ -403,9 +414,13 @@ export default function StudioApp() {
       return;
     }
     if (!heroName) return;
-    void createProject(`${heroName}'s Storybook`, true).then((projectId) => {
-      router.replace(studioPath(projectId), { scroll: false });
-    });
+    void createProject(`${heroName}'s Storybook`, true)
+      .then((projectId) => {
+        router.replace(studioPath(projectId), { scroll: false });
+      })
+      .catch(() => {
+        notify.errorWithDescription("Couldn't start your storybook", "Please try again from “New book” in your library.");
+      });
   }, [uid, projectsLoaded, accessLevel, createProject, router]);
 
   // Attach a remembered referral code to whatever identity exists NOW — guest
@@ -530,7 +545,15 @@ export default function StudioApp() {
       {!chatStudio && <LowSparksBanner />}
 
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-canvas">
-        {resolvingRoute ? (
+        {libraryLoadFailed && !inProject ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center" role="alert">
+            <p className="text-base font-semibold text-ink-800">We couldn&apos;t load your books.</p>
+            <p className="max-w-sm text-sm text-ink-500">
+              Your books are safe — this is usually a connection hiccup. Check your connection and try again.
+            </p>
+            <Button onClick={() => setLoadAttempt((n) => n + 1)}>Try again</Button>
+          </div>
+        ) : resolvingRoute ? (
           <div
             className="flex flex-1 flex-col items-center justify-center gap-3"
             role="status"
@@ -559,6 +582,9 @@ export default function StudioApp() {
       )}
       <SettingsDialog />
       <SparksShortfallDialog />
+      {/* The pill is hidden in a project, but the guide still opens the wallet
+          ("See all packs", a shortfall): keep the dialog itself mounted. */}
+      {accessLevel !== "loading" && sparksEnabled && chatStudio && <SparksBadge walletOnly />}
       <PurchaseConfirmation />
     </div>
     </MotionConfig>

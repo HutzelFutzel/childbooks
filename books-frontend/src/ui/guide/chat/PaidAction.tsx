@@ -14,6 +14,8 @@ import { packTotalSparks } from "../../../core/config/sparks";
 import { formatMoney } from "../../../core/i18n/format";
 import { buySparkPack } from "../../../platform/payments";
 import { useAppConfigStore } from "../../../state/appConfigStore";
+import { useAuthStore } from "../../../state/authStore";
+import { notify } from "../../lib/notify";
 import { holdKeptQuote, quoteKey, takeResumeDraw, useChatStudio } from "../../../state/chatStudio";
 import { useProjectsStore } from "../../../state/projectsStore";
 import { useSparksStore } from "../../../state/sparksStore";
@@ -42,7 +44,6 @@ export function PaidAction({
   const starting = useChatStudio((s) => s.starting === key);
   const ensureQuote = useChatStudio((s) => s.ensureQuote);
   const confirm = useChatStudio((s) => s.confirm);
-  const error = useChatStudio((s) => s.error);
   const balance = useSparksStore((s) => s.balance);
   const balanceLoading = useSparksStore((s) => s.loading);
 
@@ -100,7 +101,6 @@ export function PaidAction({
           <span>{t("estimating")}</span>
         )}
       </p>
-      {error && <p className="text-xs text-red-600">{error}</p>}
     </div>
   );
 }
@@ -111,6 +111,8 @@ export function TopUp({ needed, quote, quoteSlot }: { needed: number; quote: Gen
   const packs = useAppConfigStore((s) => s.sparks.packs);
   const currency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
   const projectId = useProjectsStore((s) => s.currentId);
+  const accessLevel = useAuthStore((s) => s.accessLevel);
+  const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
   const [busy, setBusy] = useState(false);
   const active = [...packs].filter((p) => p.active).sort((a, b) => packTotalSparks(a) - packTotalSparks(b));
   const pack = active.find((p) => packTotalSparks(p) >= needed) ?? active[active.length - 1];
@@ -122,10 +124,25 @@ export function TopUp({ needed, quote, quoteSlot }: { needed: number; quote: Gen
       const { url, quoteExpiresAt } = await buySparkPack(pack.id, currency, undefined, projectId ?? undefined, quote.id);
       if (quoteExpiresAt) holdKeptQuote(quoteSlot, quote, quoteExpiresAt);
       window.location.href = url;
-    } catch {
+    } catch (err) {
       setBusy(false);
+      notify.error(err, "Couldn't start checkout. Please try again.");
     }
   };
+  // Guests can't buy Sparks: the way forward is an account, not a button that fails.
+  if (accessLevel === "guest") {
+    return (
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-start gap-1.5">
+        <button
+          type="button"
+          onClick={() => openAuthDialog("drawBook")}
+          className="inline-flex min-h-11 items-center gap-2 rounded-full bg-brand-500 px-5 text-[15px] font-semibold text-white shadow-soft transition hover:bg-brand-600 active:scale-[0.98]"
+        >
+          {label("createAccount")}
+        </button>
+      </motion.div>
+    );
+  }
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-start gap-1.5">
       <button

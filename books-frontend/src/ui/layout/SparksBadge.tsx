@@ -35,7 +35,7 @@ import { CouponsBlock } from "./CouponsBlock";
  * open-state lives in a store so an out-of-Sparks AI call (HTTP 402) can pop it
  * automatically and pre-suggest a pack. Only rendered when the economy is on.
  */
-export function SparksBadge() {
+export function SparksBadge({ walletOnly = false }: { /** Mount just the wallet dialog, not the pill — for screens (the guide) that hide the pill but still open the wallet. */ walletOnly?: boolean } = {}) {
   const router = useRouter();
   const balance = useSparksStore((s) => s.balance);
   const balanceLoading = useSparksStore((s) => s.loading);
@@ -133,6 +133,7 @@ export function SparksBadge() {
 
   return (
     <>
+      {!walletOnly && (
       <Popover
         align="end"
         panelClassName="w-72 p-0 overflow-hidden"
@@ -182,6 +183,7 @@ export function SparksBadge() {
           </>
         )}
       </Popover>
+      )}
 
       <Modal open={walletOpen} onClose={closeWallet} title="Your Sparks" size="max-w-md">
         <div className="space-y-4">

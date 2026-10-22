@@ -305,12 +305,23 @@ function Row({ label, value, bold }: { label: string; value: string; bold?: bool
  * browser gets back from Stripe before we've necessarily heard from it.
  */
 function Settling({ what }: { what: string }) {
+  // Usually seconds. If the confirmation is slow, say so rather than spin forever:
+  // the customer has paid, and "a few seconds" turning into minutes reads as a fault.
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setLate(true), 45_000);
+    return () => clearTimeout(timer);
+  }, []);
   return (
     <div className="mt-8 flex flex-col items-center gap-3 rounded-2xl border border-ink-100 bg-white px-4 py-10 text-center shadow-soft">
       <Loader2 className="size-6 animate-spin text-brand-500" />
-      <p className="text-sm font-medium text-ink-700">Confirming your payment…</p>
+      <p className="text-sm font-medium text-ink-700">
+        {late ? "Still confirming your payment…" : "Confirming your payment…"}
+      </p>
       <p className="max-w-sm text-xs leading-relaxed text-ink-500">
-        {what} This takes a few seconds. You can leave this page — we&apos;ll email you either way.
+        {late
+          ? "This is taking longer than usual. If you've been charged, your purchase is safe — it will show up in your account as soon as the payment is confirmed, and we'll email you. You can close this page."
+          : `${what} This takes a few seconds. You can leave this page — we'll email you either way.`}
       </p>
     </div>
   );

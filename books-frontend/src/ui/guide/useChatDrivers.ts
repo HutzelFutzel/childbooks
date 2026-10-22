@@ -21,6 +21,7 @@ import { useChatStudio } from "../../state/chatStudio";
 import { useJobsStore } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { describeError } from "../../core/errors";
+import { clientLog } from "../../platform/clientLogger";
 import type { ReceiptThumb } from "../../core/guide/session";
 import type { GuideLineCandidate } from "../../core/guide/speech";
 import type { ChatJourney } from "./useChatJourney";
@@ -98,7 +99,11 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
     .join("|");
   useEffect(() => {
     if (!loaded || locked) return;
-    void ensurePlan(projectId).catch(() => {});
+    // A failed re-plan leaves the current plan on screen and is asked again on the
+    // next real change, so nothing is shown — but it is recorded, not swallowed.
+    void ensurePlan(projectId).catch((error: unknown) => {
+      clientLog.error({ domain: "studio", event: "guide.ensure_plan_failed", message: describeError(error), error });
+    });
   }, [
     whoIsIn,
     loaded,

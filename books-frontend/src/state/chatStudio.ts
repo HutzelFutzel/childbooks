@@ -256,6 +256,7 @@ interface ChatStudioState {
     options?: { mark?: StoryMark | null },
   ) => Promise<void>;
   clearAgentWell: () => void;
+  clearError: () => void;
   setPrintIssue: (issue: ChatStudioState["printIssue"]) => void;
   setAnalysisRunning: (running: boolean) => void;
   setExtractionRunning: (running: boolean) => void;
@@ -993,6 +994,8 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       }),
 
     clearAgentWell: () => set({ agentWell: null }),
+
+    clearError: () => set({ error: null }),
 
     setPrintIssue: (issue) => {
       const current = get().printIssue;

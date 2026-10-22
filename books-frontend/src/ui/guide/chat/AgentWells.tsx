@@ -21,6 +21,7 @@ import type { AgentWell } from "../../../state/guideAgent";
 import { useProjectsStore } from "../../../state/projectsStore";
 import { useSparksUiStore } from "../../../state/sparksUiStore";
 import { cn } from "../../lib/cn";
+import { notify } from "../../lib/notify";
 import { useGuideLabel, useGuideT } from "../intl";
 
 export type AgentWellItem = Extract<AgentWell, { kind: "agentConfirm" | "agentAsk" | "agentBlocked" | "sparksOffer" | "undoConflict" }>;
@@ -317,6 +318,8 @@ function SparksOffer() {
   const currency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
   const projectId = useProjectsStore((s) => s.currentId);
   const openWallet = useSparksUiStore((s) => s.openWallet);
+  const accessLevel = useAuthStore((s) => s.accessLevel);
+  const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
   const [busy, setBusy] = useState<string | null>(null);
   const active = [...packs].filter((p) => p.active).sort((a, b) => packTotalSparks(a) - packTotalSparks(b)).slice(0, 3);
   const buy = async (packId: string) => {
@@ -324,10 +327,18 @@ function SparksOffer() {
     try {
       const { url } = await buySparkPack(packId, currency, undefined, projectId ?? undefined);
       window.location.href = url;
-    } catch {
+    } catch (err) {
       setBusy(null);
+      notify.error(err, "Couldn't start checkout. Please try again.");
     }
   };
+  if (accessLevel === "guest") {
+    return (
+      <Choice primary onClick={() => openAuthDialog("drawBook")}>
+        {label("createAccount")}
+      </Choice>
+    );
+  }
   if (active.length === 0) {
     return <p className="px-1 text-sm text-ink-600">{t("noPacks")}</p>;
   }

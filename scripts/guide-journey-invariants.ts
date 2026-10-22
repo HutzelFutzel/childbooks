@@ -46,6 +46,7 @@ import {
   noteStyleChange,
   portraitInputs,
   portraitPrompt,
+  portraitStatus,
   styleRevert,
   withLooksDecided,
   withPortraitAnchorReferences,
@@ -450,6 +451,33 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
     if (inputs.visualAge?.years !== 7) {
       fail("Portrait freshness should include the visual age estimate.");
     }
+
+    // Someone already drawn: reading the story again re-guesses the estimate, and a
+    // guess a year apart is a different-looking child. It must not call for a redraw.
+    const drawnMaya = withAuthoring(withVisualAge, {
+      portraits: {
+        [maya.id]: createVersionTree({
+          blobId: "maya-portrait",
+          mimeType: "image/png",
+          createdAt: 5,
+          inputs: portraitInputs(withVisualAge, maya),
+        }),
+      },
+    });
+    const reread = withAnalysisCharacters(drawnMaya, [
+      { name: "Maya", type: "character", ageYears: 8, ageSource: "suggested" },
+    ]);
+    cases += 1;
+    if (reread.config.storyBrief?.cast?.[0]?.visualAge?.years !== 7 || portraitStatus(reread, maya.id) !== "current") {
+      fail("Reading the story again re-guessed the age of someone already drawn and left their portrait out of date.");
+    }
+    const stated = withAnalysisCharacters(drawnMaya, [
+      { name: "Maya", type: "character", ageYears: 9, ageSource: "story" },
+    ]);
+    cases += 1;
+    if (stated.config.storyBrief?.cast?.[0]?.visualAge?.years !== 9 || portraitStatus(stated, maya.id) !== "stale") {
+      fail("An age the story states outright should still reach someone already drawn.");
+    }
   }
 
   const frogBook = withAnalysisCharacters(ageBase, [
@@ -806,6 +834,31 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
         !seededAnchor.sourceArt.some((image) => image.blobId === upload.blobId)
       ) {
         fail("A portrait should become the canonical hidden character input without deleting a reader drawing.");
+      }
+
+      // The portrait is the book's own picture: only what the reader uploaded is artwork to read a look from.
+      const readable = collectSourceArtGroups(seeded).flatMap((group) => group.images.map((image) => image.blobId));
+      cases += 1;
+      if (readable.includes(portraitOne.blobId) || !readable.includes(upload.blobId)) {
+        fail("A portrait was offered as the reader's artwork, or the reader's own drawing was lost with it.");
+      }
+      const portraitOnly = withPortraitAnchorReferences(
+        withAuthoring(
+          {
+            ...candidate,
+            anchors: candidate.anchors!.map((anchor, index) =>
+              index === anchorIndex ? { ...anchor, sourceArt: undefined, versions: undefined } : anchor,
+            ),
+          },
+          { portraits: { [member.id]: createVersionTree(portraitOne) } },
+        ),
+      );
+      cases += 1;
+      if (
+        !portraitOnly.anchors![anchorIndex]!.sourceArt?.some((image) => image.origin === "portrait") ||
+        collectSourceArtGroups(portraitOnly).some((group) => group.images.some((image) => image.origin === "portrait"))
+      ) {
+        fail("A book with only portraits was read as having the reader's artwork, so the story analysis described the pictures.");
       }
 
       const signatureOne = anchorSignature(seededAnchor);

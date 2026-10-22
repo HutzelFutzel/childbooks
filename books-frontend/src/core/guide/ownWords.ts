@@ -22,6 +22,7 @@ import { CAST_KINDS } from "../story/castKinds";
 import { relationsOf, twinGroups, withRelation } from "../story/relations";
 import { BODY_PLANS, type BodyPlan, type Project, type StoryBrief, type StoryCastMember } from "../types";
 import { linkSameAge } from "./sameAge";
+import { currentPortrait } from "./portrait";
 import { authoringOf, withAuthoring } from "./projectState";
 
 export const OWN_WORDS_MAX_CHARS = 40_000;
@@ -346,10 +347,17 @@ export function withAnalysisCharacters(
         : cast.findIndex((member) => keys.includes(member.name.trim().toLowerCase()));
     if (existingIndex >= 0) {
       let existing = cast[existingIndex]!;
+      // Someone already drawn keeps the age they were drawn at. Reading the
+      // story again re-guesses an estimate every time, and a guess one year
+      // apart is a different-looking child: it would call for a redraw nobody
+      // asked for. What the story states outright still counts.
+      const drawn = currentPortrait(project, existing.id) !== null;
+      const reGuess = drawn && visualAge?.source !== "story";
       if (
         existing.age === undefined &&
         existing.ageMonths === undefined &&
         visualAge &&
+        !reGuess &&
         (existing.visualAge?.years !== visualAge.years ||
           existing.visualAge?.source !== visualAge.source)
       ) {

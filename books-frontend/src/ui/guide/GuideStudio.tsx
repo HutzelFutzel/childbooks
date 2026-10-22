@@ -66,6 +66,7 @@ import { ComposerWell } from "./chat/ComposerWell";
 import { activeQuestion } from "../../core/guide/questions";
 import { IdeaChips, useIdeaPlaceholder } from "./chat/IdeaChips";
 import { IdeaMenu } from "./chat/IdeaMenu";
+import { ChatErrorLine } from "./chat/ChatErrorLine";
 import { ConflictCard } from "./chat/ConflictCard";
 import { GuideAvatar } from "./chat/GuideAvatar";
 import { OpeningScene } from "./chat/OpeningScene";
@@ -441,6 +442,8 @@ function ChatShell({
   ) : (
     <div className="flex flex-col gap-3">
       {conflict && <ConflictCard key="conflict" />}
+      <ChatErrorLine />
+
       {/* A reply to the reader, or a failure, comes in above the step card; the
           step card stays where it is until it is answered. */}
       {talk.beside && (

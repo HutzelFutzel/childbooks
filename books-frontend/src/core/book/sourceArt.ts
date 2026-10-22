@@ -169,12 +169,20 @@ export function collectSourceArtBlobIds(project: Project): string[] {
 /**
  * One group per named character that has drawings. Story and Cast copies of
  * the same person are merged so extract sees the complete set.
+ *
+ * Only artwork the reader supplied counts. The approved portrait is attached
+ * to a character as a reference for the sheet and the pages (`origin:
+ * "portrait"`), but it is the book's own picture, not a drawing to read a look
+ * from or a style to copy. Reading it back would describe the picture, make
+ * that description the person's look, and so leave the portrait out of date
+ * the moment the story is read again.
  */
 export function collectSourceArtGroups(project: Project): SourceArtGroup[] {
   const byName = new Map<string, SourceArtGroup>();
   const unnamed: SourceArtGroup[] = [];
 
-  const add = (id: string, name: string, images: SourceArtRef[] | undefined) => {
+  const add = (id: string, name: string, drawn: SourceArtRef[] | undefined) => {
+    const images = drawn?.filter((image) => image.origin !== "portrait");
     if (!images?.length) return;
     const key = normalizeAnchorName(name);
     if (!key) {
