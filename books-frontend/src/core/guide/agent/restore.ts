@@ -16,6 +16,7 @@ import type { BookDesign } from "../../design";
 import type { Project } from "../../types";
 import { castSnapshot, pagesWithCastChange, restoreCast } from "../../book/pageCast";
 import { GUIDE_RESTORE_MAX_CHARS } from "../session";
+import { withLanguageRemembered } from "../storyVersions";
 
 /** The book fields an undo snapshot holds. */
 export const RESTORE_FIELDS = ["title", "config", "anchors", "authoringState"] as const;
@@ -102,4 +103,23 @@ export function restoreDesign(project: Project, saved: Record<string, unknown>):
 export function restoreCastOf(project: Project, saved: Record<string, unknown>): Project {
   const back = saved.castBack as Parameters<typeof restoreCast>[1] | undefined;
   return back ? restoreCast(project, back) : project;
+}
+
+/** Put back the fields a skill turn changed. Fields that did not exist come back as absent. */
+export function applyRestore(project: Project, restore: string): Project {
+  let saved: Record<string, unknown>;
+  try {
+    saved = JSON.parse(restore) as Record<string, unknown>;
+  } catch {
+    return project;
+  }
+  // Keep the story that was on the book for its language before the earlier fields come back.
+  const remembered = withLanguageRemembered(project);
+  const next = { ...remembered } as unknown as Record<string, unknown>;
+  for (const key of RESTORE_FIELDS) {
+    if (!(key in saved)) continue;
+    if (saved[key] === null) delete next[key];
+    else next[key] = saved[key];
+  }
+  return restoreCastOf(restoreDesign(next as unknown as Project, saved), saved);
 }

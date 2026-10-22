@@ -34,7 +34,7 @@ import { addedPeople, personFollowUp } from "../core/guide/agent/followUps";
 import { presentBeats, type Utterance } from "../core/guide/agent/present";
 import { confirmStillValid, planTurn, type PendingConfirm, type Plan } from "../core/guide/agent/plan";
 import { GUIDE_COMMANDS } from "../core/guide/agent/registry";
-import { RESTORE_FIELDS, restoreCastOf, restoreDesign, snapshotForChange, snapshotForFields } from "../core/guide/agent/restore";
+import { applyRestore, snapshotForChange, snapshotForFields } from "../core/guide/agent/restore";
 import { diffDesign, labelForOps } from "../core/book/changeLog";
 import { useBookHistory } from "./bookHistory";
 import { useRedrawHold } from "./redrawHold";
@@ -59,7 +59,12 @@ import { PICTURE_CHOICE_COMMANDS } from "../core/guide/pictureSettling";
 import type { GuideEntry, Project } from "../core/types";
 import { authoringOf, withAuthoring } from "../core/guide/projectState";
 import { deleteLikenessPhoto } from "../platform/likeness";
-import { guideComposeRemote, storyFitRemote, storyTranslateRemote } from "../platform/aiClient";
+import {
+  guideComposeRemote,
+  InsufficientSparksError,
+  storyFitRemote,
+  storyTranslateRemote,
+} from "../platform/aiClient";
 import { startStoryRevision } from "../platform/storyRevisions";
 import { confirmCoverWords, setAuthor, setSubtitle, setTitle, stepPicture, updateCastMember } from "../ui/guide/bookActions";
 import { fontsForBookLanguage } from "../ui/typography/fonts";
@@ -197,22 +202,7 @@ export function agentWellTopic(well: AgentWell): string {
   }
 }
 
-/** Put back the fields a skill turn changed. Fields that did not exist come back as absent. */
-export function applyRestore(project: Project, restore: string): Project {
-  let saved: Record<string, unknown>;
-  try {
-    saved = JSON.parse(restore) as Record<string, unknown>;
-  } catch {
-    return project;
-  }
-  const next = { ...project } as unknown as Record<string, unknown>;
-  for (const key of RESTORE_FIELDS) {
-    if (!(key in saved)) continue;
-    if (saved[key] === null) delete next[key];
-    else next[key] = saved[key];
-  }
-  return restoreCastOf(restoreDesign(next as unknown as Project, saved), saved);
-}
+export { applyRestore };
 
 function writeCalls(plan: Plan): CommandCall[] {
   return plan.steps.filter((step) => step.result.kind === "write").map((step) => step.call);
@@ -242,6 +232,8 @@ function fitCardFor(project: Project, fit: Awaited<ReturnType<typeof storyFitRem
   };
 }
 
+const TRANSLATE_TIMEOUT_MS = 180_000;
+
 /**
  * Carry the written story into another language: the same people, plot and tone, in new
  * words. While it runs the story is marked as being written, so it can't be edited under
@@ -250,8 +242,13 @@ function fitCardFor(project: Project, fit: Awaited<ReturnType<typeof storyFitRem
 async function translateStoryInto(locale: string, turn: AgentTurn): Promise<void> {
   const before = live();
   const name = isBookLanguageId(locale) ? getBookLanguage(locale).endonym : locale;
-  const fail = (): void => {
+  const fail = (sparks = false): void => {
     turn.beats = turn.beats.filter((b) => b.key !== "languageTranslating");
+    if (sparks) {
+      turn.beats.push(beat("sparksOffer", undefined, { priority: "result" }));
+      turn.well = { kind: "sparksOffer" };
+      return;
+    }
     turn.beats.push(beat("languageTranslateFailed", { language: name }, { priority: "result" }));
   };
   if (!before || !isBookLanguageId(locale) || !canTranslateStory(before)) {
@@ -281,8 +278,10 @@ async function translateStoryInto(locale: string, turn: AgentTurn): Promise<void
   const startedAt = Date.now();
   const signature = storyBriefSignature(brief, before.config.ageRangeId, before.config.readingModeId, before.config.contentLocale);
   await useProjectsStore.getState().patchCurrent((p) => withAuthoring(p, { storyRun: { signature, startedAt, status: "running", translating: true } }));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TRANSLATE_TIMEOUT_MS);
   try {
-    const translated = await storyTranslateRemote(before, before.config.contentLocale, locale);
+    const translated = await storyTranslateRemote(before, before.config.contentLocale, locale, controller.signal);
     if (!translated.story.trim()) throw new Error("The translation was empty.");
     const landed: { project: Project | null } = { project: null };
     await useProjectsStore.getState().patchCurrent((p) => {
@@ -312,7 +311,9 @@ async function translateStoryInto(locale: string, turn: AgentTurn): Promise<void
     await useProjectsStore.getState().patchCurrent((p) =>
       authoringOf(p).storyRun?.startedAt === startedAt ? withAuthoring(p, { storyRun: prior }) : p,
     );
-    fail();
+    fail(error instanceof InsufficientSparksError);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

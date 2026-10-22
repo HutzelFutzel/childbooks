@@ -23,15 +23,19 @@ import { withTranslatedStory } from "../books-frontend/src/core/guide/storyLangu
 import {
   languageOf,
   languageStatus,
+  normalizeStoryLanguages,
   withLanguageRemembered,
   withTranslationKept,
   withVersionRestored,
 } from "../books-frontend/src/core/guide/storyVersions";
-import { RESTORE_FIELDS } from "../books-frontend/src/core/guide/agent/restore";
+import { renamePersonEverywhere } from "../books-frontend/src/core/guide/rename";
+import { manuscriptHash } from "../books-frontend/src/core/guide/ownWords";
+import { applyRestore, RESTORE_FIELDS, snapshotForChange } from "../books-frontend/src/core/guide/agent/restore";
 import { slimProjectForRender } from "../books-frontend/src/core/book/slimProject";
 import { analyzeStory } from "../books-frontend/src/core/pipeline/analysis";
 import { generateScreenplay } from "../books-frontend/src/core/pipeline/screenplay";
 import { translateStory } from "../books-frontend/src/core/pipeline/storyTranslate";
+import { inspectTranslation } from "../books-frontend/src/core/pipeline/storyValidate";
 import { openaiTextProvider } from "../books-frontend/src/core/providers/openai";
 import { createDefaultStoryBrief } from "../books-frontend/src/core/story/brief";
 import { createDefaultConfig, type Anchor, type BookConfig, type Project } from "../books-frontend/src/core/types";
@@ -420,6 +424,87 @@ const item = (name: string, type: string, sameAs: string | null, extra: object =
   check(!("storyLanguages" in slimProjectForRender(inGerman, {})), "The kept languages were sent to the model.");
   check(!(RESTORE_FIELDS as readonly string[]).includes("storyLanguages"), "The kept languages are among the fields Undo stores.");
   check(JSON.stringify(start.config) === JSON.stringify(book({ title: "Amanda and the Sea" }, { storyText: EN }).config), "Keeping a language changed the book it was given.");
+
+  // Undo of a translation keeps the translated language ready in the background.
+  const snap = snapshotForChange(start, inGerman);
+  const undone = applyRestore(inGerman, snap);
+  check(languageOf(undone) === "en-US" && undone.config.storyText === EN, "Undo did not restore the English story.");
+  check(languageStatus(undone, "de-DE") === "current" && withVersionRestored(undone, "de-DE")?.config.storyText === DE, "Undo lost the translated German version.");
+
+  // Renaming a person updates the kept versions so switching back keeps the new name.
+  const withCast: Project = {
+    ...inGerman,
+    config: {
+      ...inGerman.config,
+      storyBrief: { ...createDefaultStoryBrief("guided"), cast: [{ id: "c-amanda", name: "Amanda" }] as never },
+    },
+  };
+  const renamed = renamePersonEverywhere(withCast, "c-amanda", "Clara");
+  check(!("refused" in renamed), "Rename was refused.");
+  if (!("refused" in renamed)) {
+    const backAfterRename = withVersionRestored(renamed.project, "en-US")!;
+    check(backAfterRename.config.storyText.includes("Clara") && !backAfterRename.config.storyText.includes("Amanda"), "Switching back after a rename brought back the old name.");
+    check(backAfterRename.title === "Clara and the Sea", "Switching back after a rename brought back the old title.");
+  }
+
+  // Own-words extraction hash follows a restored version so cast extraction does not rerun.
+  const withExtraction = withAuthoring(inGerman, {
+    extraction: { storyHash: manuscriptHash(DE), at: 1, names: ["Amanda"], unresolved: [] },
+  });
+  const restoredOwn = withVersionRestored(withExtraction, "en-US")!;
+  check(authoringOf(restoredOwn).extraction?.storyHash === manuscriptHash(EN), "Restoring an own-words version left a stale extraction hash.");
+
+  // Normalization drops malformed entries and keeps valid ones.
+  check(normalizeStoryLanguages(null) === undefined && normalizeStoryLanguages("bad") === undefined, "Malformed storyLanguages was not dropped.");
+  const cleaned = normalizeStoryLanguages({
+    "en-US": kept(inGerman, "en-US"),
+    "not-a-locale": kept(inGerman, "en-US"),
+    "de-DE": { storyText: "   ", syncId: "s1", syncText: "x" },
+  });
+  check(Boolean(cleaned?.["en-US"]) && !cleaned?.["de-DE"] && Object.keys(cleaned ?? {}).length === 1, "Invalid language entries survived normalization.");
+}
+
+// --- Translation quality checks & repair pass ----------------------------------------------------------------
+
+{
+  const VERSE_EN = [
+    "Little star up in the sky,\nShining softly way up high,\nWatching over sleepy heads,\nTucked inside their cozy beds.",
+    "Moonbeams dance upon the floor,\nQuietly behind the door,\nClose your eyes and drift away,\nTill the dawning of the day.",
+  ].join("\n\n");
+  const VERSE_FLAT_DE =
+    "Kleiner Stern oben am Himmel, du scheinst sanft hoch oben und wachst über schläfrige Köpfe in ihren gemütlichen Betten. Mondstrahlen tanzen auf dem Boden leise hinter der Tür, schließ deine Augen und träume bis zum neuen Tag.";
+  const VERSE_GOOD_DE = [
+    "Kleiner Stern am Himmelszelt,\nLeuchtest sanft auf diese Welt,\nWachst bei Nacht mit mildem Schein,\nÜber alle, groß und klein.",
+    "Mondlicht tanzt im stillen Raum,\nTrägt dich leis in deinen Traum,\nSchließ die Augen, schlaf nun sacht,\nBis der neue Tag erwacht.",
+  ].join("\n\n");
+
+  const flatIssues = inspectTranslation({
+    sourceStory: VERSE_EN,
+    translatedStory: VERSE_FLAT_DE,
+    structure: { minWords: 20, maxWords: 120, beats: 2, maxSentenceWords: 18 },
+    checkLength: true,
+  });
+  check(flatIssues.stanzaMiss === 2 && flatIssues.repairInstruction.includes("verse in 2 stanzas"), "Flattened verse stanzas were not caught.");
+
+  const repairedVerse = await stubbed(
+    [
+      { title: "Kleiner Stern", subtitle: "", story: VERSE_FLAT_DE, names: [] },
+      { title: "Kleiner Stern", subtitle: "", story: VERSE_GOOD_DE, names: [] },
+    ],
+    () =>
+      translateStory({
+        config: config({ contentLocale: "de-DE" }),
+        story: VERSE_EN,
+        title: "Little Star",
+        sourceLocale: "en-US",
+        targetLocale: "de-DE",
+        creds: { apiKey: "x" },
+        model: "stub",
+      }),
+  );
+  check(repairedVerse.calls.length === 2, `A flattened verse translation did not trigger a repair pass (${repairedVerse.calls.length} calls).`);
+  check(repairedVerse.calls[1]!.user.includes("previous attempt was rejected"), "The repair prompt did not explain why the first translation was rejected.");
+  check(repairedVerse.value.story === VERSE_GOOD_DE, "The repaired verse translation was not kept.");
 }
 
 console.log(`Identity invariants passed (${passed} checks).`);

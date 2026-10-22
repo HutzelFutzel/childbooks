@@ -62,6 +62,7 @@ import {
 } from "./customStyles";
 import { coverSpread } from "../../books-frontend/src/core/book/units";
 import { coverLinesOf } from "../../books-frontend/src/core/book/coverLines";
+import { isBookLanguageId } from "../../books-frontend/src/core/config/bookLanguages";
 import { generateStoryDraft } from "../../books-frontend/src/core/pipeline/storyDraft";
 import { translateStory } from "../../books-frontend/src/core/pipeline/storyTranslate";
 import { checkStoryFit } from "../../books-frontend/src/core/pipeline/storyFit";
@@ -394,9 +395,18 @@ export function registerAiRoutes(app: Express): void {
         res.status(400).json({ error: { message: "There's no story to translate yet." } });
         return;
       }
+      if (targetLocale !== undefined && !isBookLanguageId(targetLocale)) {
+        res.status(400).json({ error: { message: `"${String(targetLocale)}" is not a book language.` } });
+        return;
+      }
+      const target = targetLocale ?? project.config.contentLocale;
+      if (!target || !isBookLanguageId(target)) {
+        res.status(400).json({ error: { message: "Pick a language for the story first." } });
+        return;
+      }
+      const source = sourceLocale && isBookLanguageId(sourceLocale) ? sourceLocale : project.config.contentLocale;
       const [model, prompts] = await Promise.all([resolveText("storyDraft"), loadPromptContext()]);
       const startedAt = Date.now();
-      const target = targetLocale ?? project.config.contentLocale;
       const { value, events, stats } = await withUsage(() =>
         translateStory({
           config: withTextModel(
@@ -410,7 +420,7 @@ export function registerAiRoutes(app: Express): void {
           title: project.title,
           subtitle: coverLinesOf(project).subtitle,
           anchors: project.anchors,
-          sourceLocale,
+          sourceLocale: source,
           targetLocale: target,
           creds: { apiKey: apiKeyFor(model.provider) },
           model: model.id,

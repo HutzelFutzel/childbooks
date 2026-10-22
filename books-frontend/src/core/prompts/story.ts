@@ -228,6 +228,8 @@ export function buildStoryTranslatePrompt(
   subtitle?: string,
   /** The book's people, places and things, one per line, when it has any. */
   knownNames?: string,
+  /** Why a previous attempt was rejected, for the one repair pass. */
+  repairInstruction?: string,
 ): StoryPromptParts {
   const baseCraft = resolveStoryCraftFor(config.ageRangeId, ctx);
   const targetLanguage = getBookLanguage(config.contentLocale);
@@ -261,6 +263,7 @@ export function buildStoryTranslatePrompt(
       maxSentenceWords: String(baseCraft.structure.maxSentenceWords),
       safetyList: baseCraft.safety.avoid.join("; "),
       safetyNote: baseCraft.safety.note,
+      repairInstruction: repairInstruction ?? "",
     },
     flags: {
       hasLength: Boolean(brief) && brief?.mode !== "own",
@@ -269,13 +272,14 @@ export function buildStoryTranslatePrompt(
       hasSubtitle: Boolean(subtitle?.trim()),
       hasDevice: Boolean(deviceGuidance),
       hasKnownNames: Boolean(knownNames?.trim()),
+      isRepair: Boolean(repairInstruction),
     },
   });
 
   return {
     system,
     user,
-    craft: baseCraft,
+    craft: { ...baseCraft, structure: { ...baseCraft.structure, minWords, maxWords } },
     profile: resolveAudienceProfile(config.ageRangeId, ctx),
   };
 }

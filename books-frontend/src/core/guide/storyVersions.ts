@@ -24,10 +24,16 @@
  * undoable fields, never in them (`agent/restore.ts`), so they never count
  * against the size Undo can hold.
  */
-import { DEFAULT_BOOK_LANGUAGE_ID, type BookLanguageId } from "../config/bookLanguages";
+import {
+  DEFAULT_BOOK_LANGUAGE_ID,
+  isBookLanguageId,
+  type BookLanguageId,
+} from "../config/bookLanguages";
+import { PLACEHOLDER_TITLE } from "../book/coverLines";
 import type { Project, StoryLanguageVersion } from "../types";
 import type { NamePair } from "../book/anchorIdentity";
-import { authoringOf } from "./projectState";
+import { manuscriptHash } from "./ownWords";
+import { authoringOf, withAuthoring } from "./projectState";
 import { isRealStoryChange } from "./storyChange";
 import { withTranslatedStory, type TranslatedStory } from "./storyLanguage";
 
@@ -63,18 +69,57 @@ function wordsOf(project: Project): Pick<StoryLanguageVersion, "storyText" | "ti
   return {
     storyText: project.config.storyText,
     // The placeholder name of a book nobody has named is not a title.
-    title: title === "Untitled Story" ? "" : title,
+    title: title === PLACEHOLDER_TITLE ? "" : title,
     // Only a subtitle the reader chose goes with the story; the page plan makes its own again.
     subtitle: authoringOf(project).cover?.subtitle?.trim() ?? "",
     names: namesOf(project),
   };
 }
 
+/** Repair whatever is stored in `project.storyLanguages`, dropping anything malformed. */
+export function normalizeStoryLanguages(
+  raw: unknown,
+): Partial<Record<BookLanguageId, StoryLanguageVersion>> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Partial<Record<BookLanguageId, StoryLanguageVersion>> = {};
+  for (const [locale, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isBookLanguageId(locale) || !entry || typeof entry !== "object") continue;
+    const item = entry as Record<string, unknown>;
+    const storyText = typeof item.storyText === "string" ? item.storyText : "";
+    const syncId = typeof item.syncId === "string" ? item.syncId.trim() : "";
+    const syncText = typeof item.syncText === "string" ? item.syncText : "";
+    if (!storyText.trim() || !syncId || !syncText.trim()) continue;
+    const names: Record<string, string> = {};
+    if (item.names && typeof item.names === "object") {
+      for (const [id, name] of Object.entries(item.names as Record<string, unknown>)) {
+        if (id && typeof name === "string" && name.trim()) names[id] = name.trim().slice(0, 120);
+      }
+    }
+    const translatedFrom = isBookLanguageId(item.translatedFrom as string) ? (item.translatedFrom as BookLanguageId) : undefined;
+    const savedAt = typeof item.savedAt === "number" && Number.isFinite(item.savedAt) && item.savedAt > 0 ? item.savedAt : 0;
+    out[locale] = {
+      storyText,
+      title: typeof item.title === "string" ? item.title.trim().slice(0, 200) : "",
+      subtitle: typeof item.subtitle === "string" ? item.subtitle.trim().slice(0, 200) : "",
+      names,
+      syncId: syncId.slice(0, 60),
+      syncText,
+      ...(translatedFrom ? { translatedFrom } : {}),
+      savedAt,
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function storyLanguagesOf(project: Pick<Project, "storyLanguages">): Partial<Record<BookLanguageId, StoryLanguageVersion>> | undefined {
+  return normalizeStoryLanguages(project.storyLanguages);
+}
+
 /** Whether `locale` tells the story that is on the book, is only kept from an older one, or was never written. */
 export function languageStatus(project: Project, locale: string): LanguageStatus {
   const here = languageOf(project);
   if (locale === here) return "here";
-  const versions = project.storyLanguages;
+  const versions = storyLanguagesOf(project);
   const kept = versions?.[locale as BookLanguageId];
   if (!kept || !kept.storyText.trim()) return "none";
   const mine = versions?.[here];
@@ -97,7 +142,7 @@ export function withLanguageRemembered(project: Project): Project {
   if (!project.config.storyText.trim()) return project;
   const here = languageOf(project);
   const text = project.config.storyText;
-  const versions = { ...(project.storyLanguages ?? {}) };
+  const versions = { ...(storyLanguagesOf(project) ?? {}) };
   const prior = versions[here];
   const same = Boolean(prior) && !isRealStoryChange(prior!.syncText, text);
   versions[here] = {
@@ -122,14 +167,15 @@ export function withTranslationKept(
   words: TranslatedStory,
   from: BookLanguageId,
 ): Project {
-  const source = remembered.storyLanguages?.[from];
+  const versions = storyLanguagesOf(remembered);
+  const source = versions?.[from];
   if (!source) return translated;
   const to = languageOf(translated);
   const own = wordsOf(translated);
   return {
     ...translated,
     storyLanguages: {
-      ...(remembered.storyLanguages ?? {}),
+      ...(versions ?? {}),
       [to]: {
         storyText: translated.config.storyText,
         title: words.title.trim() || own.title,
@@ -152,7 +198,7 @@ export function withTranslationKept(
 export function withVersionRestored(project: Project, locale: BookLanguageId): Project | null {
   if (!hasCurrentVersion(project, locale)) return null;
   const remembered = withLanguageRemembered(project);
-  const kept = remembered.storyLanguages?.[locale];
+  const kept = storyLanguagesOf(remembered)?.[locale];
   if (!kept) return null;
   // Each person, place or thing the book calls something else now is renamed back to the kept words.
   const names: NamePair[] = [];
@@ -167,5 +213,34 @@ export function withVersionRestored(project: Project, locale: BookLanguageId): P
   );
   // Who is in this story is already known; nothing about it needs reading again.
   if (next.analysis) next = { ...next, analysis: { ...next.analysis, sourceStoryText: kept.storyText } };
+  const extraction = authoringOf(next).extraction;
+  if (extraction) {
+    next = withAuthoring(next, {
+      extraction: { ...extraction, storyHash: manuscriptHash(kept.storyText) },
+    });
+  }
   return next;
+}
+
+/** Carry a rename across every kept language version so switching back keeps the new name. */
+export function withStoryLanguagesRenamed(
+  project: Project,
+  swap: (text: string) => string,
+): Project {
+  const versions = storyLanguagesOf(project);
+  if (!versions) return project;
+  const next: Partial<Record<BookLanguageId, StoryLanguageVersion>> = {};
+  for (const [locale, version] of Object.entries(versions) as [BookLanguageId, StoryLanguageVersion][]) {
+    const names: Record<string, string> = {};
+    for (const [id, name] of Object.entries(version.names)) names[id] = swap(name);
+    next[locale] = {
+      ...version,
+      storyText: swap(version.storyText),
+      syncText: swap(version.syncText),
+      title: swap(version.title),
+      subtitle: swap(version.subtitle),
+      names,
+    };
+  }
+  return { ...project, storyLanguages: next };
 }

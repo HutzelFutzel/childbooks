@@ -111,6 +111,7 @@ import { changesTheScene } from "../core/pipeline/editScope";
 import { useAppConfigStore } from "./appConfigStore";
 import { quoteFor } from "./chatGeneration";
 import { sendGuideTurn } from "./guideTurn";
+import { withLanguageRemembered } from "../core/guide/storyVersions";
 import { rememberThumbs } from "./messageThumbs";
 import { isEagerStoryEdit } from "../core/story/revision";
 import { markExcerpt, selectionForMark, type StoryMark } from "../core/story/storyMark";
@@ -533,31 +534,33 @@ async function draftStory(): Promise<void> {
     const nowSignature = storyBriefSignature(now, current.config.ageRangeId, current.config.readingModeId, current.config.contentLocale);
     if (nowSignature !== signature) return;
     await patchBook((p) =>
-      withAuthoring(
-        {
-          ...p,
-          config: {
-            ...p.config,
-            storyText: draft.story,
-            storyBrief: {
-              ...briefOf(p.config),
-              generatedAt: Date.now(),
-              generatedSignature: signature,
-              generatedForAge: ageRangeId,
-              generatedForLocale: contentLocale,
+      withLanguageRemembered(
+        withAuthoring(
+          {
+            ...p,
+            config: {
+              ...p.config,
+              storyText: draft.story,
+              storyBrief: {
+                ...briefOf(p.config),
+                generatedAt: Date.now(),
+                generatedSignature: signature,
+                generatedForAge: ageRangeId,
+                generatedForLocale: contentLocale,
+              },
+            },
+            ...(draft.title && !authoringOf(p).cover?.titleEdited ? { title: draft.title } : {}),
+          },
+          {
+            storyRun: { signature, startedAt, status: "done" },
+            // A new story brings new subtitle ideas, and its cover words are asked about again.
+            cover: {
+              ...authoringOf(p).cover,
+              subtitleIdeas: draft.subtitles?.length ? draft.subtitles : undefined,
+              confirmedAt: undefined,
             },
           },
-          ...(draft.title && !authoringOf(p).cover?.titleEdited ? { title: draft.title } : {}),
-        },
-        {
-          storyRun: { signature, startedAt, status: "done" },
-          // A new story brings new subtitle ideas, and its cover words are asked about again.
-          cover: {
-            ...authoringOf(p).cover,
-            subtitleIdeas: draft.subtitles?.length ? draft.subtitles : undefined,
-            confirmedAt: undefined,
-          },
-        },
+        ),
       ),
     );
     useChatStudio.getState().say([{ key: "storyReady", priority: "result" }], { unprompted: true });

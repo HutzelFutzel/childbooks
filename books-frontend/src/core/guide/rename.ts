@@ -34,6 +34,7 @@ import { countNameMentions, properName, renameInText } from "./nameText";
 import { manuscriptHash } from "./ownWords";
 import { portraitInputs, portraitStatus, portraitSubjects } from "./portrait";
 import { authoringOf, withAuthoring } from "./projectState";
+import { withStoryLanguagesRenamed } from "./storyVersions";
 
 export const MAX_NAME_LENGTH = 60;
 
@@ -361,6 +362,7 @@ export function renamePersonEverywhere(
   if (from) {
     next = withScreenplayRenamed(next, from, to, swap);
     next = withDesignRenamed(next, swap);
+    next = withStoryLanguagesRenamed(next, swap);
   }
 
   const state = authoringOf(next);

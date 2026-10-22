@@ -180,6 +180,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("currentSubtitle", "Original subtitle: {{currentSubtitle}}", "hasSubtitle"),
       blk("currentStory", "Original story text:\n\n{{currentStory}}"),
       blk("knownNames", "\nThe book's list of people, places and things:\n{{knownNames}}", "hasKnownNames"),
+      blk(
+        "repair",
+        "\nA previous attempt was rejected: {{repairInstruction}} Translate the story again into {{targetLanguage}}, fixing exactly that while keeping the same people, plot, stanza breaks and tone.",
+        "isRepair",
+      ),
     ],
   },
 
@@ -1860,6 +1865,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("maxSentenceWords", "Sentence-length ceiling for the band.", "16"),
           V("safetyList", "The age band's 'never include' list, semicolon-joined.", SAFETY_SAMPLE),
           V("safetyNote", "Closing safety sentence from Story craft.", "Tension must resolve warmly."),
+          V("repairInstruction", "When retrying, why the previous translation was rejected.", ""),
         ],
         sampleFlags: {
           hasTitle: true,
@@ -1868,6 +1874,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           hasKnownNames: true,
           hasLength: true,
           hasSentenceLimit: true,
+          isRepair: false,
         },
       },
     ],

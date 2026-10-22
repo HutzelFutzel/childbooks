@@ -43,6 +43,7 @@ import {
 } from "../../core/types";
 import type { AssetItem } from "../../core/settings";
 import { applyBookTitle, useProjectsStore } from "../../state/projectsStore";
+import { withLanguageRemembered } from "../../core/guide/storyVersions";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { getCursor } from "../../core/versioning";
 import {
@@ -424,10 +425,14 @@ interface StudioContextValue {
 }
 
 function applyStorySnapshot(project: Project, snapshot: StorySnapshot): Project {
+  const remembered =
+    snapshot.contentLocale !== project.config.contentLocale
+      ? withLanguageRemembered(project)
+      : project;
   const titled =
-    project.title === snapshot.title
-      ? project
-      : applyBookTitle(project, snapshot.title);
+    remembered.title === snapshot.title
+      ? remembered
+      : applyBookTitle(remembered, snapshot.title);
   return {
     ...titled,
     config: {
