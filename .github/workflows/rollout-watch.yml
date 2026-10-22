@@ -76,15 +76,24 @@ jobs:
       # Note the states: a live BUILD is READY (it's the ROLLOUT that reports
       # SUCCEEDED), and an invalid apphosting.yaml lands in FAILED after ~40s,
       # while a genuine build takes ~5min.
+      #
+      # ORDER MATTERS: the list API returns builds oldest-first by default, in
+      # pages of at most 100. Once the backend passed 100 builds, the newest
+      # ones landed on page 2, this step never saw its own commit and reported
+      # "FRONTEND DID NOT DEPLOY" for builds that were READY. `create_time desc`
+      # keeps the newest builds on page 1 no matter how many exist (note the
+      # snake_case: `createTime desc` is rejected with HTTP 400).
       - name: Wait for the App Hosting build of this commit
         id: build
         env:
           TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
           set -uo pipefail
-          for _ in $(seq 1 44); do
+          last_state="no build found for this commit"
+          for _ in $(seq 1 80); do
             code=$(curl -sS -o /tmp/builds.json -w '%{http_code}' \
-              -H "Authorization: Bearer $TOKEN" "$API/builds?pageSize=100" || echo 000)
+              -H "Authorization: Bearer $TOKEN" \
+              "$API/builds?pageSize=100&orderBy=create_time%20desc" || echo 000)
 
             # No permission to look is a SETUP problem, not a deploy failure —
             # say so plainly instead of raising a false alarm about the site.
@@ -100,13 +109,14 @@ jobs:
               /tmp/builds.json)
             state=$(jq -r '.state // "PENDING"' <<<"$build")
             echo "build state: $state"
+            [ "$state" = "PENDING" ] || last_state="build still $state"
 
             case "$state" in
               READY)
                 echo "verdict=live" >> "$GITHUB_OUTPUT"
                 echo "Frontend build is live."
                 exit 0;;
-              FAILED)
+              FAILED|CANCELLED)
                 reason=$(jq -r '.error.message // "unknown"' <<<"$build" | tr -d '\r' | tr '\n' ' ')
                 echo "reason=$reason" >> "$GITHUB_OUTPUT"
                 echo "logs=$(jq -r '.buildLogsUri // ""' <<<"$build")" >> "$GITHUB_OUTPUT"
@@ -115,7 +125,7 @@ jobs:
             esac
             sleep 15
           done
-          echo "reason=timed out after 11min waiting for the build to finish" >> "$GITHUB_OUTPUT"
+          echo "reason=timed out after 20min waiting for the build to finish ($last_state)" >> "$GITHUB_OUTPUT"
           echo "::error::Timed out waiting for the App Hosting build."
           exit 1
 
