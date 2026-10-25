@@ -28,24 +28,29 @@ export type { StatSummary } from "../../books-frontend/src/core/analytics/types"
 import type { StatSummary } from "../../books-frontend/src/core/analytics/types";
 
 export function emptyStat(): StatSummary {
-  return { count: 0, total: 0, avg: 0, median: 0, p90: 0, min: 0, max: 0 };
+  return { count: 0, total: 0, avg: 0, p25: 0, median: 0, p75: 0, p90: 0, p95: 0, min: 0, max: 0 };
 }
 
 /**
- * Summarize raw values. Rounded to 2 decimals — these are counts, dollars and
- * durations read by a human, never re-used in further arithmetic.
+ * Summarize raw values. Rounded to 2 decimals by default — these are counts,
+ * dollars and durations read by a human, never re-used in further arithmetic.
+ * Pass more `digits` for values that are fractions of a cent (cost per page).
  */
-export function summarize(values: number[]): StatSummary {
+export function summarize(values: number[], digits = 2): StatSummary {
   if (values.length === 0) return emptyStat();
   const sorted = [...values].sort((a, b) => a - b);
   const total = sorted.reduce((a, b) => a + b, 0);
-  const r = (n: number) => Math.round(n * 100) / 100;
+  const scale = 10 ** digits;
+  const r = (n: number) => Math.round(n * scale) / scale;
   return {
     count: sorted.length,
     total: r(total),
     avg: r(total / sorted.length),
+    p25: r(percentile(sorted, 25)),
     median: r(percentile(sorted, 50)),
+    p75: r(percentile(sorted, 75)),
     p90: r(percentile(sorted, 90)),
+    p95: r(percentile(sorted, 95)),
     min: r(sorted[0]),
     max: r(sorted[sorted.length - 1]),
   };

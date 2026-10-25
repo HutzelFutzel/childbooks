@@ -14,10 +14,12 @@ import { DEFAULT_IMAGE_TIER_LABELS } from "../../../core/config/modelConfig";
 import { downloadCsv } from "./csv";
 import { fmtDateTime, fmtNumber, fmtSparks, fmtUsd } from "./format";
 import { RangePicker } from "./RangePicker";
+import { BookCostsCard } from "./BookCostsCard";
 
-type View = "runs" | "actions";
+type View = "books" | "runs" | "actions";
 
 const VIEWS: { id: View; label: string }[] = [
+  { id: "books", label: "Cost per book" },
   { id: "runs", label: "User calls" },
   { id: "actions", label: "Per action" },
 ];
@@ -45,11 +47,11 @@ function runGroup(r: ActionRunRow): "image" | "text" {
  * confusing.
  */
 export function CostsAnalysis() {
-  const [view, setView] = useState<View>("runs");
+  const [view, setView] = useState<View>("books");
   return (
     <div className="space-y-5">
       <Tabs items={VIEWS} value={view} onChange={(id) => setView(id as View)} />
-      {view === "runs" ? <RunLog /> : <CostIntelligenceTab />}
+      {view === "books" ? <BookCostsCard /> : view === "runs" ? <RunLog /> : <CostIntelligenceTab />}
     </div>
   );
 }

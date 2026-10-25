@@ -684,8 +684,14 @@ export interface StatSummary {
   count: number;
   total: number;
   avg: number;
+  /** First quartile — a quarter of the things fall at or below this. */
+  p25: number;
   median: number;
+  /** Third quartile. */
+  p75: number;
   p90: number;
+  /** The tail worth surviving: one in twenty things is at least this big. */
+  p95: number;
   min: number;
   max: number;
 }

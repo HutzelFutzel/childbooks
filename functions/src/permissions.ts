@@ -623,6 +623,7 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/analytics\/guide-dry-run$/, gate: key("analysis.flows", "write") },
   { test: /^\/admin\/analytics\/products$/, gate: key("analysis.products", "read") },
   { test: /^\/admin\/analytics\/action-costs$/, gate: key("analysis.costs", "read") },
+  { test: /^\/admin\/analytics\/book-costs$/, gate: key("analysis.costs", "read") },
   { test: /^\/admin\/projects(\/|$)/, gate: key("analysis.projects", "read") },
   { test: /^\/admin\/runs(\/|$)/, gate: key("analysis.projects", "read") },
   { test: /^\/admin\/finance\/summary$/, gate: key("analysis.finance", "read") },

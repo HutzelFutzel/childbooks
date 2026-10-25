@@ -150,9 +150,11 @@ export async function toUsd(amount: number, currency: string): Promise<number> {
 
 /**
  * Append one finance event. Never throws — accounting must not break the
- * payment/generation flow that produced the fact.
+ * payment/generation flow that produced the fact. Resolves true only when THIS
+ * call wrote the event (false for an idempotent retry or a failure), so a caller
+ * that keeps a second counter can bump it exactly once.
  */
-export async function recordFinanceEvent(e: FinanceEventInput): Promise<void> {
+export async function recordFinanceEvent(e: FinanceEventInput): Promise<boolean> {
   try {
     const id = e.ref ? `${e.kind}_${e.ref}` : randomUUID();
     const doc: Record<string, unknown> = {
@@ -179,10 +181,12 @@ export async function recordFinanceEvent(e: FinanceEventInput): Promise<void> {
     } else {
       await db().collection(COLLECTION).doc(id).set(doc);
     }
+    return true;
   } catch (err) {
     const code = (err as { code?: number }).code;
-    if (code === 6) return; // ALREADY_EXISTS — idempotent retry, expected
+    if (code === 6) return false; // ALREADY_EXISTS — idempotent retry, expected
     console.error("[finance] failed to record event", e.kind, err);
+    return false;
   }
 }
 

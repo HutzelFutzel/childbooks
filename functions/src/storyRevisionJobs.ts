@@ -12,7 +12,7 @@ import { apiKeyFor, resolveTextAction } from "./modelResolve";
 import { ensureAffordAction, InsufficientSparks } from "./sparks";
 import { ensureAdmin } from "./storage";
 import { ALL_SECRETS } from "./secrets";
-import { withUsage } from "./usage";
+import { newSpendLedger, runWithSpendLedger, withUsage } from "./usage";
 import { log } from "./logs";
 import {
   reviseStory,
@@ -281,6 +281,9 @@ async function runRevision(uid: string, jobId: string): Promise<void> {
   if (!job) return;
 
   const startedAt = Date.now();
+  // Calls behind a revision that then fails (a malformed reply, a timeout) were
+  // still paid for: `withUsage` hands them to this ledger instead of dropping them.
+  const spend = newSpendLedger();
   try {
     const [model, prompts] = await Promise.all([resolveTextAction("storyEdit"), loadPromptContext()]);
     const restyle = !job.selection && rewritesWholeStory(job.instruction);
@@ -295,9 +298,8 @@ async function runRevision(uid: string, jobId: string): Promise<void> {
       creds: { apiKey: apiKeyFor(model.provider) },
       prompts,
     };
-    const { value: proposal, events, stats } = await withUsage(
-      () => (restyle ? rewriteStory(editInput) : reviseStory(editInput)),
-      params,
+    const { value: proposal, events, stats } = await runWithSpendLedger(spend, () =>
+      withUsage(() => (restyle ? rewriteStory(editInput) : reviseStory(editInput)), params),
     );
     const published = await publishReady(ref, proposal);
     if (!published) return;
@@ -349,6 +351,24 @@ async function runRevision(uid: string, jobId: string): Promise<void> {
         ...(err instanceof StoryRevisionFormatError && err.details ? { details: err.details } : {}),
       },
     });
+    if (spend.events.length > 0) {
+      await meterAndSettle({
+        uid,
+        action: "storyEdit",
+        events: spend.events,
+        stats: spend.stats,
+        projectId: job.projectId,
+        kind: "edit",
+        jobId,
+        targetId: "story",
+        source: "worker",
+        startedAt,
+        outcome: "failed",
+        errorCode: "story_revision_failed",
+        errorMessage: message,
+        models: {},
+      }).catch((meterErr) => logger.error("[story-revision] failed-spend metering skipped", { uid, jobId, err: String(meterErr) }));
+    }
     const latest = await ref.get();
     if (latest.data()?.status === "discarded") return;
     await ref.update({

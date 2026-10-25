@@ -51,6 +51,12 @@ import {
   type RunOutcome,
 } from "./actionRun";
 import { flowComparison } from "./flowComparison";
+import { computeBookCosts } from "./bookCosts";
+import {
+  DEFAULT_BOOK_COST_QUERY,
+  MAX_BOOK_COST_COUNT,
+  type BookCostQuery,
+} from "../../books-frontend/src/core/analytics/bookCost";
 import { buildUserStudioReport } from "./userStudio";
 import { mergeTally, percentile } from "./stats";
 import { toUsd } from "./finance";
@@ -2289,6 +2295,43 @@ export function registerAnalyticsRoutes(app: Express): void {
           excludeUids: excludedUids,
         }),
       );
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // What it costs to make a book: average, spread and per-page, all-in, over the
+  // newest N books (any N) or a date window. Built from the books' own lifetime
+  // cost counters; see functions/src/bookCosts.ts.
+  app.get("/admin/analytics/book-costs", async (req: Request, res: Response) => {
+    try {
+      const num = (v: unknown) => (typeof v === "string" && v.trim() !== "" ? Number(v) : NaN);
+      const pick = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
+        allowed.includes(v as T) ? (v as T) : fallback;
+      const from = num(req.query.from);
+      const to = num(req.query.to);
+      const count = num(req.query.count);
+      const settled = num(req.query.settledDays);
+      const query: BookCostQuery = {
+        ...DEFAULT_BOOK_COST_QUERY,
+        count: Number.isFinite(count) ? Math.min(Math.max(Math.floor(count), 1), MAX_BOOK_COST_COUNT) : DEFAULT_BOOK_COST_QUERY.count,
+        order: pick(req.query.order, ["created", "active"] as const, DEFAULT_BOOK_COST_QUERY.order),
+        cohort: pick(req.query.cohort, ["started", "finished", "all"] as const, DEFAULT_BOOK_COST_QUERY.cohort),
+        funding: pick(req.query.funding, ["any", "free", "paid"] as const, DEFAULT_BOOK_COST_QUERY.funding),
+        firstBookOnly: req.query.firstBookOnly === "true",
+        settledDays: Number.isFinite(settled) ? Math.min(Math.max(Math.floor(settled), 0), 365) : 0,
+        excludeStaff: req.query.excludeStaff !== "false",
+        ...(Number.isFinite(from) && Number.isFinite(to) && from > 0 && to > 0
+          ? { range: { from: Math.min(from, to), to: Math.max(from, to) } }
+          : {}),
+      };
+      // The exclusion list is keyed by email, books by uid: resolve it through the
+      // same cached account scan every other dashboard figure uses.
+      const [{ excludedUids }, sparks] = await Promise.all([
+        query.excludeStaff ? scanUsers(await getAdminSettings()) : Promise.resolve({ excludedUids: undefined }),
+        getSparksConfig(),
+      ]);
+      res.json(await computeBookCosts({ query, sparks, excludeUids: excludedUids }));
     } catch (err) {
       handleError(res, err);
     }

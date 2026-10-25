@@ -39,6 +39,7 @@ import type { Project } from "../../books-frontend/src/core/types";
 import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import type { RunKind } from "./actionRun";
 import { costGroupOf, type CostGroup } from "./usage";
+import { mergeDerived } from "./mirrorDerived";
 import {
   emptyStat,
   mergeTally,
@@ -49,6 +50,10 @@ import {
 } from "./stats";
 
 const COLLECTION = "projects";
+export const PROJECTS_COLLECTION = COLLECTION;
+
+/** Bump when the shape of `cost.byAction` changes and old books need re-deriving. */
+export const COST_BREAKDOWN_VERSION = 1;
 
 /** Which counter a run's intent increments. */
 const KIND_COUNTER: Record<RunKind, "fresh" | "edits" | "variations" | "restyles"> = {
@@ -225,6 +230,29 @@ export interface ProjectMirror {
     unbilledUsd: number;
     imageUsd?: number;
     textUsd?: number;
+    /**
+     * What this book cost per action id (`pageIllustration`, `guideSpeak`, …),
+     * failed attempts included. Sums to `providerUsd` once `breakdownVersion` is
+     * set; books metered before it existed are filled in by
+     * {@link ensureCostBreakdowns} from their `actionRuns`.
+     */
+    byAction?: Record<string, number>;
+    /**
+     * The part of `providerUsd` spent on attempts that produced nothing (a render
+     * that failed after the provider billed it). It is INSIDE `providerUsd` — a
+     * "of which", never an addition.
+     */
+    failedUsd?: number;
+    /** Runs whose cost could not be priced (unknown model): the totals are a lower bound. */
+    unpricedRuns?: number;
+    /**
+     * Print-prep upscaling spent on this book after it was ordered. NOT in
+     * `providerUsd` (it is a fulfilment cost, written to the finance stream as
+     * `printPrepCost`), but it is a real cost of the book, so the cost report adds it.
+     */
+    printPrepUsd?: number;
+    /** Set once `byAction` is complete for the book's whole life. */
+    breakdownVersion?: number;
   };
   sparks: { charged: number; paid: number; free: number; byLotSource: Record<string, number> };
   timing: { timeToFirstImageMs?: number; timeToOrderMs?: number };
@@ -292,8 +320,12 @@ export async function ensureProjectMirror(
         const seq = snap.get("seq") as number | undefined;
         // Structure is refreshed on every render: a book grows pages and cast
         // as it goes, and the mirror should describe it as it is now.
-        if (derived) {
-          tx.set(ref, { derived, lastActionAt: now }, { merge: true });
+        if (derived && snapshot) {
+          tx.set(
+            ref,
+            { derived: mergeDerived(snap.get("derived") as ProjectDerived | undefined, derived, snapshot), lastActionAt: now },
+            { merge: true },
+          );
         }
         return typeof seq === "number" ? seq : undefined;
       }
@@ -311,7 +343,8 @@ export async function ensureProjectMirror(
         milestones: { created: snapshot?.createdAt ?? now },
         counters: emptyCounters(),
         models: { imageModels: [] },
-        cost: { providerUsd: 0, billedUsd: 0, unbilledUsd: 0 },
+        // A new book has nothing to back-fill: it is complete from its first run.
+        cost: { providerUsd: 0, billedUsd: 0, unbilledUsd: 0, byAction: {}, breakdownVersion: COST_BREAKDOWN_VERSION },
         sparks: { charged: 0, paid: 0, free: 0, byLotSource: {} },
         timing: {},
       });
@@ -382,6 +415,8 @@ export interface ProjectRunUpdate {
   costUsd: { total: number; billed: number; unbilled: number };
   /** Whether this action's spend is image work or text work. */
   group: CostGroup;
+  /** False when a model in this run had no price, so `costUsd` is a lower bound. */
+  knownCost?: boolean;
   sparks: { charged: number; paid: number; free: number; byLotSource: Record<string, number> };
   at: number;
 }
@@ -431,6 +466,9 @@ export async function recordProjectRun(u: ProjectRunUpdate): Promise<void> {
           ...(u.group === "image"
             ? { imageUsd: inc(u.costUsd.total) }
             : { textUsd: inc(u.costUsd.total) }),
+          byAction: { [u.action]: inc(u.costUsd.total) },
+          ...(u.failed && u.costUsd.total > 0 ? { failedUsd: inc(u.costUsd.total) } : {}),
+          ...(u.knownCost === false ? { unpricedRuns: inc(1) } : {}),
         },
         sparks: {
           charged: inc(u.sparks.charged),
@@ -444,6 +482,27 @@ export async function recordProjectRun(u: ProjectRunUpdate): Promise<void> {
     );
     if (milestone) await stampMilestone(u.uid, u.projectId, milestone, u.at);
     if (u.imagesGenerated > 0) await stampFirstImage(u.uid, u.projectId, u.at);
+  } catch {
+    // telemetry only
+  }
+}
+
+/**
+ * Add print-prep (upscaling) spend to the book it was for. Kept apart from
+ * `providerUsd` — it happens after an order, not while authoring — but counted by
+ * the per-book cost report. `update`, not `set`: a mirror that does not exist must
+ * not be conjured into a half-empty one by a fulfilment cost.
+ */
+export async function recordProjectPrintPrepCost(
+  uid: string,
+  projectId: string | undefined,
+  costUsd: number,
+): Promise<void> {
+  if (!uid || !projectId || !(costUsd > 0)) return;
+  try {
+    await db()
+      .doc(`${COLLECTION}/${projectDocKey(uid, projectId)}`)
+      .update({ "cost.printPrepUsd": FieldValue.increment(costUsd) });
   } catch {
     // telemetry only
   }
@@ -850,7 +909,7 @@ export interface ProjectQuery {
 }
 
 /** Fill in fields added after a mirror was first written. */
-function normalizeMirror(m: ProjectMirror): ProjectMirror {
+export function normalizeMirror(m: ProjectMirror): ProjectMirror {
   return {
     ...m,
     derived: { ...emptyDerived(), ...(m.derived ?? {}) },

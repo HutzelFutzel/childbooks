@@ -332,6 +332,7 @@ function parseUsage(
         imageOutputTokens: num(meta.candidatesTokenCount),
         outputTokens: num(meta.thoughtsTokenCount),
         images,
+        size: reqSize,
       },
     };
   }
@@ -368,13 +369,23 @@ function num(v: unknown): number {
 
 function modelFromRequestBody(init?: RequestInit): string | undefined {
   const body = init?.body;
-  if (typeof body !== "string") return undefined;
-  try {
-    const parsed = JSON.parse(body) as { model?: string };
-    return parsed.model;
-  } catch {
-    return undefined;
+  if (typeof body === "string") {
+    try {
+      const parsed = JSON.parse(body) as { model?: string };
+      return parsed.model;
+    } catch {
+      return undefined;
+    }
   }
+  // Image EDITS (`/images/edits`) are multipart: the model is a form field, not
+  // JSON. The response body does not echo the model, so without this an edit was
+  // recorded as model "unknown" — priced as nothing and flagged as a lower bound,
+  // which silently dropped every edit render from the cost totals.
+  if (typeof FormData !== "undefined" && body instanceof FormData) {
+    const m = body.get("model");
+    return typeof m === "string" && m ? m : undefined;
+  }
+  return undefined;
 }
 
 /** The requested output size (e.g. "1024x1024"), used for size-based image pricing. */

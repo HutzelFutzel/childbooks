@@ -15,7 +15,7 @@
 import express, { type Express, type Response } from "express";
 import { isAdminUid, isAnonymousToken, type AuthedRequest } from "./auth";
 import { backendPipelineEnv } from "./pipelineEnv";
-import { withUsage } from "./usage";
+import { newSpendLedger, runWithSpendLedger, withUsage } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
 import { isClientMilestone, touchProject } from "./projects";
 import {
@@ -322,8 +322,128 @@ function isCoverId(id: string): boolean {
   return id === COVER_FRONT_ID || id === COVER_BACK_ID || id === SPINE_ID;
 }
 
+/**
+ * The action each metered sync route settles as — the same ids the routes pass
+ * to `meterAndSettle`. Used only to attribute spend that never reached it (see
+ * {@link meterFailedSyncSpend}); `/ai/guide/try` is deliberately absent (an admin
+ * test, never billed to a book) and so are the routes that make no provider call.
+ */
+function syncActionFor(path: string, body: { spreadId?: unknown } | undefined): string | null {
+  switch (path) {
+    case "/story-draft":
+    case "/story-translate":
+      return "storyDraft";
+    case "/story-fit":
+      return "storyCheck";
+    case "/analyze":
+      return "storyAnalysis";
+    case "/extract-art-style":
+      return "extractArtStyle";
+    case "/extract-art-look":
+      return "extractArtLook";
+    case "/anchor-description":
+      return "anchorDescription";
+    case "/screenplay":
+      return "screenplay";
+    case "/guide/interpret":
+      return "guideInterpret";
+    case "/guide/speak":
+      return "guideSpeak";
+    case "/guide/compose":
+      return "guideCompose";
+    case "/guide/answer":
+      return "guideAnswer";
+    case "/guide/extract-cast":
+      return "guideExtractCast";
+    case "/anchor-image":
+      return "anchorImage";
+    case "/illustration": {
+      const id = typeof body?.spreadId === "string" ? body.spreadId : "";
+      return isCoverId(id) ? "coverIllustration" : "pageIllustration";
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Meter the provider calls a sync route paid for but never delivered.
+ *
+ * `withUsage` throws away its collector when the work throws, and every sync
+ * route meters only AFTER `withUsage` returns — so a timed-out or rejected
+ * request (and any internal retry the route swallowed) left real provider spend
+ * that no run, no book total and no finance event ever saw. The render worker
+ * solved this with a spend ledger; this gives every sync route the same one
+ * without touching each handler: `withUsage` already hands a failed scope's calls
+ * to the ambient ledger, and this settles whatever ended up there as a failed
+ * run (charges nothing, costs us, counts against the book).
+ */
+function installFailedSpendMetering(app: Express, json: ReturnType<typeof express.json>): void {
+  // The body is parsed BEFORE the ledger scope opens. Body parsing finishes inside
+  // a stream callback, which does not carry the async context of the caller, so
+  // parsing first is what keeps the handlers (and every `await` in them) inside it.
+  //
+  // Only the metered POST routes are touched: parsing here applies THIS limit, and
+  // sibling `/ai` routes (generation quotes, story revisions) keep their tighter ones.
+  app.use("/ai", (req, res, outerNext) => {
+    if (req.method !== "POST" || syncActionFor(req.path, undefined) === null) {
+      outerNext();
+      return;
+    }
+    json(req, res, (parseErr?: unknown) => {
+      if (parseErr) {
+        outerNext(parseErr);
+        return;
+      }
+      openLedgerScope(req, res, outerNext);
+    });
+  });
+
+  function openLedgerScope(req: express.Request, res: Response, next: express.NextFunction): void {
+    const authed = req as AuthedRequest;
+    const body = (req.body ?? {}) as { spreadId?: unknown; tier?: unknown; project?: { id?: unknown }; projectId?: unknown };
+    const action = syncActionFor(req.path, body);
+    if (!action) {
+      next();
+      return;
+    }
+    const ledger = newSpendLedger();
+    const startedAt = Date.now();
+    let settled = false;
+    res.once("close", () => {
+      if (settled) return;
+      settled = true;
+      if (ledger.events.length === 0 || !authed.uid) return;
+      const projectId =
+        typeof body.project?.id === "string" ? body.project.id : typeof body.projectId === "string" ? body.projectId : undefined;
+      const tier = body.tier === "quick" || body.tier === "premium" ? body.tier : undefined;
+      void meterAndSettle({
+        uid: authed.uid,
+        action,
+        ...(tier && (action === "anchorImage" || action === "pageIllustration" || action === "coverIllustration")
+          ? { tier }
+          : {}),
+        events: ledger.events,
+        stats: ledger.stats,
+        projectId,
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        outcome: "failed",
+        errorCode: "sync_attempt_failed",
+        errorMessage: "Provider calls were made but the request did not deliver a result.",
+        models: {},
+      }).catch((err) => console.warn("[ai] failed-spend metering skipped", err));
+    });
+    void runWithSpendLedger(ledger, async () => {
+      next();
+    });
+  }
+}
+
 export function registerAiRoutes(app: Express): void {
   const json = express.json({ limit: "50mb" });
+  installFailedSpendMetering(app, json);
 
   // --- Text actions ---------------------------------------------------------
 

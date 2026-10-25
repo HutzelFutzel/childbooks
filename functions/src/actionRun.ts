@@ -115,6 +115,8 @@ export interface ActionRunDoc {
     /** Image-generation calls versus text/vision calls (absent on older runs). */
     imageCalls?: number;
     textCalls?: number;
+    /** A model in this run had no price: `total` undercounts what the provider billed. */
+    unpriced?: boolean;
   };
   /** Which side of the books this run's whole cost belongs to. */
   group?: CostGroup;
@@ -344,6 +346,9 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
         byStep: totals.costByStep,
         imageCalls: totals.imageCallsUsd,
         textCalls: totals.textCallsUsd,
+        // Only written when true, so the common case costs no bytes: a run with an
+        // unpriced model means `total` is a lower bound.
+        ...(totals.knownCost ? {} : { unpriced: true }),
       },
       group: costGroupOf(args.action),
       sparks: {
@@ -441,6 +446,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
           unbilled: totals.unbilledUsd,
         },
         group: costGroupOf(args.action),
+        knownCost: totals.knownCost,
         sparks: {
           charged: settled.sparks,
           paid: breakdown?.paidSparks ?? 0,

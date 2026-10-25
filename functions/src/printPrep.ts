@@ -51,6 +51,7 @@ import { isEmulator } from "./browser";
 import { serverConfig } from "./config";
 import { recordFinanceEvent } from "./finance";
 import { log, withLogContext } from "./logs";
+import { recordProjectPrintPrepCost } from "./projects";
 import { getAdminPayment, type AdminPaymentRecord } from "./payments";
 import { padInteriorToPages, preflightPrintFiles } from "./printPreflight";
 import {
@@ -995,7 +996,7 @@ async function upscaleOne(paymentId: string, imageId: string): Promise<void> {
         { merge: true },
       );
       await recordPrintPrepSpend(result.costUsd, result.tier);
-      await recordFinanceEvent({
+      const recorded = await recordFinanceEvent({
         category: "books",
         kind: "printPrepCost",
         amountUsd: -result.costUsd,
@@ -1003,7 +1004,11 @@ async function upscaleOne(paymentId: string, imageId: string): Promise<void> {
         projectId: prep.projectId,
         ref: img.cacheKey,
         meta: { paymentId, tier: result.tier, width: result.width, height: result.height },
-      }).catch(() => undefined);
+      }).catch(() => false);
+      // Also on the book's own mirror: the cost report reads the mirror, and an
+      // order's upscaling is a real cost of that book. Only when THIS call wrote
+      // the (idempotent) finance event, so a retried task cannot count it twice.
+      if (recorded) await recordProjectPrintPrepCost(prep.uid, prep.projectId, result.costUsd);
       if (result.tier === "lanczos" && settings.upscaler.url) {
         void log.info({
           source: "worker",
