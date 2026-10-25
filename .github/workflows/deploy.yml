@@ -85,7 +85,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: yarn
 
       - name: Install dependencies
@@ -121,6 +121,7 @@ jobs:
           --only functions,firestore:rules,firestore:indexes,storage
           --project "$PROJECT_ID"
           --non-interactive
+          --debug
 
       # ── Gate: it actually came up ──────────────────────────────────────────
       - name: Health check
