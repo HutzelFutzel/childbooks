@@ -29,7 +29,13 @@ import { ensureAdmin } from "./storage";
 import { unauthenticated, type AuthedRequest } from "./auth";
 import { getSeoConfig } from "./appConfig";
 import { sendWelcomeEmail } from "./email/triggers";
-import { notifySlack, formatSignupSlackMessage, getSparksSpent } from "./notify";
+import {
+  notifySlack,
+  formatSignupSlackMessage,
+  formatArrivalForSlack,
+  getSparksSpent,
+} from "./notify";
+import { normalizeAcquisitionProfile } from "../../books-frontend/src/core/profile/acquisition";
 import { recordSignupEvent } from "./analyticsEvents";
 import { onCampaignEvent } from "./campaigns";
 import { grantAndAnnounce } from "./coupons/routes";
@@ -144,27 +150,32 @@ export function registerAuthRoutes(app: Express): void {
       let country = guess.country;
       const deviceFacts = deviceFactsFromHeaders(req.headers);
 
+      let arrival: string | null = null;
+      let guestBooks = 0;
       try {
-        if (country === UNKNOWN_COUNTRY || isUnknownDevice(deviceFacts)) {
-          const userDoc = await getFirestore().doc(`users/${uid}`).get();
-          const data = userDoc.data() ?? {};
-          if (country === UNKNOWN_COUNTRY) {
-            const savedCountry =
-              typeof data.country === "string"
-                ? data.country
-                : typeof data.signupCountry === "string"
-                  ? data.signupCountry
-                  : "";
-            if (savedCountry) country = savedCountry;
+        const userDoc = await getFirestore().doc(`users/${uid}`).get();
+        const data = userDoc.data() ?? {};
+        if (country === UNKNOWN_COUNTRY) {
+          const savedCountry =
+            typeof data.country === "string"
+              ? data.country
+              : typeof data.signupCountry === "string"
+                ? data.signupCountry
+                : "";
+          if (savedCountry) country = savedCountry;
+        }
+        if (isUnknownDevice(deviceFacts) && data.meta?.device) {
+          const normalized = normalizeDeviceFacts(data.meta.device);
+          if (!isUnknownDevice(normalized)) {
+            if (deviceFacts.device === "unknown") deviceFacts.device = normalized.device;
+            if (deviceFacts.os === "other") deviceFacts.os = normalized.os;
+            if (deviceFacts.browser === "other") deviceFacts.browser = normalized.browser;
           }
-          if (isUnknownDevice(deviceFacts) && data.meta?.device) {
-            const normalized = normalizeDeviceFacts(data.meta.device);
-            if (!isUnknownDevice(normalized)) {
-              if (deviceFacts.device === "unknown") deviceFacts.device = normalized.device;
-              if (deviceFacts.os === "other") deviceFacts.os = normalized.os;
-              if (deviceFacts.browser === "other") deviceFacts.browser = normalized.browser;
-            }
-          }
+        }
+        arrival = formatArrivalForSlack(normalizeAcquisitionProfile(data.acquisition));
+        const rawProjects = data.projectCount ?? data.projectCounter;
+        if (typeof rawProjects === "number" && Number.isFinite(rawProjects) && rawProjects > 0) {
+          guestBooks = Math.round(rawProjects);
         }
       } catch {
         // Best-effort: enrichment must never fail the welcome flow.
@@ -195,6 +206,8 @@ export function registerAuthRoutes(app: Express): void {
           os: deviceFacts.os,
           browser: deviceFacts.browser,
           guestSparksSpent,
+          arrival,
+          guestBooks,
         }),
       });
 

@@ -140,7 +140,15 @@ import {
 } from "../../books-frontend/src/core/analytics/markets";
 import { affiliateChargeMetadata, stampCustomerAttribution } from "./affiliates";
 import { raiseAlert } from "./alerts";
-import { notifySlack, money } from "./notify";
+import {
+  notifySlack,
+  money,
+  formatCouponSlackMessage,
+  formatPurchaseSlackMessage,
+  formatSubscriptionSlackMessage,
+  getProjectTitle,
+  getUserSlackIdentity,
+} from "./notify";
 import {
   clawbackForRef,
   discountedAmount,
@@ -607,12 +615,15 @@ async function settleCouponsForPurchase(args: {
     // new customer?" is answered about the moment the coupon was used, which is
     // what the acquisition report is asking.
     const facts = await couponUserFacts(args.uid).catch(() => null);
+    const isNewCustomer = (facts?.purchaseCount ?? 1) <= 1;
     const settled = await settleCoupons({
       paymentRef: args.paymentId,
       revenue: await toUsd(args.amount, args.currency).catch(() => 0),
-      isNewCustomer: (facts?.purchaseCount ?? 1) <= 1,
+      isNewCustomer,
     });
     if (settled.length === 0) return;
+
+    const buyer = await getUserSlackIdentity(args.uid);
 
     for (const { redemption, usesLeft } of settled) {
       await sendCouponRedeemedEmail({
@@ -630,11 +641,17 @@ async function settleCouponsForPurchase(args: {
         // Keyed on the redemption, not the payment: an order that somehow
         // carried two coupons is two facts worth knowing.
         ref: `coupon_${redemption.id}`,
-        text:
-          `Coupon used — ${redemption.couponName}` +
-          `${redemption.code ? ` (${redemption.code})` : " (applied automatically)"}: ` +
-          `${money(redemption.discountAmount, redemption.currency)} off ${args.itemLabel}` +
-          ` · order ${money(args.amount, args.currency)}`,
+        text: formatCouponSlackMessage({
+          couponName: redemption.couponName,
+          code: redemption.code,
+          discountAmount: redemption.discountAmount,
+          orderAmount: args.amount,
+          currency: args.currency || redemption.currency,
+          itemLabel: args.itemLabel,
+          email: buyer.email,
+          isNewCustomer,
+          usesLeft,
+        }),
       }).catch(() => {});
     }
   } catch (err) {
@@ -3666,19 +3683,39 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
 
       // Celebratory ping (#growth). Deduped on the paymentId so a webhook retry
       // (or the checkout.session.completed safety-net) can't double-post.
-      const label =
-        kind === "order"
-          ? "📦 Print order placed"
-          : kind === "ebook"
-            ? "📖 Ebook purchased"
-            : kind === "sparkGift"
-              ? "🎁 Spark gift purchased"
-              : "✨ Spark pack purchased";
+      const [buyer, bookTitle] = await Promise.all([
+        getUserSlackIdentity(uid),
+        payment?.ebook?.title
+          ? Promise.resolve(payment.ebook.title)
+          : getProjectTitle(uid, projectId),
+      ]);
+      const estCost = payment?.fulfillment?.estimatedCost ?? null;
+      const netAfterCosts =
+        kind === "order" &&
+        estCost &&
+        estCost.currency.toUpperCase() === (pi.currency ?? "").toUpperCase()
+          ? (fin.net ?? gross) - estCost.amount
+          : null;
+      const sparksBought = Number(pi.metadata?.sparks ?? 0) || null;
       await notifySlack({
         channel: "growth",
         messageKey: "purchase",
         ref: `purchase_${paymentId}`,
-        text: `${label} — ${money(gross, pi.currency)}${projectId ? ` · project ${projectId}` : ""}`,
+        text: formatPurchaseSlackMessage({
+          kind,
+          gross,
+          currency: pi.currency,
+          netAfterCosts,
+          itemDescription: payment?.description ?? null,
+          pageCount: payment?.fulfillment?.pageCount ?? null,
+          bookTitle,
+          sparks: sparksBought,
+          recipientEmail: (pi.metadata?.recipientEmail as string) || null,
+          buyerEmail: buyer.email,
+          billingCountry: fin.country ?? buyer.country,
+          destinationCountry: dims.destinationCountry ?? null,
+          orderNumber: buyer.purchaseCount,
+        }),
       });
       return;
     }
@@ -3858,16 +3895,35 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       // fires once on the first active/trialing state; "cancelled" on deletion.
       if (uid) {
         try {
-          const priceId = sub.items.data[0]?.price?.id ?? null;
+          const item = sub.items.data[0];
+          const price = item?.price;
+          const priceId = price?.id ?? null;
           const plan = priceId ? resolvePlanByPriceId(await getPlansConfig(), priceId) : null;
           const planName = plan?.presentation.name ?? "your plan";
+          const subAmount =
+            price?.unit_amount != null ? toMajor(price.unit_amount, price.currency ?? "usd") : null;
+          const subCurrency = price?.currency ?? null;
+          const subInterval = price?.recurring?.interval ?? null;
+          const startedAtSec =
+            (sub as unknown as { start_date?: number; created?: number }).start_date ?? sub.created;
+          const startedAtMs = typeof startedAtSec === "number" ? startedAtSec * 1000 : null;
+          const subscriber = await getUserSlackIdentity(uid);
           if (event.type === "customer.subscription.deleted") {
             await sendSubscriptionCancelledEmail({ uid, planName, subscriptionId: sub.id });
             await notifySlack({
               channel: "growth",
               messageKey: "subscription_cancelled",
               ref: `sub_cancelled_${sub.id}`,
-              text: `👋 Subscription canceled — ${planName}`,
+              text: formatSubscriptionSlackMessage({
+                event: "cancelled",
+                planName,
+                amount: subAmount,
+                currency: subCurrency,
+                interval: subInterval,
+                email: subscriber.email,
+                country: subscriber.country,
+                startedAtMs,
+              }),
             });
           } else if (sub.status === "active" || sub.status === "trialing") {
             await sendSubscriptionStartedEmail({
@@ -3881,7 +3937,16 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
               channel: "growth",
               messageKey: "subscription_started",
               ref: `sub_started_${sub.id}`,
-              text: `💳 New subscriber — ${planName}`,
+              text: formatSubscriptionSlackMessage({
+                event: "started",
+                planName,
+                amount: subAmount,
+                currency: subCurrency,
+                interval: subInterval,
+                trialing: sub.status === "trialing",
+                email: subscriber.email,
+                country: subscriber.country,
+              }),
             });
           }
         } catch (err) {

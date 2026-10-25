@@ -37,7 +37,11 @@ import {
   type RewardTrigger,
 } from "../../../books-frontend/src/core/config/referral";
 import { sendReferralRewardEmail } from "../email/triggers";
-import { notifySlack } from "../notify";
+import {
+  formatReferralRewardSlackMessage,
+  getUserSlackIdentity,
+  notifySlack,
+} from "../notify";
 import { hasActiveSubscription } from "../plans";
 import { grantSparks } from "../sparks";
 import { bumpStat, rewardCostToday } from "./stats";
@@ -409,11 +413,18 @@ async function announce(
     howToUse: delivered.howToUse,
     rewardId: id,
   });
+  const recipient = await getUserSlackIdentity(args.uid);
   await notifySlack({
     channel: "growth",
     messageKey: "referral_paid",
     ref: `referral_reward_${id}`,
-    text: `🎁 Referral reward — ${summary} to the ${args.side} (${unlocks}).`,
+    text: formatReferralRewardSlackMessage({
+      summary,
+      side: args.side,
+      unlocks,
+      recipientEmail: recipient.email,
+      uid: args.uid,
+    }),
   });
 }
 

@@ -318,6 +318,7 @@ export interface AdminPaymentRecord {
   status: PaymentStatus;
   amount: number;
   currency: string;
+  description: string;
   feeAmount: number | null;
   refundedAmount: number;
   stripePaymentIntentId: string | null;
@@ -355,6 +356,7 @@ export async function getAdminPayment(paymentId: string): Promise<AdminPaymentRe
     status: (d.status as PaymentStatus) ?? "pending",
     amount: (d.amount as number) ?? 0,
     currency: (d.currency as string) ?? "USD",
+    description: typeof d.description === "string" ? d.description : "",
     feeAmount: (d.feeAmount as number) ?? null,
     refundedAmount: (d.refundedAmount as number) ?? 0,
     stripePaymentIntentId: (d.stripePaymentIntentId as string) ?? null,

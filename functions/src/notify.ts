@@ -17,6 +17,7 @@
  * single webhook / single channel works out of the box, and you can split
  * channels out later just by setting the matching secret.
  */
+import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getSlackConfig } from "./appConfig";
@@ -26,11 +27,15 @@ import { UNKNOWN_COUNTRY, countryFlag } from "../../books-frontend/src/core/anal
 import {
   deviceLabel,
   osLabel,
-  browserLabel,
   type DeviceClass,
   type OsFamily,
   type BrowserFamily,
 } from "../../books-frontend/src/core/analytics/device";
+import {
+  describeArrivalToken,
+  normalizeAcquisitionProfile,
+  type AcquisitionProfile,
+} from "../../books-frontend/src/core/profile/acquisition";
 
 /** Which Slack channel a message is for (drives which webhook is used). */
 export type NotifyChannel = SlackChannel;
@@ -230,46 +235,79 @@ export interface SignupNotificationOptions {
   os?: OsFamily | string | null;
   browser?: BrowserFamily | string | null;
   guestSparksSpent?: number | null;
+  /** Compact attribution tag when non-direct (e.g. "via QR code · berlin-window"). */
+  arrival?: string | null;
+  /** Books the user already started as a guest before creating their account. */
+  guestBooks?: number | null;
+}
+
+/** Format a valid ISO-2 country code as "🇺🇸 US", or null when unknown. */
+export function formatCountryTag(country?: string | null): string | null {
+  const c = (country || "").trim().toUpperCase();
+  if (!c || c === UNKNOWN_COUNTRY || c === "XX" || c === "ZZ") return null;
+  return `${countryFlag(c)} ${c}`;
+}
+
+/**
+ * Format an account's acquisition profile into a short, high-signal phrase,
+ * or null when the visit was direct with no referrer.
+ */
+export function formatArrivalForSlack(acq?: AcquisitionProfile | null): string | null {
+  const arr = acq?.first ?? acq?.latest ?? null;
+  if (!arr) return null;
+  if (arr.kind === "utm") {
+    const utm = [arr.source, arr.medium, arr.campaign].filter(Boolean).join("/");
+    if (utm) return `via ${utm}`;
+  }
+  if (arr.kind !== "direct") {
+    return `via ${describeArrivalToken(arr.token)}`;
+  }
+  if (arr.referrerHost) {
+    return `from ${arr.referrerHost}`;
+  }
+  return null;
 }
 
 /**
  * Format the single-line compact signup alert for Slack (#growth).
- * e.g. "🎉 New signup — xyz@gmail.com (Google) · 🇺🇸 US · Desktop · macOS · Chrome · ⚡ 3 guest sparks spent"
+ * Only includes non-empty, high-signal segments (no "Unknown" country or "0 sparks" noise).
+ * e.g. "🎉 New signup — xyz@gmail.com (Google) · 🇺🇸 US · Desktop (macOS) · via QR code · berlin · ⚡ 3 guest sparks"
  */
 export function formatSignupSlackMessage(opts: SignupNotificationOptions): string {
   const provider = formatProviderLabel(opts.providerId);
-  const base = `🎉 New signup — ${opts.email} (${provider})`;
+  const segments: string[] = [`🎉 New signup — ${opts.email} (${provider})`];
 
-  const segments: string[] = [base];
+  const countryTag = formatCountryTag(opts.country);
+  if (countryTag) segments.push(countryTag);
 
-  // Country
-  const c = (opts.country || "").trim().toUpperCase();
-  if (c && c !== UNKNOWN_COUNTRY && c !== "XX" && c !== "ZZ") {
-    segments.push(`${countryFlag(c)} ${c}`);
-  } else {
-    segments.push("🌍 Unknown");
+  const hasDevice = Boolean(opts.device && opts.device !== "unknown");
+  const hasOs = Boolean(opts.os && opts.os !== "other" && opts.os !== "unknown");
+  if (hasDevice && hasOs) {
+    segments.push(`${deviceLabel(opts.device!)} (${osLabel(opts.os!)})`);
+  } else if (hasDevice) {
+    segments.push(deviceLabel(opts.device!));
+  } else if (hasOs) {
+    segments.push(osLabel(opts.os!));
   }
 
-  // Device / OS / Browser
-  if (opts.device && opts.device !== "unknown") {
-    segments.push(deviceLabel(opts.device));
-  }
-  if (opts.os && opts.os !== "other" && opts.os !== "unknown") {
-    segments.push(osLabel(opts.os));
-  }
-  if (opts.browser && opts.browser !== "other" && opts.browser !== "unknown") {
-    segments.push(browserLabel(opts.browser));
+  if (opts.arrival) {
+    segments.push(opts.arrival);
   }
 
-  // Guest sparks spent
+  const books =
+    typeof opts.guestBooks === "number" && Number.isFinite(opts.guestBooks)
+      ? Math.max(0, Math.round(opts.guestBooks))
+      : 0;
+  if (books > 0) {
+    segments.push(`📖 ${books} guest book${books === 1 ? "" : "s"}`);
+  }
+
   const spent =
     typeof opts.guestSparksSpent === "number" && Number.isFinite(opts.guestSparksSpent)
       ? Math.max(0, Math.round(opts.guestSparksSpent))
       : 0;
   if (spent > 0) {
-    segments.push(`⚡ ${spent} guest spark${spent === 1 ? "" : "s"} spent`);
-  } else {
-    segments.push("⚡ 0 guest sparks spent");
+    segments.push(`⚡ ${spent} guest spark${spent === 1 ? "" : "s"}`);
   }
 
   return segments.join(" · ");
@@ -296,4 +334,310 @@ export async function getSparksSpent(uid: string): Promise<number> {
     return 0;
   }
 }
+
+export interface UserSlackIdentity {
+  email: string | null;
+  country: string | null;
+  purchaseCount: number;
+  projectCount: number;
+  arrival: string | null;
+}
+
+/**
+ * Best-effort lookup of a user's email, country, order count, and acquisition
+ * tag for #growth Slack notifications. Never throws.
+ */
+export async function getUserSlackIdentity(uid: string | null | undefined): Promise<UserSlackIdentity> {
+  const empty: UserSlackIdentity = {
+    email: null,
+    country: null,
+    purchaseCount: 0,
+    projectCount: 0,
+    arrival: null,
+  };
+  if (!uid) return empty;
+  try {
+    ensureAdmin();
+    const [authUser, userSnap] = await Promise.all([
+      getAuth()
+        .getUser(uid)
+        .catch(() => null),
+      getFirestore()
+        .doc(`users/${uid}`)
+        .get()
+        .catch(() => null),
+    ]);
+    const data = (userSnap?.exists ? userSnap.data() : {}) as Record<string, unknown>;
+    const lifetime = (data?.lifetime ?? {}) as Record<string, unknown>;
+    const country =
+      typeof data?.country === "string"
+        ? data.country
+        : typeof data?.signupCountry === "string"
+          ? data.signupCountry
+          : null;
+    const rawPurchases = lifetime.purchases ?? data?.purchaseCount;
+    const purchaseCount =
+      typeof rawPurchases === "number" && Number.isFinite(rawPurchases)
+        ? Math.max(0, Math.round(rawPurchases))
+        : 0;
+    const rawProjects = data?.projectCount ?? data?.projectCounter;
+    const projectCount =
+      typeof rawProjects === "number" && Number.isFinite(rawProjects)
+        ? Math.max(0, Math.round(rawProjects))
+        : 0;
+    const arrival = formatArrivalForSlack(normalizeAcquisitionProfile(data?.acquisition));
+    return {
+      email: authUser?.email ?? null,
+      country,
+      purchaseCount,
+      projectCount,
+      arrival,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+export interface PurchaseNotificationOptions {
+  kind: "order" | "ebook" | "sparkPack" | "sparkGift" | string;
+  gross: number;
+  currency: string;
+  /** Estimated net after Stripe fees and (for print orders) Lulu production + shipping, in `currency`. */
+  netAfterCosts?: number | null;
+  /** Human item summary from the payment record, e.g. "Square Hardcover ×2". */
+  itemDescription?: string | null;
+  /** Page count for printed books. */
+  pageCount?: number | null;
+  /** Title of the book (print or ebook). */
+  bookTitle?: string | null;
+  /** Sparks count for pack / gift purchases. */
+  sparks?: number | null;
+  /** Gift recipient email (for sparkGift). */
+  recipientEmail?: string | null;
+  /** Buyer email. */
+  buyerEmail?: string | null;
+  /** Billing country code (ISO-2). */
+  billingCountry?: string | null;
+  /** Shipping destination country code (ISO-2, print orders). */
+  destinationCountry?: string | null;
+  /** 1-based lifetime order number for this buyer (only shown when >= 2). */
+  orderNumber?: number | null;
+}
+
+/**
+ * Format a compact, high-signal purchase alert for #growth.
+ * e.g. `📦 Print order — 34.99 EUR (~13.20 EUR net) · Square Hardcover ×1 (24p) · "Leo's Moon" · maya@gmail.com · 🇩🇪 DE · 🔁 Order #2`
+ */
+export function formatPurchaseSlackMessage(opts: PurchaseNotificationOptions): string {
+  const label =
+    opts.kind === "order"
+      ? "📦 Print order"
+      : opts.kind === "ebook"
+        ? "📖 Ebook purchased"
+        : opts.kind === "sparkGift"
+          ? "🎁 Spark gift"
+          : "✨ Spark pack";
+
+  const priceStr =
+    typeof opts.netAfterCosts === "number" && Number.isFinite(opts.netAfterCosts)
+      ? `${money(opts.gross, opts.currency)} (~${money(opts.netAfterCosts, opts.currency)} net)`
+      : money(opts.gross, opts.currency);
+
+  const segments: string[] = [`${label} — ${priceStr}`];
+
+  const cleanTitle = opts.bookTitle?.trim().replace(/\s+/g, " ").slice(0, 60) || null;
+
+  if (opts.kind === "order") {
+    const desc = opts.itemDescription?.trim() || null;
+    const pages =
+      typeof opts.pageCount === "number" && opts.pageCount > 0 ? `${opts.pageCount}p` : null;
+    if (desc && pages) segments.push(`${desc} (${pages})`);
+    else if (desc) segments.push(desc);
+    else if (pages) segments.push(pages);
+    if (cleanTitle) segments.push(`"${cleanTitle}"`);
+  } else if (opts.kind === "ebook") {
+    if (cleanTitle) segments.push(`"${cleanTitle}"`);
+  } else if (opts.kind === "sparkGift") {
+    const sp = typeof opts.sparks === "number" && opts.sparks > 0 ? `${opts.sparks} Sparks` : null;
+    if (sp && opts.recipientEmail) segments.push(`${sp} → ${opts.recipientEmail}`);
+    else if (sp) segments.push(sp);
+    else if (opts.recipientEmail) segments.push(`→ ${opts.recipientEmail}`);
+  } else {
+    const sp =
+      typeof opts.sparks === "number" && opts.sparks > 0
+        ? `${opts.sparks} Sparks`
+        : opts.itemDescription?.trim() || null;
+    if (sp) segments.push(sp);
+  }
+
+  if (opts.buyerEmail) {
+    segments.push(opts.buyerEmail);
+  }
+
+  const billTag = formatCountryTag(opts.billingCountry);
+  const destTag = formatCountryTag(opts.destinationCountry);
+  if (billTag && destTag && billTag !== destTag) {
+    segments.push(`${billTag} → ${destTag}`);
+  } else if (destTag || billTag) {
+    segments.push((destTag ?? billTag)!);
+  }
+
+  if (typeof opts.orderNumber === "number" && opts.orderNumber >= 2) {
+    segments.push(`🔁 Order #${opts.orderNumber}`);
+  }
+
+  return segments.join(" · ");
+}
+
+export interface SubscriptionNotificationOptions {
+  event: "started" | "cancelled";
+  planName: string;
+  amount?: number | null;
+  currency?: string | null;
+  interval?: "month" | "year" | string | null;
+  trialing?: boolean;
+  email?: string | null;
+  country?: string | null;
+  /** Subscription start timestamp (epoch ms) to compute tenure on cancellation. */
+  startedAtMs?: number | null;
+}
+
+function formatTenure(startedAtMs?: number | null, nowMs = Date.now()): string | null {
+  if (typeof startedAtMs !== "number" || !Number.isFinite(startedAtMs) || startedAtMs <= 0) {
+    return null;
+  }
+  const days = Math.max(0, Math.round((nowMs - startedAtMs) / 86_400_000));
+  if (days < 1) return "same day";
+  if (days < 45) return `${days}d`;
+  const months = Math.round(days / 30.4);
+  return `${months} mo${months === 1 ? "" : "s"}`;
+}
+
+/**
+ * Format a compact subscription started/canceled alert for #growth.
+ */
+export function formatSubscriptionSlackMessage(opts: SubscriptionNotificationOptions): string {
+  const intervalSuffix =
+    opts.interval === "year" ? "/yr" : opts.interval === "month" ? "/mo" : "";
+  const priceBit =
+    typeof opts.amount === "number" && opts.amount > 0 && opts.currency
+      ? `${money(opts.amount, opts.currency)}${intervalSuffix}`
+      : null;
+
+  const segments: string[] = [];
+  if (opts.event === "started") {
+    const trialTag = opts.trialing ? " (trial)" : "";
+    segments.push(`💳 New subscriber — ${opts.planName}${trialTag}`);
+    if (priceBit) segments.push(priceBit);
+  } else {
+    segments.push(
+      `👋 Subscription canceled — ${opts.planName}${priceBit ? ` (${priceBit})` : ""}`,
+    );
+  }
+
+  if (opts.email) segments.push(opts.email);
+  const countryTag = formatCountryTag(opts.country);
+  if (countryTag) segments.push(countryTag);
+
+  if (opts.event === "cancelled") {
+    const tenure = formatTenure(opts.startedAtMs);
+    if (tenure) segments.push(`after ${tenure}`);
+  }
+
+  return segments.join(" · ");
+}
+
+export interface CouponNotificationOptions {
+  couponName: string;
+  code?: string | null;
+  discountAmount: number;
+  orderAmount: number;
+  currency: string;
+  itemLabel: string;
+  email?: string | null;
+  isNewCustomer?: boolean;
+  usesLeft?: number | null;
+}
+
+/**
+ * Format a coupon redemption alert for #growth.
+ * Surfaces remaining uses only when finite and <= 10 so running-out codes stand out without noise.
+ */
+export function formatCouponSlackMessage(opts: CouponNotificationOptions): string {
+  const tag = opts.code ? `${opts.code} (${opts.couponName})` : `${opts.couponName} (auto)`;
+  const segments: string[] = [
+    `🎟️ Coupon used — ${tag}: -${money(opts.discountAmount, opts.currency)} on ${opts.itemLabel} · paid ${money(opts.orderAmount, opts.currency)}`,
+  ];
+  if (opts.email) segments.push(opts.email);
+  if (opts.isNewCustomer) segments.push("new customer");
+  if (typeof opts.usesLeft === "number" && Number.isFinite(opts.usesLeft) && opts.usesLeft <= 10) {
+    segments.push(opts.usesLeft <= 0 ? "last use" : `${opts.usesLeft} left`);
+  }
+  return segments.join(" · ");
+}
+
+/** Best-effort lookup of a book's title from the project mirror (`projects/{uid}__{projectId}`). */
+export async function getProjectTitle(
+  uid: string | null | undefined,
+  projectId: string | null | undefined,
+): Promise<string | null> {
+  if (!uid || !projectId) return null;
+  try {
+    ensureAdmin();
+    const snap = await getFirestore().doc(`projects/${uid}__${projectId}`).get();
+    const title = snap.exists ? snap.get("derived.title") : null;
+    return typeof title === "string" && title.trim() ? title.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface ReferralAcceptedNotificationOptions {
+  channel: "email" | "link" | string;
+  inviterEmail?: string | null;
+  inviterUid: string;
+  friendEmail?: string | null;
+  friendUid?: string | null;
+}
+
+export function formatReferralAcceptedSlackMessage(
+  opts: ReferralAcceptedNotificationOptions,
+): string {
+  const friendWho = opts.friendEmail || (opts.friendUid ? opts.friendUid.slice(0, 8) : "a friend");
+  const inviterWho = opts.inviterEmail || opts.inviterUid.slice(0, 8);
+  const via = opts.channel === "email" ? "emailed invite" : "shared link";
+  return `🤝 Referral accepted — ${friendWho} joined via ${via} from ${inviterWho}`;
+}
+
+export interface ReferralRewardNotificationOptions {
+  summary: string;
+  side: "referrer" | "referred" | string;
+  unlocks: string;
+  recipientEmail?: string | null;
+  uid: string;
+}
+
+export function formatReferralRewardSlackMessage(
+  opts: ReferralRewardNotificationOptions,
+): string {
+  const who = opts.recipientEmail || opts.uid.slice(0, 8);
+  return `🎁 Referral reward — ${opts.summary} to ${opts.side} ${who} (${opts.unlocks})`;
+}
+
+export interface CampaignPayoutNotificationOptions {
+  campaignName: string;
+  effectSummary: string;
+  triggerSummary: string;
+  recipientEmail?: string | null;
+  uid?: string | null;
+}
+
+export function formatCampaignPayoutSlackMessage(
+  opts: CampaignPayoutNotificationOptions,
+): string {
+  const who = opts.recipientEmail || (opts.uid ? opts.uid.slice(0, 8) : null);
+  return `🎁 ${opts.campaignName} paid out — ${opts.effectSummary}${who ? ` to ${who}` : ""} (${opts.triggerSummary})`;
+}
+
+
 

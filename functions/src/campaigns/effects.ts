@@ -32,7 +32,11 @@ import {
 } from "../../../books-frontend/src/core/config/campaigns";
 import { grantLiabilityUsd } from "../../../books-frontend/src/core/config/economics";
 import { getCampaignsConfig, getSparksConfig } from "../appConfig";
-import { notifySlack } from "../notify";
+import {
+  formatCampaignPayoutSlackMessage,
+  getUserSlackIdentity,
+  notifySlack,
+} from "../notify";
 import { grantSparks } from "../sparks";
 import { markRefunded, planRefund } from "./refund";
 import {
@@ -267,11 +271,18 @@ async function settle(
       bumpStat(campaignId, "sparks", sized.sparks),
     ]);
 
+    const recipient = await getUserSlackIdentity(args.uid);
     await notifySlack({
       channel: "growth",
       messageKey: "referral_paid",
       ref: `campaign_paid_${id}`,
-      text: `🎁 ${args.campaignName} paid out — ${describeEffect(args.rule.effect, { plain: true })} (${describeTrigger(args.trigger, args.rule.afterDays)}).`,
+      text: formatCampaignPayoutSlackMessage({
+        campaignName: args.campaignName,
+        effectSummary: describeEffect(args.rule.effect, { plain: true }),
+        triggerSummary: describeTrigger(args.trigger, args.rule.afterDays),
+        recipientEmail: recipient.email,
+        uid: args.uid,
+      }),
     });
     return "granted";
   } catch (err) {

@@ -33,7 +33,7 @@ import {
   sendReferralInviteEmail,
   sendReferralInviteSentEmail,
 } from "../email/triggers";
-import { notifySlack } from "../notify";
+import { formatReferralAcceptedSlackMessage, notifySlack } from "../notify";
 import { onReferralEvent } from "./events";
 import { bumpStat } from "./stats";
 import {
@@ -467,7 +467,10 @@ async function mintLinkInvitation(
 }
 
 async function announceAcceptance(invitation: InvitationDoc, referredUid: string): Promise<void> {
-  const friend = await getAuth().getUser(referredUid).catch(() => null);
+  const [friend, inviter] = await Promise.all([
+    getAuth().getUser(referredUid).catch(() => null),
+    getAuth().getUser(invitation.inviterUid).catch(() => null),
+  ]);
   const pendingTrigger = invitation.terms.rules.find((r) => r.referrer)?.trigger;
   await sendReferralAcceptedEmail({
     uid: invitation.inviterUid,
@@ -480,7 +483,13 @@ async function announceAcceptance(invitation: InvitationDoc, referredUid: string
     channel: "growth",
     messageKey: "referral_accepted",
     ref: `referral_accepted_${invitation.id}`,
-    text: `🤝 Referral accepted — ${invitation.channel === "email" ? "emailed invite" : "shared link"} from ${invitation.inviterUid.slice(0, 8)}.`,
+    text: formatReferralAcceptedSlackMessage({
+      channel: invitation.channel,
+      inviterEmail: inviter?.email ?? null,
+      inviterUid: invitation.inviterUid,
+      friendEmail: friend?.email ?? invitation.recipientEmail ?? null,
+      friendUid: referredUid,
+    }),
   });
 }
 

@@ -344,7 +344,22 @@ export async function buildDailySummaryText(
       `   Active users: ${overview.totals.activeUsers}`,
   );
 
+  const aiCostUsd = finance.byKind
+    .filter((k) => k.kind === "providerCost")
+    .reduce((s, k) => s + k.costUsd, 0);
+  const printCostUsd = finance.byKind
+    .filter((k) => k.kind === "printCost" || k.kind === "printPrepCost")
+    .reduce((s, k) => s + k.costUsd, 0);
+
   const revenueBits = [`gross ${usd(finance.totalRevenueUsd)}`];
+  if (finance.totalCostUsd > 0) {
+    const costBreak: string[] = [];
+    if (aiCostUsd > 0) costBreak.push(`AI ${usd(aiCostUsd)}`);
+    if (printCostUsd > 0) costBreak.push(`print ${usd(printCostUsd)}`);
+    revenueBits.push(
+      `costs ${usd(finance.totalCostUsd)}${costBreak.length ? ` [${costBreak.join(" · ")}]` : ""}`,
+    );
+  }
   if (refundCount > 0) {
     const rate = pctOf(refundUsd, finance.totalRevenueUsd);
     revenueBits.push(`${plural(refundCount, "refund")} ${usd(refundUsd)}${rate ? ` (${rate} of gross)` : ""}`);
