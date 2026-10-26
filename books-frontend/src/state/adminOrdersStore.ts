@@ -41,6 +41,23 @@ export interface OrderPaymentView {
   printPrepEligible?: boolean;
   checkoutFiles?: { interior?: string; cover?: string } | null;
   placedFiles?: { interior?: string; cover?: string } | null;
+  /** Who and where the order ships to, as it will be sent to the printer. */
+  recipient?: OrderRecipientView | null;
+}
+
+export interface OrderRecipientView {
+  name: string;
+  email?: string | null;
+  phoneNumber?: string | null;
+  address: {
+    line1: string;
+    line2?: string | null;
+    townOrCity: string;
+    stateOrCounty?: string | null;
+    postalOrZipCode: string;
+    countryCode: string;
+    taxId?: string | null;
+  };
 }
 
 export interface PrintPrepImageView {
@@ -171,6 +188,8 @@ export type OrderAction =
   | "retry"
   | "replace"
   | "cancel"
+  | "cancel-and-refund"
+  | "recipient"
   | "sync"
   | "ack"
   | "resend-email"

@@ -29,8 +29,10 @@ import type {
   ShippingOptionsRequest,
   TierOutcome,
 } from "../types";
+import { NO_OPTION } from "../../config/variants";
+import { foilStampText } from "./foilStamp";
 import { LULU_BOOK_PRODUCTS } from "./products";
-import { sameFormat } from "./skuAxes";
+import { sameFormat, variantFromSku } from "./skuAxes";
 import {
   mapCostToQuote,
   mapCoverDimensionsMm,
@@ -61,6 +63,23 @@ export interface LuluProviderDeps {
   /** OAuth2 client secret. */
   clientSecret: () => string;
   env: LuluEnv;
+}
+
+/**
+ * The spine foil lines for a package that is foil stamped (linen wrap), re-fit
+ * to Lulu's limits here because a line it can't strike fails the whole job.
+ */
+function foilStampFields(
+  draft: OrderDraft,
+): Pick<LuluPrintJobRequest["line_items"][number]["printable_normalization"], "foil_stamp_title_text" | "foil_stamp_author_text"> {
+  const foil = variantFromSku(draft.productSku)?.foil;
+  if (!foil || foil === NO_OPTION) return {};
+  const text = foilStampText(draft.foilStamp);
+  if (!text) return {};
+  return {
+    ...(text.title ? { foil_stamp_title_text: text.title } : {}),
+    ...(text.author ? { foil_stamp_author_text: text.author } : {}),
+  };
 }
 
 const BASE_URL: Record<LuluEnv, string> = {
@@ -571,6 +590,7 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
               pod_package_id: draft.productSku,
               interior: files.interior,
               cover: files.cover,
+              ...foilStampFields(draft),
             },
           },
         ],
@@ -631,12 +651,16 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
     },
 
     async cancelOrder(id: string): Promise<FulfillmentOrder> {
-      // Lulu cancels by transitioning the job status to CANCELED.
+      // Lulu cancels by transitioning the job status to CANCELED. The reply is
+      // the bare status, not the job, so the job is read back for the caller.
       const json = await request<Parameters<typeof mapOrder>[0]>(
         `/print-jobs/${encodeURIComponent(id)}/status/`,
         { method: "PUT", body: JSON.stringify({ name: "CANCELED" }) },
       );
-      return mapOrder(json);
+      if (json?.id != null) return mapOrder(json);
+      return mapOrder(
+        await request<Parameters<typeof mapOrder>[0]>(`/print-jobs/${encodeURIComponent(id)}/`, { method: "GET" }),
+      );
     },
 
     // ---- Status webhooks (backend only) -----------------------------------

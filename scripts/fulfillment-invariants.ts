@@ -35,8 +35,15 @@ import { upscaleTargetFor } from "../books-frontend/src/core/print/printPrep";
 import { capabilityForFormat, normalizeProductCapability } from "../books-frontend/src/core/config/productCapability";
 import { normalizeMarketCapability } from "../books-frontend/src/core/config/marketCapability";
 import { createLuluProvider } from "../books-frontend/src/core/fulfillment/lulu/provider";
-import { FulfillmentError } from "../books-frontend/src/core/fulfillment/errors";
+import { FulfillmentError, customerFixableDetail } from "../books-frontend/src/core/fulfillment/errors";
 import type { OrderDraft } from "../books-frontend/src/core/fulfillment/types";
+import { FOIL_STAMP_MAX_CHARS, foilStampReport, foilStampText } from "../books-frontend/src/core/fulfillment/lulu/foilStamp";
+import { mapOrder, type LuluPrintJobResponse } from "../books-frontend/src/core/fulfillment/lulu/wire";
+import { staleStatusReason } from "../books-frontend/src/core/fulfillment/statusOrder";
+import { phoneProblem, taxIdProblem } from "../books-frontend/src/core/fulfillment/recipientFormat";
+import { applyPatch, emptyPrintOrder } from "../books-frontend/src/core/orders/lifecycle";
+import { skuForVariant, variantFromSku } from "../books-frontend/src/core/fulfillment/lulu/skuAxes";
+import { coerceVariantSelection, NO_OPTION, variantKey } from "../books-frontend/src/core/config/variants";
 
 const H = 3_600_000;
 const T0 = Date.UTC(2026, 0, 10, 12, 0, 0);
@@ -253,6 +260,98 @@ function fakeProvider(results: Record<string, unknown>[]) {
   );
 }
 
+// The status endpoint answers a cancel with the bare status, not the job.
+{
+  const provider = createLuluProvider({
+    httpFetch: async (url, init) => {
+      const u = String(url);
+      const method = (init as { method?: string } | undefined)?.method ?? "GET";
+      const ok = (body: unknown) =>
+        ({ ok: true, status: 200, headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as unknown as Response;
+      if (u.includes("/token")) return ok({ access_token: "t", expires_in: 3600 });
+      if (u.endsWith("/print-jobs/5/status/") && method === "PUT") return ok({ name: "CANCELED", messages: {} });
+      if (u.endsWith("/print-jobs/5/") && method === "GET") return ok(job(5, "pay_5", "CANCELED"));
+      throw new Error(`unexpected request ${method} ${u}`);
+    },
+    assetHost: { id: "fake", upload: async () => ({ url: "https://files.example/x.pdf" }) },
+    clientKey: () => "key",
+    clientSecret: () => "secret",
+    env: "sandbox",
+  });
+  const cancelled = await provider.cancelOrder("5");
+  assert.equal(cancelled.id, "5", "A cancel reports the job it cancelled, so the order record can find it.");
+  assert.equal(cancelled.stage, "cancelled", "…in its cancelled stage, not as a provider error.");
+}
+
+// ---- Linen wrap: spine foil text --------------------------------------------
+{
+  assert.deepEqual(foilStampText({ title: "The Moon_Rabbit", author: "Mia" }), { title: "The Moon Rabbit", author: "Mia" }, "An underscore Lulu can't strike becomes a space.");
+  assert.deepEqual(foilStampText({ title: "Léa’s Garden 🌻", author: "" }), { title: "Léa's Garden" }, "Accented Latin stays; an emoji and a curly quote don't reach the die.");
+  const long = foilStampText({ title: "The Very Long Adventure of the Little Lighthouse Keeper", author: "Grandma" })!;
+  assert.ok(long.title.length <= FOIL_STAMP_MAX_CHARS && !long.author, "A title too long for the spine is cut at a word, and the author gives way first.");
+  const both = foilStampText({ title: "A".repeat(30), author: "B".repeat(12) })!;
+  assert.equal(both.title.length + (both.author?.length ?? 0), FOIL_STAMP_MAX_CHARS, "Title and author share the 42 characters exactly.");
+  assert.equal(foilStampText({ title: "  ", author: "" }), null, "Nothing stampable means no stamp at all.");
+
+  const LINEN_SKU = "0850X1100FCPRELW080CW444GNG";
+  const bodies: Record<string, unknown>[] = [];
+  const provider = createLuluProvider({
+    httpFetch: async (url, init) => {
+      const u = String(url);
+      const ok = (body: unknown) =>
+        ({ ok: true, status: 200, headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as unknown as Response;
+      if (u.includes("/token")) return ok({ access_token: "t", expires_in: 3600 });
+      if (u.includes("/print-jobs/?search=")) return ok({ results: [] });
+      if (u.endsWith("/print-jobs/") && (init as { method?: string } | undefined)?.method === "POST") {
+        bodies.push(JSON.parse(String((init as { body?: string }).body)));
+        return ok(job(7, "pay_7", "CREATED"));
+      }
+      throw new Error(`unexpected request ${u}`);
+    },
+    assetHost: { id: "fake", upload: async () => ({ url: "https://files.example/x.pdf" }) },
+    clientKey: () => "key",
+    clientSecret: () => "secret",
+    env: "sandbox",
+  });
+  const draft = (productSku: string): OrderDraft => ({
+    productSku,
+    copies: 1,
+    recipient: {
+      name: "Ada",
+      email: "ada@example.com",
+      phoneNumber: "+1555000111",
+      address: { line1: "1 Main St", townOrCity: "Springfield", postalOrZipCode: "12345", countryCode: "US", stateOrCounty: "IL" },
+    },
+    shippingMethod: "Budget",
+    assets: [],
+    sourceFileUrls: { interior: "https://files.example/i.pdf", cover: "https://files.example/c.pdf" },
+    destinationCountry: "US",
+    currency: "USD",
+    merchantReference: "book_7",
+    idempotencyKey: "pay_7",
+    foilStamp: { title: "Moon_Rabbit", author: "Mia" },
+  });
+  await provider.createOrder(draft(LINEN_SKU));
+  await provider.createOrder(draft(SKU));
+  const normalization = (i: number) =>
+    ((bodies[i]?.line_items as Record<string, unknown>[])[0]?.printable_normalization ?? {}) as Record<string, unknown>;
+  assert.equal(normalization(0).foil_stamp_title_text, "Moon Rabbit", "A linen book's job carries its spine title, re-fit to Lulu's rules.");
+  assert.equal(normalization(0).foil_stamp_author_text, "Mia");
+  assert.ok(!("foil_stamp_title_text" in normalization(1)), "A book without foil sends no foil fields.");
+}
+
+// ---- Variants written before linen and foil existed --------------------------
+{
+  const legacy = { print: "premium-colour", paper: "80-coated-white", finish: "gloss" };
+  const coerced = coerceVariantSelection(legacy);
+  assert.equal(coerced?.linen, NO_OPTION, "A stored three-axis variant is read as unclothed, not refused.");
+  assert.equal(variantKey(coerced!), "premium-colour/80-coated-white/gloss", "…and keeps the key it was stored under.");
+  assert.equal(coerceVariantSelection({ ...legacy, linen: "purple" }), null, "An unknown cloth is refused, not guessed.");
+  const linen = coerceVariantSelection({ ...legacy, linen: "navy", foil: "gold" })!;
+  assert.equal(skuForVariant("0850X1100FCPRELW080CW444GNG", { ...linen, linen: "forest", foil: "white" }), "0850X1100FCPRELW080CW444GFW", "Cloth and foil compose into the last two SKU letters.");
+  assert.equal(variantFromSku("0850X1100FCPRELW080CW444MTB")?.linen, "tan", "…and read back out of them.");
+}
+
 // ---- Which coverage governs a format -----------------------------------------
 {
   const cell = (country: string, status: "available" | "refused") => ({
@@ -288,6 +387,77 @@ function fakeProvider(results: Record<string, unknown>[]) {
     0,
     "Evidence recorded against the other environment governs nothing.",
   );
+}
+
+// ---- Printer status: reasons, ordering, stale updates ----------------------------
+{
+  const rejected = mapOrder({
+    id: 7,
+    status: { name: "REJECTED", messages: { error: "Interior file has 3 pages, expected 32." }, changed: "2026-10-20T10:00:00Z" },
+    line_items: [{ status: { name: "REJECTED", messages: { error: "Cover too small." } } }],
+  } as unknown as LuluPrintJobResponse);
+  assert.equal(rejected.stage, "error");
+  assert.ok(
+    rejected.issues.some((i) => i.includes("Interior file has 3 pages")) && rejected.issues.some((i) => i.includes("Cover too small")),
+    "A rejection's reason is read from status.messages and the line items — Lulu sends no singular message.",
+  );
+  assert.equal(rejected.statusChangedAt, Date.parse("2026-10-20T10:00:00Z"), "The printer's own change time is kept for ordering.");
+
+  assert.ok(staleStatusReason({ stage: "complete" }, { stage: "inProgress" }), "Shipped is final: a late IN_PRODUCTION can't drag it back.");
+  assert.ok(staleStatusReason({ stage: "cancelled" }, { stage: "error" }), "Canceled is final too — no replacement after it.");
+  assert.equal(staleStatusReason({ stage: "complete" }, { stage: "complete" }), null, "A repeat of the final status still applies (tracking may arrive with it).");
+  assert.ok(staleStatusReason({ stage: "inProgress", changedAt: 200 }, { stage: "onHold", changedAt: 100 }), "An update older than the one on record is ignored.");
+  assert.equal(staleStatusReason({ stage: "inProgress", changedAt: 100 }, { stage: "complete" }), null, "No timestamp on the update: apply it.");
+}
+
+// ---- Permanent refusals and what the customer can fix ----------------------------
+{
+  const refusal = (details: string) => new FulfillmentError("Lulu request failed with status 400.", { kind: "validation", status: 400, details });
+  assert.equal(customerFixableDetail(refusal('{"shipping_address":{"phone_number":["Invalid phone number."]}}')), "phone", "A phone refusal names the phone, not the address it sits under.");
+  assert.equal(customerFixableDetail(refusal('{"shipping_address":{"recipient_tax_id":["Invalid CPF"]}}')), "taxId");
+  assert.equal(customerFixableDetail(refusal('{"contact_email":["Enter a valid email address."]}')), "email");
+  assert.equal(customerFixableDetail(refusal('{"shipping_address":{"postcode":["Invalid."]}}')), "address");
+  assert.equal(customerFixableDetail(refusal('{"line_items":[{"pod_package_id":["Unknown."]}]}')), null, "Our own mistakes aren't put to the customer.");
+  assert.equal(
+    customerFixableDetail(new FulfillmentError("Lulu request failed with status 503.", { kind: "network", details: "phone" })),
+    null,
+    "Only a refusal (validation) is ever the customer's to fix.",
+  );
+}
+
+// ---- Recipient formats checked before payment ------------------------------------
+{
+  assert.equal(phoneProblem("+1 (669) 677-0452"), null);
+  assert.equal(phoneProblem("030 1234567 ext. 12"), null, "An extension is fine.");
+  assert.ok(phoneProblem("12345"), "Too short to dial.");
+  assert.ok(phoneProblem("call me"), "Not a number.");
+  assert.equal(taxIdProblem("BR", "529.982.247-25"), null, "A valid CPF, punctuated.");
+  assert.ok(taxIdProblem("BR", "529.982.247-26"), "A CPF with a wrong check digit.");
+  assert.ok(taxIdProblem("BR", "111.111.111-11"), "A repeated-digit CPF passes the checksum but isn't real.");
+  assert.equal(taxIdProblem("BR", "11.222.333/0001-81"), null, "A valid numeric CNPJ.");
+  assert.equal(taxIdProblem("BR", "12.ABC.345/01DE-35"), null, "A valid alphanumeric CNPJ (issued since July 2026).");
+  assert.equal(taxIdProblem("CL", "12.345.678-5"), null, "A valid RUT.");
+  assert.equal(taxIdProblem("CL", "12345678-K"), "That RUT's check digit doesn't match — please check it.");
+  assert.equal(taxIdProblem("MX", "GODE561231GR8"), null, "A person's RFC.");
+  assert.equal(taxIdProblem("MX", "ABC680524P76"), null, "A company's RFC.");
+  assert.ok(taxIdProblem("MX", "12345"), "Not an RFC.");
+  assert.equal(taxIdProblem("US", "anything"), null, "Unchecked where nobody asks for one.");
+}
+
+// ---- Editable spine text: what the customer is told ------------------------------
+{
+  const edited = foilStampReport({ title: "Léa’s Garden 🌻", author: "Grandma" });
+  assert.ok(edited.removedCharacters && !edited.titleShortened && !edited.authorDropped, "An emoji is reported as removed, the rest stamps whole.");
+  const crowded = foilStampReport({ title: "The Very Long Adventure of the Little Lighthouse Keeper", author: "Grandma" });
+  assert.ok(crowded.titleShortened && crowded.authorDropped, "A crowded spine reports both the cut title and the dropped author.");
+  assert.equal(foilStampReport({ title: "", author: "" }).stamp, null);
+}
+
+// ---- A canceled order nobody refunded needs a person -----------------------------
+{
+  const base = { ...emptyPrintOrder("k", 0), currentJobId: "1", luluStatus: "CANCELED" };
+  assert.equal(applyPatch(base, { paymentStatus: "paid" }, 1).attention?.reason, "cancelled_unrefunded", "Canceled + still paid pages someone.");
+  assert.equal(applyPatch(base, { paymentStatus: "refunded" }, 1).attention, null, "Canceled + refunded is closed.");
 }
 
 console.log("fulfillment invariants: ok");

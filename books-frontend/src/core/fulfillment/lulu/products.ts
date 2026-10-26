@@ -40,8 +40,10 @@
  */
 import {
   createDefaultVariantPolicy,
+  NO_OPTION,
   variantKey,
   type ProductVariantPolicy,
+  type VariantAxisId,
   type VariantMatch,
   type VariantSelection,
 } from "../../config/variants";
@@ -66,7 +68,20 @@ export const BASE_VARIANT: VariantSelection = {
   print: "premium-colour",
   paper: "80-coated-white",
   finish: "gloss",
+  linen: NO_OPTION,
+  foil: NO_OPTION,
 };
+
+/**
+ * A linen-wrap book can't be `XX`, so its base names a cloth and a foil. Navy
+ * with gold is the classic pairing; every colour costs the same.
+ */
+const LINEN_BASE_VARIANT: VariantSelection = { ...BASE_VARIANT, linen: "navy", foil: "gold" };
+
+/** The variant a format's own SKU encodes. */
+export function baseVariantFor(binding: Binding): VariantSelection {
+  return binding === "linen-wrap" ? LINEN_BASE_VARIANT : BASE_VARIANT;
+}
 
 interface TrimDef {
   /** Also the `option/trim/{id}` media key and the trim's storefront identity. */
@@ -137,12 +152,19 @@ const BINDINGS_BY_ID: Record<string, BindingDef> = {
     blurb: "Artwork printed straight onto the board and laminated. The keepsake format, and what a gift copy should be.",
     pageStep: 2,
   },
+  "linen-wrap": {
+    id: "linen-wrap",
+    noun: "linen hardcover",
+    blurb: "Cloth-covered boards with your title foil-stamped on the spine, wrapped in a printed dust jacket. The heirloom edition.",
+    pageStep: 2,
+  },
 };
 
 /**
  * The formats, with the page range each was measured to accept. A trim × binding
  * pair the provider doesn't sell is simply absent — 11×8.5" saddle stitch does
- * not exist, which is why the landscape paperback is perfect-bound.
+ * not exist, which is why the landscape paperback is perfect-bound, and linen
+ * wrap exists at 8.5×11" only (rejected at both other trims, in every colour).
  */
 const FORMAT_ROWS: { trim: string; binding: Binding; pages: { min: number; max: number } }[] = [
   { trim: "8.5x8.5", binding: "saddle-stitch", pages: { min: 4, max: 48 } },
@@ -156,6 +178,7 @@ const FORMAT_ROWS: { trim: string; binding: Binding; pages: { min: number; max: 
   { trim: "8.5x11", binding: "perfect-bound", pages: { min: 32, max: 800 } },
   { trim: "8.5x11", binding: "coil-bound", pages: { min: 2, max: 470 } },
   { trim: "8.5x11", binding: "casewrap", pages: { min: 24, max: 800 } },
+  { trim: "8.5x11", binding: "linen-wrap", pages: { min: 24, max: 800 } },
 ];
 
 /**
@@ -169,6 +192,15 @@ const PRINT_TIERS_BY_BINDING: Record<string, string[]> = {
 const ALL_PRINT_TIERS = ["premium-colour", "standard-colour", "premium-bw", "standard-bw"];
 const ALL_PAPERS = ["80-coated-white", "60-uncoated-white", "60-uncoated-cream"];
 const ALL_FINISHES = ["gloss", "matte"];
+const ALL_LINENS = ["navy", "black", "gray", "red", "tan", "forest"];
+const ALL_FOILS = ["gold", "white", "black"];
+
+/**
+ * The linen-wrap heirloom edition is sold as a full-colour picture book only:
+ * premium colour on 80# coated white, whatever the provider would also print.
+ */
+const LINEN_PRINT_TIERS = ["premium-colour"];
+const LINEN_PAPERS = ["80-coated-white"];
 
 /**
  * Measured, and true at every trim and binding: cream is a black & white stock.
@@ -222,12 +254,31 @@ function formatDescription(
 /** What this format is measured to offer, as a policy the seed can adopt. */
 function variantPolicyFor(binding: Binding): ProductVariantPolicy {
   const policy = createDefaultVariantPolicy();
+  policy.options.finish = ALL_FINISHES.map((value) => ({ value }));
+  if (binding === "linen-wrap") {
+    policy.options.print = LINEN_PRINT_TIERS.map((value) => ({ value }));
+    policy.options.paper = LINEN_PAPERS.map((value) => ({ value }));
+    policy.options.linen = ALL_LINENS.map((value) => ({ value }));
+    policy.options.foil = ALL_FOILS.map((value) => ({ value }));
+    return policy;
+  }
   const prints = PRINT_TIERS_BY_BINDING[binding] ?? ALL_PRINT_TIERS;
   policy.options.print = prints.map((value) => ({ value }));
   policy.options.paper = ALL_PAPERS.map((value) => ({ value }));
-  policy.options.finish = ALL_FINISHES.map((value) => ({ value }));
+  policy.options.linen = [{ value: NO_OPTION }];
+  policy.options.foil = [{ value: NO_OPTION }];
   policy.exclusions = NO_COLOUR_ON_CREAM.map((rule) => ({ ...rule }));
   return policy;
+}
+
+/**
+ * Every value this binding can be printed with on `axis` — the ceiling an
+ * admin's variant policy has to stay under. A value outside it composes a
+ * package id the provider doesn't stock (navy linen on a paperback, a linen
+ * book with no cloth), which only surfaces as a refused quote at checkout.
+ */
+export function bindingVariantValues(binding: Binding, axis: VariantAxisId): readonly string[] {
+  return variantPolicyFor(binding).options[axis].map((o) => o.value);
 }
 
 /** One sellable format: the book, plus the variants of it the provider offers. */
@@ -242,8 +293,9 @@ export interface LuluBookFormat {
  * mistake only surfaces when a customer's order is rejected.
  */
 function baseSkuFor(trim: TrimDef, binding: BindingDef): string {
-  const variant = skuPartsForVariant(BASE_VARIANT);
-  if (!variant) throw new Error(`Base variant ${variantKey(BASE_VARIANT)} has no provider encoding.`);
+  const base = baseVariantFor(binding.id);
+  const variant = skuPartsForVariant(base);
+  if (!variant) throw new Error(`Base variant ${variantKey(base)} has no provider encoding.`);
   return composeSku({
     ...defaultSkuParts(),
     trim: trimCode(trim.widthIn, trim.heightIn),

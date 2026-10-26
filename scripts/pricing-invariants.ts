@@ -71,6 +71,14 @@ import {
 } from "../books-frontend/src/core/config/variants";
 import { saveBlockingIssues, validateProduct } from "../books-frontend/src/core/config/productValidation";
 import {
+  applyRepricePlan,
+  DEFAULT_TARGET_MARGIN_PCT,
+  maxTargetMargin,
+  normalizeTargetMargins,
+  planChangesPrices,
+  repricePlan,
+} from "../books-frontend/src/core/config/targetMargin";
+import {
   createDefaultMarketsConfig,
   EMPTY_MARKET_REGISTRY,
   enabledMarkets,
@@ -273,6 +281,122 @@ for (const target of [25, 45]) {
       `worst is ${worstVariant} at ${worst.toFixed(1)}%`,
     );
   }
+}
+
+// ---- Repricing to the configured target margins ----------------------------
+
+{
+  const margins: PricingSettings = {
+    ...settings,
+    targetMargins: { defaultPct: 40, byBinding: { casewrap: 55 } },
+  };
+  const plan = repricePlan(product, margins, SHIPPING);
+  check(
+    "a binding override is the target its products are repriced to",
+    plan.target.pct === 55 && plan.target.source === "binding" && plan.target.binding === "casewrap",
+    `got ${plan.target.pct}% from ${plan.target.source}`,
+  );
+  check("a measured product can be repriced", plan.status === "ready", `status ${plan.status}`);
+
+  const repriced = normalizeProduct(applyRepricePlan(product, plan));
+  check(
+    "a single catch-all price row is repriced as a page ladder",
+    repriced.pricing.tiers.length >= 2,
+    `${repriced.pricing.tiers.length} rows`,
+  );
+  // At each tier's midpoint the base book earns the target, and no variant
+  // earns less. Prices round UP to a charm price, which on a cheap variant's
+  // small price can add several points — over target, never under.
+  for (const c of margins.currencies) {
+    let baseOff = 0;
+    let baseAt = "";
+    let lowest = Number.POSITIVE_INFINITY;
+    let lowestAt = "";
+    for (const t of repriced.pricing.tiers) {
+      const lo = Math.max(t.minPages, repriced.conditions.pages.min);
+      const hi = Math.min(t.maxPages, repriced.conditions.pages.max);
+      if (hi < lo) continue;
+      const pages = Math.round((lo + hi) / 2);
+      const base = computeMargin(repriced, { currency: c, pages, copies: 1 }, margins, SHIPPING);
+      if (Math.abs(base.marginPct - 55) > baseOff) {
+        baseOff = Math.abs(base.marginPct - 55);
+        baseAt = `${pages}pp at ${base.marginPct.toFixed(1)}%`;
+      }
+      for (const variant of enumerateVariants(repriced.variants)) {
+        const m = computeMargin(repriced, { currency: c, pages, copies: 1, variant }, margins, SHIPPING);
+        if (m.marginPct < lowest) {
+          lowest = m.marginPct;
+          lowestAt = `${costVariantKey(variant)} at ${pages}pp: ${m.marginPct.toFixed(1)}%`;
+        }
+      }
+    }
+    check(`repriced tiers earn the casewrap target on the base book in ${c}`, baseOff < 3, `worst ${baseAt}`);
+    check(`no variant earns under the casewrap target in ${c}`, lowest >= 55 - 1, `lowest ${lowestAt}`);
+  }
+
+  check(
+    "repricing is idempotent — a repriced product is on target",
+    !planChangesPrices(repricePlan(repriced, margins, SHIPPING)),
+    `${repricePlan(repriced, margins, SHIPPING).changes.length} prices would still move`,
+  );
+  const opts = { registry: REGISTRY, shipping: SHIPPING };
+  check(
+    "an off-target product is flagged, a repriced one isn't",
+    validateProduct(product, margins, opts).some((i) => i.field === "pricing.target") &&
+      !validateProduct(repriced, margins, opts).some((i) => i.field === "pricing.target"),
+  );
+  check(
+    "raising the target makes a repriced product off target again",
+    planChangesPrices(
+      repricePlan(repriced, { ...margins, targetMargins: { defaultPct: 40, byBinding: { casewrap: 60 } } }, SHIPPING),
+    ),
+  );
+
+  const noOverride: PricingSettings = { ...margins, targetMargins: { defaultPct: 40, byBinding: {} } };
+  const fallback = repricePlan(product, noOverride, SHIPPING);
+  check(
+    "a binding without an override uses the default target",
+    fallback.target.pct === 40 && fallback.target.source === "default",
+  );
+  const lower = normalizeProduct(applyRepricePlan(product, fallback));
+  const at = Math.round((product.conditions.pages.min + product.conditions.pages.max) / 2);
+  check(
+    "a higher binding target prices above the default",
+    computeRetailPrice(repriced, { currency, pages: at, copies: 1 }, margins) >
+      computeRetailPrice(lower, { currency, pages: at, copies: 1 }, margins),
+  );
+
+  const unmeasured = seedProductsFromCatalog()[0];
+  const blank = repricePlan(unmeasured, margins, SHIPPING);
+  check(
+    "an unmeasured product is never repriced",
+    blank.status === "needs-cost" && !planChangesPrices(blank) && applyRepricePlan(unmeasured, blank) === unmeasured,
+  );
+
+  const unreachable = repricePlan(
+    product,
+    { ...margins, targetMargins: { defaultPct: 40, byBinding: { casewrap: maxTargetMargin(margins) + 30 } } },
+    SHIPPING,
+  );
+  check(
+    "a target above what fees and tax allow leaves prices alone",
+    unreachable.status === "unreachable" && !planChangesPrices(unreachable),
+    `status ${unreachable.status}`,
+  );
+
+  const cleaned = normalizeTargetMargins({ defaultPct: 120, byBinding: { casewrap: -5, bogus: 30, "linen-wrap": 50 } });
+  check(
+    "target margins are clamped and unknown bindings dropped",
+    cleaned.defaultPct === 90 &&
+      cleaned.byBinding.casewrap === 0 &&
+      cleaned.byBinding["linen-wrap"] === 50 &&
+      !("bogus" in cleaned.byBinding),
+    JSON.stringify(cleaned),
+  );
+  check(
+    "settings saved before target margins existed load with the default",
+    normalizeTargetMargins(undefined).defaultPct === DEFAULT_TARGET_MARGIN_PCT,
+  );
 }
 
 // ---- Upgrades cost more on longer books ------------------------------------
@@ -1069,7 +1193,7 @@ for (const target of [25, 45]) {
 
   const simplifiedVariantMismatches = offeredValues(publicProduct.variants, "finish").flatMap(
     (finish) => {
-      const variant = simplifiedPrintVariant(publicProduct.variants, finish);
+      const variant = simplifiedPrintVariant(publicProduct.variants, { finish });
       return !variant ||
         variant.print !== "premium-colour" ||
         variant.paper !== "80-coated-white" ||

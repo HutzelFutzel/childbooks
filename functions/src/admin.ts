@@ -170,7 +170,7 @@ import { checkSku, readSkuMatrix } from "./printSkuMatrix";
 import { serverConfig } from "./config";
 import type { FulfillmentEnv } from "../../books-frontend/src/core/settings";
 import { computeMargin } from "../../books-frontend/src/core/config/productMath";
-import { isVariantSelection } from "../../books-frontend/src/core/config/variants";
+import { coerceVariantSelection } from "../../books-frontend/src/core/config/variants";
 import { skuForVariant } from "../../books-frontend/src/core/fulfillment/lulu/skuAxes";
 import type { ProductDefinition, ProviderEnv } from "../../books-frontend/src/core/config/products";
 import { verificationFor } from "../../books-frontend/src/core/config/products";
@@ -2523,7 +2523,7 @@ export function registerAdminRoutes(app: Express): void {
       // Variants change both sides of the preview: a different SKU to quote, and
       // a different sticker. Quoting the base while pricing a variant would show
       // a margin no order can produce.
-      const variant = isVariantSelection(sc.variant) ? sc.variant : undefined;
+      const variant = coerceVariantSelection(sc.variant) ?? undefined;
       // Same resolver checkout uses, so the preview can never drift from what a
       // customer is actually charged against. No shippingMethod is pinned here:
       // an admin preview wants the cheapest available tier.

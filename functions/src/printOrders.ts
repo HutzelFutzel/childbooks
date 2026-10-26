@@ -444,7 +444,7 @@ export async function syncOrderFromPayment(
 
 // ---- Emails ------------------------------------------------------------------------
 
-export type OrderEmailKind = "confirmation" | "shipped" | "failed";
+export type OrderEmailKind = "confirmation" | "shipped" | "failed" | "cancelled";
 
 /**
  * Put the outcome of a customer email on the order, so "did they get told?" is a
@@ -460,7 +460,7 @@ export async function recordOrderEmail(
   if (!key) return;
   if (result.skipped === "duplicate") return;
   const now = Date.now();
-  const field = `${kind}At` as "confirmationAt" | "shippedAt" | "failedAt";
+  const field = `${kind}At` as "confirmationAt" | "shippedAt" | "failedAt" | "cancelledAt";
   if (result.ok) {
     await recordOrderEvent({
       key,

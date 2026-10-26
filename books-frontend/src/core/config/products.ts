@@ -25,10 +25,11 @@ import { geoPolicySchema, type GeoMatch, type GeoPolicy } from "./geo";
 // Type-only, so it is erased at compile time and creates no import cycle with
 // `shipping.ts` (which imports `CurrencyCode` from here the same way).
 import type { ShippingPricingMode } from "./shipping";
+import { createDefaultTargetMargins, normalizeTargetMargins, type TargetMargins } from "./targetMarginSettings";
 import {
   createDefaultVariantPolicy,
   firstAllowedVariant,
-  isVariantSelection,
+  coerceVariantSelection,
   normalizeVariantPolicy,
   variantAllowed,
   type ProductVariantPolicy,
@@ -338,6 +339,12 @@ export interface PricingSettings {
    * at least this margin after cost, fees and tax. 0 ⇒ safe max == break-even.
    */
   minMarginPct: number;
+  /**
+   * The margin print prices are set to: one for the catalog, optionally one per
+   * binding. Products store the resulting prices; "Reprice catalog" recomputes
+   * them when this, a cost, a fee or an exchange rate changes.
+   */
+  targetMargins: TargetMargins;
   /**
    * Assumed share (%) of granted/sold Sparks that customers actually spend on
    * cost-derived actions. Used when costing Spark packs and plan grants for
@@ -752,6 +759,7 @@ export function createDefaultPricingSettings(): PricingSettings {
     floorPrice: { USD: 0, EUR: 0, GBP: 0 },
     maxDiscountPct: 20,
     minMarginPct: 10,
+    targetMargins: createDefaultTargetMargins(),
     sparkUtilizationPct: 100,
     tax: {
       // Stripe tax code for printed books (zero/reduced-rated in many markets).
@@ -925,6 +933,7 @@ export function normalizePricingSettings(input: unknown): PricingSettings {
     maxDiscountPct: typeof p.maxDiscountPct === "number" ? p.maxDiscountPct : def.maxDiscountPct,
     minMarginPct:
       typeof p.minMarginPct === "number" ? Math.max(0, Math.min(90, p.minMarginPct)) : def.minMarginPct,
+    targetMargins: normalizeTargetMargins(p.targetMargins),
     sparkUtilizationPct:
       typeof p.sparkUtilizationPct === "number"
         ? Math.max(1, Math.min(100, p.sparkUtilizationPct))
@@ -1338,6 +1347,12 @@ export const pricingSettingsSchema = z.object({
   // Optional so configs saved before these knobs existed still validate;
   // normalizePricingSettings fills the defaults.
   minMarginPct: z.number().min(0).max(90).optional(),
+  targetMargins: z
+    .object({
+      defaultPct: z.number().min(0).max(90),
+      byBinding: z.record(z.string(), z.number().min(0).max(90)),
+    })
+    .optional(),
   sparkUtilizationPct: z.number().min(0).max(100).optional(),
   tax: z.object({
     bookTaxCode: z.string().optional(),
@@ -1630,9 +1645,10 @@ export function resolvePrintOrder(args: {
   // When the caller only sent a SKU, derive the variant from it and fall back to
   // the nearest orderable option if that exact combo was retired.
   let variant: VariantSelection | undefined;
-  if (args.variant && isVariantSelection(args.variant)) {
-    if (!variantAllowed(product.variants, args.variant)) return null;
-    variant = args.variant;
+  const chosen = args.variant ? coerceVariantSelection(args.variant) : null;
+  if (chosen) {
+    if (!variantAllowed(product.variants, chosen)) return null;
+    variant = chosen;
   } else {
     const derived = variantFromSku(args.productSku) ?? base;
     if (!derived) return null;

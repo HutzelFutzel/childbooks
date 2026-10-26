@@ -43,6 +43,7 @@ import {
 } from "../../../core/config/productValidation";
 import {
   BINDING_BY_CODE,
+  BINDING_CODES,
   SKU_AXES,
   composeSku,
   defaultSkuParts,
@@ -73,6 +74,13 @@ import {
   EditorTabs,
 } from "./products/parts";
 import { CostSection, PricingSection } from "./products/ProductPricing";
+import { RepricePanel } from "./products/RepricePanel";
+import {
+  applyRepricePlan,
+  planChangesPrices,
+  repricePlan,
+  type RepricePlan,
+} from "../../../core/config/targetMargin";
 import { PictureButton } from "./products/Pictures";
 import { ProductPhotosPanel } from "./products/PicturesSection";
 import { VariantsSection } from "./products/VariantsSection";
@@ -127,6 +135,10 @@ export function ProductsTab() {
     name: string;
   } | null>(null);
   const [costRuns, setCostRuns] = useState<CatalogCalibrationRun[] | null>(null);
+  // Validation and the off-target check must price shipping the way checkout does.
+  const shippingSettings = useAppConfigStore((s) => s.shippingSettings);
+  const [reprice, setReprice] = useState<RepricePlan[] | null>(null);
+  const [applyingReprice, setApplyingReprice] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProductDefinition | null>(null);
@@ -236,6 +248,37 @@ export function ProductsTab() {
     } finally {
       setMeasuring(false);
       setMeasureProgress(null);
+    }
+  };
+
+  /** Every product's prices recomputed from its target margin — previewed, not saved. */
+  const onPreviewReprice = () => {
+    setReprice(products.map((p) => repricePlan(p, settings, shippingSettings)));
+  };
+
+  const onApplyReprice = async () => {
+    if (!reprice) return;
+    const ready = reprice.filter(planChangesPrices);
+    setApplyingReprice(true);
+    let saved = 0;
+    try {
+      for (const plan of ready) {
+        const product = products.find((p) => p.id === plan.productId);
+        if (!product) continue;
+        try {
+          const next = await saveProductFn(applyRepricePlan(product, plan));
+          saved += 1;
+          setProducts((ps) => ps.map((p) => (p.id === next.id ? next : p)));
+          if (selectedId === next.id) setDraft(structuredClone(next));
+        } catch (err) {
+          toast.error(`${plan.productName}: ${err instanceof Error ? err.message : "could not save."}`);
+        }
+      }
+      if (saved === ready.length) toast.success(`Repriced ${saved} product${saved === 1 ? "" : "s"}.`);
+      else toast.warning(`Repriced ${saved} of ${ready.length} products.`);
+      setReprice(null);
+    } finally {
+      setApplyingReprice(false);
     }
   };
 
@@ -356,8 +399,8 @@ export function ProductsTab() {
   // present in one and absent from another shows a product as green in the list
   // and broken in the editor.
   const validateOpts = useMemo(
-    () => ({ registry, ...(runtime ? { env: runtime.env } : {}) }),
-    [registry, runtime],
+    () => ({ registry, shipping: shippingSettings, ...(runtime ? { env: runtime.env } : {}) }),
+    [registry, runtime, shippingSettings],
   );
 
   // Coverage differs per format, so the options are per product: validating a
@@ -370,6 +413,26 @@ export function ProductsTab() {
         : {}),
     }),
     [validateOpts, runtime, marketCapability, productCapability],
+  );
+
+  // Computed once per saved catalog, not per render: validation reprices every
+  // product, and the editor re-renders this list on each keystroke.
+  const listStatus = useMemo(
+    () =>
+      new Map(
+        products.map((p) => {
+          const opts = optsFor(p);
+          return [
+            p.id,
+            {
+              offerable: isOfferable(p, settings, opts),
+              errCount: productErrors(p, settings, opts).length,
+              offTarget: planChangesPrices(repricePlan(p, settings, shippingSettings)),
+            },
+          ];
+        }),
+      ),
+    [products, settings, shippingSettings, optsFor],
   );
 
   const issues = useMemo(
@@ -451,6 +514,17 @@ export function ProductsTab() {
                     }}
                   />
                 )}
+                {products.length > 0 && (
+                  <OverflowItem
+                    label="Reprice to target margins"
+                    busy={applyingReprice}
+                    disabledReason={catalogBusy}
+                    onSelect={() => {
+                      close();
+                      onPreviewReprice();
+                    }}
+                  />
+                )}
               </>
             )}
           </OverflowMenu>
@@ -469,6 +543,15 @@ export function ProductsTab() {
       {costRuns && costRuns.length > 0 && (
         <CalibrationRuns runs={costRuns} onDismiss={() => setCostRuns(null)} />
       )}
+      {reprice && (
+        <RepricePanel
+          plans={reprice}
+          baseCurrency={settings.baseCurrency}
+          applying={applyingReprice}
+          onApply={() => void onApplyReprice()}
+          onDismiss={() => setReprice(null)}
+        />
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
         <div>
@@ -479,8 +562,7 @@ export function ProductsTab() {
           ) : (
             <ul className="space-y-0.5">
               {products.map((p) => {
-                const offerable = isOfferable(p, settings, optsFor(p));
-                const errCount = productErrors(p, settings, optsFor(p)).length;
+                const { offerable, errCount, offTarget } = listStatus.get(p.id)!;
                 const status = productStatus(p.status, offerable);
                 return (
                   <li key={p.id}>
@@ -499,6 +581,11 @@ export function ProductsTab() {
                         <span className="block truncate text-xs text-ink-400">
                           {p.provider.sku || "no SKU"}
                         </span>
+                        {offTarget && (
+                          <span className="block truncate text-[10px] font-medium text-amber-700">
+                            Prices off target margin
+                          </span>
+                        )}
                       </span>
                       {errCount > 0 ? (
                         <span className="shrink-0 text-xs font-medium text-red-600">{errCount}</span>
@@ -772,6 +859,8 @@ const CHOICE_AXES = (["binding", "paper", "ink", "quality", "finish", "linen", "
   .map((id) => SKU_AXES.find((a) => a.id === id)!)
   .filter(isChoiceAxis);
 
+const LINEN_WRAP_CODE = BINDING_CODES["linen-wrap"];
+
 /**
  * Trim in inches, with the provider's code derived rather than typed. The code
  * encodes hundredths of an inch as width-then-height ("0850X0850"), which is
@@ -904,7 +993,17 @@ function SkuBuilder({ product, update }: { product: ProductDefinition; update: U
   const trim = parseTrimCode(parts.trim);
   // Any edit invalidates the previous verdict — it belonged to a different SKU.
   const setPart = (id: SkuAxisId, code: string) => {
-    setParts((p) => ({ ...p, [id]: code }));
+    setParts((p) => {
+      const next = { ...p, [id]: code };
+      // Linen wrap is the only binding with a cloth and foil, and it can't be
+      // without them: switching binding moves the last two letters with it.
+      if (id === "binding") {
+        const linen = code === LINEN_WRAP_CODE;
+        if (linen && next.linen === "X") Object.assign(next, { linen: "N", foil: "G" });
+        if (!linen) Object.assign(next, { linen: "X", foil: "X" });
+      }
+      return next;
+    });
     setEntry(null);
   };
 
@@ -958,7 +1057,9 @@ function SkuBuilder({ product, update }: { product: ProductDefinition; update: U
           </p>
           <TrimPicker code={parts.trim} onChange={(c) => setPart("trim", c)} />
           <Grid cols={2}>
-            {CHOICE_AXES.map((axis) => (
+            {CHOICE_AXES.filter(
+              (axis) => parts.binding === LINEN_WRAP_CODE || (axis.id !== "linen" && axis.id !== "foil"),
+            ).map((axis) => (
               <OptionCards
                 key={axis.id}
                 axis={axis}

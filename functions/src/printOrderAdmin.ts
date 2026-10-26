@@ -11,6 +11,8 @@
  *   POST /admin/orders/:key/retry         try placing again (no live job yet)
  *   POST /admin/orders/:key/replace       place a new job for a dead one
  *   POST /admin/orders/:key/cancel        cancel the live job at the printer   (dangerous)
+ *   POST /admin/orders/:key/cancel-and-refund  cancel, refund the rest, email the customer (dangerous)
+ *   POST /admin/orders/:key/recipient     correct phone / tax id / address, then place again
  *   POST /admin/orders/:key/resend-email  resend confirmation / shipped / failed
  *   POST /admin/orders/:key/sync          ask the printer for this order's status now
  *   POST /admin/orders/:key/ack           "I've handled this" (with a note)
@@ -30,7 +32,14 @@ import type { AuthedRequest } from "./auth";
 import { serverConfig } from "./config";
 import { fulfillmentProvider, luluCredentialsPresent, sendAdminError } from "./lulu";
 import { applyOrderStatusUpdate } from "./orders";
-import { getAdminPayment, markFulfillmentRejected, rearmFulfillment } from "./payments";
+import {
+  correctFulfillmentRecipient,
+  getAdminPayment,
+  markFulfillmentCancelled,
+  markFulfillmentRejected,
+  rearmFulfillment,
+  type RecipientCorrection,
+} from "./payments";
 import {
   JOB_HEARTBEATS,
   PRINT_ORDERS,
@@ -45,9 +54,15 @@ import {
 } from "./printOrders";
 import { checkPrinterLink } from "./printOrderWatchdog";
 import { ensurePrintOrdersBackfilled } from "./printOrderBackfill";
-import { fulfillPaidOrder, sendConfirmationIfPlaced } from "./stripe";
+import { fulfillPaidOrder, refundRemaining, sendConfirmationIfPlaced } from "./stripe";
 import { readPrintPrepForAdmin } from "./printPrep";
-import { sendOrderConfirmationEmail, sendOrderFailedEmail, sendOrderShippedEmail } from "./email/triggers";
+import {
+  sendOrderCancelledEmail,
+  sendOrderConfirmationEmail,
+  sendOrderFailedEmail,
+  sendOrderShippedEmail,
+} from "./email/triggers";
+import { phoneProblem, taxIdProblem } from "../../books-frontend/src/core/fulfillment/recipientFormat";
 import { toUsd } from "./finance";
 import { orderRecordsCache } from "./printOrderRecordsCache";
 import { computeOrderAnalytics } from "../../books-frontend/src/core/orders/analytics";
@@ -110,6 +125,14 @@ function inScope(r: PrintOrderRecord, env: string): boolean {
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+
+function formatMoney(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;
+  }
+}
 
 export function registerPrintOrderAdminRoutes(app: Express): void {
   const json = express.json({ limit: "100kb" });
@@ -260,6 +283,7 @@ export function registerPrintOrderAdminRoutes(app: Express): void {
               printPrepEligible: Boolean(payment.fulfillment?.printPrep),
               checkoutFiles: payment.fulfillment?.sourceFileUrls ?? null,
               placedFiles: payment.placedFileUrls,
+              recipient: payment.fulfillment?.recipient ?? null,
             }
           : null,
       });
@@ -376,6 +400,151 @@ export function registerPrintOrderAdminRoutes(app: Express): void {
     } catch (err) {
       // The printer refuses once production has started; say so as-is.
       sendAdminError(res, err);
+    }
+  });
+
+  // The one-step way out for an order that won't be made: stop it at the printer,
+  // give the money back, tell the customer. Refuses to refund if the printer
+  // refuses to cancel — a refund for a book still being printed is paid twice.
+  app.post("/admin/orders/:key/cancel-and-refund", json, async (req: Request, res: Response) => {
+    try {
+      const ctx = await load(req, res);
+      if (!ctx) return;
+      const { record, payment } = ctx;
+      if (!payment) return fail(res, 409, "This order has no payment to refund.");
+      if (payment.status === "refunded") return fail(res, 409, "This order is already fully refunded.");
+      if (payment.status !== "paid" && payment.status !== "partially_refunded") {
+        return fail(res, 409, `The payment is ${payment.status}; there is nothing to refund.`);
+      }
+      if (record.state === "shipped") return fail(res, 409, "This order has shipped. Refund it from Payments if you mean to.");
+      const by = await actorOf(req);
+
+      let cancelledJob: Awaited<ReturnType<ReturnType<typeof fulfillmentProvider>["cancelOrder"]>> | null = null;
+      if (record.currentJobId && jobAlive(record)) {
+        try {
+          cancelledJob = await fulfillmentProvider().cancelOrder(record.currentJobId);
+        } catch (err) {
+          console.warn("[orders-admin] cancel-and-refund: printer refused to cancel", record.key, err);
+          return fail(
+            res,
+            409,
+            `The printer wouldn't cancel job ${record.currentJobId} (${(err as Error)?.message ?? "error"}). ` +
+              "It has probably started production — nothing was refunded.",
+          );
+        }
+      }
+
+      // Stop any automatic placement before the money goes back.
+      await markFulfillmentCancelled({ paymentId: payment.id, uid: payment.ownerUid, refunded: true });
+      const refund = await refundRemaining(payment);
+      const amountLabel = formatMoney(refund.amount, refund.currency);
+      await recordOrderEvent({
+        key: record.key,
+        type: "admin_action",
+        source: `admin:${by}`,
+        message:
+          `${by} canceled ${cancelledJob ? `job ${record.currentJobId} at the printer` : "the order"} ` +
+          `and refunded ${amountLabel} (${refund.refundId})` +
+          (str(req.body?.reason) ? `: ${str(req.body?.reason).slice(0, 300)}` : ""),
+        // Written ahead of the refund webhook so the cancel below lands as
+        // "refunded" rather than briefly paging as canceled-without-refund.
+        patch: {
+          paymentStatus: "refunded",
+          refundedAmount: payment.amount,
+          fulfillmentState: "failed",
+          autoReplacing: false,
+        },
+        silent: true,
+      });
+      if (cancelledJob) await applyOrderStatusUpdate(cancelledJob, "lulu_poll");
+
+      if (payment.ownerUid) {
+        try {
+          const sent = await sendOrderCancelledEmail({
+            uid: payment.ownerUid,
+            orderRef: record.currentJobId ?? record.key,
+            refunded: true,
+            refundAmount: amountLabel,
+          });
+          await recordOrderEmail(record.key, "cancelled", sent, `admin:${by}`);
+        } catch (mailErr) {
+          console.warn("[orders-admin] cancellation email failed", record.key, mailErr);
+          await recordOrderEmail(record.key, "cancelled", { ok: false, error: (mailErr as Error)?.message ?? "error" });
+        }
+      }
+      res.json({ ok: true, refundId: refund.refundId, record: await getPrintOrder(record.key) });
+    } catch (err) {
+      console.error("[orders-admin] cancel-and-refund failed", err);
+      fail(res, 500, (err as Error)?.message ?? "Cancel and refund failed.");
+    }
+  });
+
+  // The printer refused a detail only the customer could supply (a phone number,
+  // a customs id, an address line). Correct it from their reply and place again.
+  app.post("/admin/orders/:key/recipient", json, async (req: Request, res: Response) => {
+    try {
+      const ctx = await load(req, res);
+      if (!ctx) return;
+      const { record, payment } = ctx;
+      if (!payment || !payment.fulfillment) return fail(res, 409, "This order has no stored fulfillment plan.");
+      if (payment.status === "refunded") return fail(res, 409, "This order was refunded; it won't be placed.");
+      if (jobAlive(record)) {
+        return fail(res, 409, "The current print job is still active. Cancel it at the printer first, then correct and re-place.");
+      }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const fix: RecipientCorrection = {};
+      for (const key of [
+        "name",
+        "email",
+        "phoneNumber",
+        "line1",
+        "line2",
+        "townOrCity",
+        "stateOrCounty",
+        "postalOrZipCode",
+        "taxId",
+      ] as const) {
+        if (typeof body[key] === "string") fix[key] = (body[key] as string).slice(0, 200);
+      }
+      if (Object.keys(fix).length === 0) return fail(res, 400, "Nothing to correct.");
+      const country = payment.fulfillment.recipient.address.countryCode.toUpperCase();
+      if (fix.phoneNumber !== undefined) {
+        const problem = phoneProblem(fix.phoneNumber);
+        if (problem) return fail(res, 400, `Phone: ${problem}`);
+      }
+      if (fix.taxId !== undefined) {
+        const problem = taxIdProblem(country, fix.taxId);
+        if (problem) return fail(res, 400, `Tax id: ${problem}`);
+      }
+      const by = await actorOf(req);
+      await correctFulfillmentRecipient(payment.id, fix);
+      const deadJob = payment.orderId ?? null;
+      if (deadJob) {
+        await markFulfillmentRejected({
+          paymentId: payment.id,
+          uid: payment.ownerUid,
+          orderId: deadJob,
+          reason: `Recipient corrected by ${by}`,
+          replace: true,
+          exhausted: false,
+        });
+      } else {
+        await rearmFulfillment(payment.id, payment.ownerUid);
+      }
+      await recordOrderEvent({
+        key: record.key,
+        type: "admin_action",
+        source: `admin:${by}`,
+        message: `${by} corrected the recipient (${Object.keys(fix).join(", ")}) and re-placed the order`,
+        patch: { autoReplacing: Boolean(deadJob), fulfillmentState: "retrying" },
+        silent: true,
+      });
+      await fulfillPaidOrder(payment.id);
+      await sendConfirmationIfPlaced(payment.id);
+      res.json({ record: await getPrintOrder(record.key) });
+    } catch (err) {
+      console.error("[orders-admin] recipient correction failed", err);
+      fail(res, 500, (err as Error)?.message ?? "Could not correct the recipient.");
     }
   });
 

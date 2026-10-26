@@ -60,7 +60,15 @@ export const EMAIL_TEMPLATE_REGISTRY: Registry = {
     description: "Sent if a paid order fails to reach the printer after retries.",
     category: "transactional",
     defaultSenderKey: "support",
-    sample: { name: "Alex", orderRef: "CB-10428" },
+    sample: { name: "Alex", orderRef: "CB-10428", fix: "phone number" },
+  },
+  order_cancelled: {
+    id: "order_cancelled",
+    label: "Order canceled",
+    description: "Sent when a print order is canceled, with the refund if one was issued.",
+    category: "transactional",
+    defaultSenderKey: "support",
+    sample: { name: "Alex", orderRef: "CB-10428", refunded: true, amount: "$34.99" },
   },
   subscription_started: {
     id: "subscription_started",

@@ -114,7 +114,7 @@ export interface FulfillmentPlan {
    * Domain variant the customer chose (`premium-colour` / …). Optional on
    * orders placed before variants existed; derive from `productSku` when absent.
    */
-  variant?: { print: string; paper: string; finish: string } | null;
+  variant?: { print: string; paper: string; finish: string; linen?: string; foil?: string } | null;
   copies: number;
   shippingMethod: string;
   destinationCountry: string;
@@ -187,6 +187,8 @@ export interface FulfillmentPlan {
      */
     productionSource?: "live" | "table";
   } | null;
+  /** Spine foil lines for a linen-wrap book, already fit to the provider's limits. */
+  foilStamp?: { title: string; author?: string } | null;
 }
 
 /**
@@ -412,6 +414,8 @@ export async function markFulfillmentFailed(args: {
   error: string;
   /** True once the retry budget is spent — the customer needs to hear from us. */
   exhausted: boolean;
+  /** The recipient detail the printer refused ("phone number"), when only the customer can fix it. */
+  customerFix?: string | null;
 }): Promise<void> {
   const now = Date.now();
   await Promise.all([
@@ -434,10 +438,90 @@ export async function markFulfillmentFailed(args: {
           .set(
             {
               fulfillmentState: args.exhausted ? "failed" : "retrying",
-              fulfillmentIssue: args.exhausted
-                ? "We couldn't send this book to the press. Our team is on it — " +
-                  "we'll email you, and you won't be charged twice."
-                : null,
+              fulfillmentIssue: !args.exhausted
+                ? null
+                : args.customerFix
+                  ? `Our print partner couldn't accept the ${args.customerFix} on this order. ` +
+                    `We've emailed you — reply with the correct ${args.customerFix} and we'll send your book to print. ` +
+                    "You won't be charged again."
+                  : "We couldn't send this book to the press. Our team is on it — " +
+                    "we'll email you, and you won't be charged twice.",
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          )
+      : Promise.resolve(),
+  ]);
+}
+
+/** Recipient fields an operator may correct after payment. The country is fixed: it priced the order. */
+export interface RecipientCorrection {
+  name?: string;
+  email?: string;
+  phoneNumber?: string;
+  line1?: string;
+  line2?: string;
+  townOrCity?: string;
+  stateOrCounty?: string;
+  postalOrZipCode?: string;
+  taxId?: string;
+}
+
+/**
+ * Correct the stored recipient of a paid order — what the printer refused, as
+ * supplied by the customer. Only the given fields change; an empty string clears
+ * an optional one.
+ */
+export async function correctFulfillmentRecipient(paymentId: string, fix: RecipientCorrection): Promise<void> {
+  const field: Record<keyof RecipientCorrection, string> = {
+    name: "fulfillment.recipient.name",
+    email: "fulfillment.recipient.email",
+    phoneNumber: "fulfillment.recipient.phoneNumber",
+    line1: "fulfillment.recipient.address.line1",
+    line2: "fulfillment.recipient.address.line2",
+    townOrCity: "fulfillment.recipient.address.townOrCity",
+    stateOrCounty: "fulfillment.recipient.address.stateOrCounty",
+    postalOrZipCode: "fulfillment.recipient.address.postalOrZipCode",
+    taxId: "fulfillment.recipient.address.taxId",
+  };
+  const update: Record<string, unknown> = {};
+  for (const [key, path] of Object.entries(field) as [keyof RecipientCorrection, string][]) {
+    const value = fix[key];
+    if (value === undefined) continue;
+    update[path] = value.trim() || null;
+  }
+  if (Object.keys(update).length === 0) return;
+  update.events = FieldValue.arrayUnion({ at: Date.now(), type: "fulfillment.recipient_corrected" });
+  await db().doc(`payments/${paymentId}`).update(update);
+}
+
+/**
+ * An order canceled for good from the admin. Stops every automatic placement
+ * (the retry sweep only looks at "retrying") and tells the customer in their own
+ * order view, ahead of the refund webhook.
+ */
+export async function markFulfillmentCancelled(args: { paymentId: string; uid: string; refunded: boolean }): Promise<void> {
+  const now = Date.now();
+  await Promise.all([
+    db()
+      .doc(`payments/${args.paymentId}`)
+      .set(
+        {
+          fulfillmentState: "failed",
+          fulfillmentClaimedAt: FieldValue.delete(),
+          events: FieldValue.arrayUnion({ at: now, type: "fulfillment.cancelled" }),
+        },
+        { merge: true },
+      ),
+    args.uid
+      ? db()
+          .doc(`users/${args.uid}/payments/${args.paymentId}`)
+          .set(
+            {
+              fulfillmentState: "failed",
+              fulfillmentIssue: args.refunded
+                ? "This order was canceled and refunded in full. Refunds usually show on your statement within 5–10 days."
+                : "This order was canceled. Our team will email you about a reprint or a refund.",
               updatedAt: FieldValue.serverTimestamp(),
             },
             { merge: true },

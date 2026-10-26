@@ -13,13 +13,9 @@ import type {
   ProductDefinition,
   ProductsConfig,
 } from "../../../../core/config/products";
-import type { ShippingSettings } from "../../../../core/config/shipping";
 import {
   computeMargin,
-  feeFor,
-  feePercent,
   generateSteppedTiers,
-  suggestTierPrice,
   type MarginBreakdown,
   type RangeBand,
 } from "../../../../core/config/productMath";
@@ -36,6 +32,8 @@ import {
   variantSummary,
 } from "../../../../core/config/variants";
 import { variantFromSku } from "../../../../core/fulfillment/lulu/skuAxes";
+import { bindingNoun } from "../../../../core/fulfillment/lulu/products";
+import { maxTargetMargin, targetMarginFor, tiersForMargin } from "../../../../core/config/targetMargin";
 import { useAdminHealth } from "../../../../state/adminHealthStore";
 import type { CalibrationOutcome } from "../../../../state/appConfigStore";
 import { Slider } from "../../../components/Slider";
@@ -702,58 +700,6 @@ function RangeLadderBuilder({
 // ---- Margin planner --------------------------------------------------------
 
 /**
- * The highest margin this fee and tax structure can ever produce, whatever the
- * price. Margin tops out at `1 − (1 + taxRate)·feePercent` as the price grows,
- * so targets above that have no answer — the slider stops short of the tightest
- * currency's ceiling instead of letting the admin drag into a dead zone.
- */
-function maxTargetMargin(settings: PricingSettings): number {
-  let cap = 95;
-  for (const currency of settings.currencies) {
-    const rate = Math.max(0, settings.tax.perCurrency[currency]?.assumedRatePct ?? 0) / 100;
-    const ceiling = (1 - (1 + rate) * feePercent(feeFor(settings, currency))) * 100;
-    cap = Math.min(cap, Math.floor(ceiling) - 1);
-  }
-  return Math.max(1, cap);
-}
-
-/**
- * Every tier repriced for a target margin.
- *
- * Each tier is priced at the MIDPOINT of its page range: a tier charges one
- * price across the whole range, so pricing at the cheap end would underprice
- * every thicker book in it.
- */
-function tiersForMargin(
-  product: ProductDefinition,
-  settings: PricingSettings,
-  shippingSettings: ShippingSettings,
-  tiers: PageTier[],
-  target: number,
-): { tiers: PageTier[]; unreachable: string[] } {
-  const unreachable = new Set<string>();
-  const next = tiers.map((t) => {
-    const lo = Math.max(t.minPages, product.conditions.pages.min);
-    const hi = Math.min(t.maxPages, product.conditions.pages.max);
-    const pages = Math.max(1, Math.round((lo + Math.max(lo, hi)) / 2));
-    const prices = { ...t.prices };
-    for (const currency of settings.currencies) {
-      const price = suggestTierPrice(
-        product,
-        { currency, pages, copies: 1 },
-        settings,
-        target,
-        shippingSettings,
-      );
-      if (price == null) unreachable.add(currency);
-      else prices[currency] = price;
-    }
-    return { ...t, prices };
-  });
-  return { tiers: next, unreachable: [...unreachable] };
-}
-
-/**
  * Set the whole table from one number — the margin you want to earn — and see
  * what that leaves for a sale before committing to it.
  *
@@ -781,7 +727,8 @@ function MarginPlanner({
   const plans = useAppConfigStore((s) => s.plans.plans);
   const shippingSettings = useAppConfigStore((s) => s.shippingSettings);
   const cap = useMemo(() => maxTargetMargin(settings), [settings]);
-  const [target, setTarget] = useState(() => Math.min(45, cap));
+  const saved = targetMarginFor(settings, product);
+  const [target, setTarget] = useState(() => Math.min(saved.pct, cap));
 
   const suggestion = useMemo(
     () => tiersForMargin(product, settings, shippingSettings, tiers, Math.min(target, cap)),
@@ -848,6 +795,20 @@ function MarginPlanner({
           {Math.min(target, cap)}%
         </span>
       </div>
+      <p className="text-[11px] text-ink-400">
+        Saved target: {saved.pct}%{" "}
+        {saved.source === "binding" ? `for every ${bindingNoun(saved.binding)}` : "(the catalog default)"}, set in
+        Financial settings.
+        {target !== saved.pct && (
+          <>
+            {" "}
+            <button type="button" onClick={() => setTarget(Math.min(saved.pct, cap))} className="font-semibold text-brand-700 underline">
+              Back to {saved.pct}%
+            </button>
+            {" — "}a price set off target is flagged until it&apos;s repriced.
+          </>
+        )}
+      </p>
 
       {headroom && (
         <div className="flex flex-wrap gap-2 text-[11px]">

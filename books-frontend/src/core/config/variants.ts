@@ -20,6 +20,10 @@
  * The option lists below are what the provider was MEASURED to sell (see
  * `scripts/probe-print-matrix.mjs`); which of them a given format offers is per
  * product, in its {@link ProductVariantPolicy}.
+ *
+ * Linen and foil only mean something on a linen-wrap hardcover: the cloth on
+ * the boards under its dust jacket, and the foil its spine is stamped in. Every
+ * other format offers just {@link NO_OPTION} on both, which the pickers hide.
  */
 import { optionMediaKey, type PrintOptionFeature } from "./catalogMedia";
 
@@ -29,9 +33,23 @@ import { optionMediaKey, type PrintOptionFeature } from "./catalogMedia";
  * {@link VARIANT_AXIS_DEFS} and to `PRINT_OPTION_FEATURES`, and nothing else
  * iterates them by hand.
  */
-export const VARIANT_AXES = ["print", "paper", "finish"] as const;
+export const VARIANT_AXES = ["print", "paper", "finish", "linen", "foil"] as const;
 
 export type VariantAxisId = (typeof VARIANT_AXES)[number];
+
+/** The value of an axis that doesn't apply to a format (no linen on a paperback). */
+export const NO_OPTION = "none";
+
+/**
+ * Axes that postdate stored selections and keys. A selection or key without
+ * them is read as {@link NO_OPTION} — every order, cost sample and catalog
+ * written before linen wrap existed describes a book with neither.
+ */
+export const OPTIONAL_VARIANT_AXES = ["linen", "foil"] as const satisfies readonly VariantAxisId[];
+
+function isOptionalAxis(axis: VariantAxisId): boolean {
+  return (OPTIONAL_VARIANT_AXES as readonly string[]).includes(axis);
+}
 
 /** One option on an axis, described for the people choosing it. */
 export interface VariantOptionDef {
@@ -47,6 +65,8 @@ export interface VariantOptionDef {
    * actually pay comes from a live quote for the composed SKU.
    */
   costRank: number;
+  /** CSS colour standing in for a photo of a material, e.g. a linen cloth. */
+  swatch?: string;
 }
 
 /**
@@ -121,6 +141,64 @@ export const COVER_FINISHES: VariantOptionDef[] = [
   },
 ];
 
+/**
+ * Cloth for a linen-wrap hardcover. Measured: every colour exists with every
+ * foil and both jacket finishes, and none of them changes the price.
+ */
+export const LINEN_COLOURS: VariantOptionDef[] = [
+  { value: NO_OPTION, label: "No linen", hint: "This format isn't cloth-bound.", costRank: 0 },
+  {
+    value: "navy",
+    label: "Navy",
+    hint: "Deep blue cloth. Classic, and lets gold foil glow.",
+    costRank: 0,
+    swatch: "#1f2a44",
+  },
+  {
+    value: "black",
+    label: "Black",
+    hint: "The most formal cloth. Pair it with gold or white foil.",
+    costRank: 0,
+    swatch: "#1b1b1d",
+  },
+  {
+    value: "gray",
+    label: "Gray",
+    hint: "Soft charcoal gray, quiet next to bright jacket art.",
+    costRank: 0,
+    swatch: "#6b6e72",
+  },
+  {
+    value: "red",
+    label: "Red",
+    hint: "A rich storybook red that stands out on a shelf.",
+    costRank: 0,
+    swatch: "#8c1d23",
+  },
+  {
+    value: "tan",
+    label: "Tan",
+    hint: "Warm natural cloth with a vintage feel.",
+    costRank: 0,
+    swatch: "#b89a6e",
+  },
+  {
+    value: "forest",
+    label: "Forest green",
+    hint: "Deep green cloth, lovely with gold foil.",
+    costRank: 0,
+    swatch: "#20402f",
+  },
+];
+
+/** Foil the title is stamped in on a linen spine (the jacket is printed separately). */
+export const FOIL_COLOURS: VariantOptionDef[] = [
+  { value: NO_OPTION, label: "No foil", hint: "This format has no stamped spine.", costRank: 0 },
+  { value: "gold", label: "Gold", hint: "Bright metallic gold. The traditional choice.", costRank: 0, swatch: "#c9a447" },
+  { value: "white", label: "White", hint: "Crisp white. Clean and modern on dark cloth.", costRank: 0, swatch: "#f4f2ec" },
+  { value: "black", label: "Black", hint: "Subtle black. Best on light cloth like tan or gray.", costRank: 0, swatch: "#1b1b1d" },
+];
+
 export interface VariantAxisDef {
   id: VariantAxisId;
   label: string;
@@ -148,6 +226,18 @@ export const VARIANT_AXIS_DEFS: Record<VariantAxisId, VariantAxisDef> = {
     hint: "How the cover is laminated.",
     options: COVER_FINISHES,
   },
+  linen: {
+    id: "linen",
+    label: "Linen color",
+    hint: "The cloth on the hardcover itself, under the printed dust jacket.",
+    options: LINEN_COLOURS,
+  },
+  foil: {
+    id: "foil",
+    label: "Spine foil",
+    hint: "The color your title is stamped in on the linen spine.",
+    options: FOIL_COLOURS,
+  },
 };
 
 /** One concrete variant: a value on every axis. */
@@ -173,26 +263,41 @@ export function variantMediaKey(axis: VariantAxisId, value: string): string {
   return optionMediaKey(axis as PrintOptionFeature, value);
 }
 
-/** Whether every axis carries a value the provider is known to offer. */
-export function isVariantSelection(value: unknown): value is VariantSelection {
-  if (!value || typeof value !== "object") return false;
+/**
+ * A selection as received from a client or read from storage, completed with
+ * {@link NO_OPTION} on any optional axis it predates. Null when a required axis
+ * is missing or any value is unknown.
+ */
+export function coerceVariantSelection(value: unknown): VariantSelection | null {
+  if (!value || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
-  return VARIANT_AXES.every((axis) => typeof v[axis] === "string" && variantOptionDef(axis, v[axis] as string) != null);
+  const out = {} as VariantSelection;
+  for (const axis of VARIANT_AXES) {
+    const raw = v[axis] ?? (isOptionalAxis(axis) ? NO_OPTION : undefined);
+    if (typeof raw !== "string" || !variantOptionDef(axis, raw)) return null;
+    out[axis] = raw;
+  }
+  return out;
 }
 
 /**
- * Stable identity for a variant: `print/paper/finish`. Used to key cost samples
- * and to name a variant in logs and order records.
+ * Stable identity for a variant: `print/paper/finish`, then `/linen/foil` only
+ * for a cloth-bound book. Leaving unused optional axes off keeps every key
+ * written before they existed identical to the key it would be written as now.
  */
 export function variantKey(selection: VariantSelection): string {
-  return VARIANT_AXES.map((axis) => selection[axis]).join("/");
+  const parts: string[] = VARIANT_AXES.map((axis) => selection[axis] ?? NO_OPTION);
+  const required = VARIANT_AXES.length - OPTIONAL_VARIANT_AXES.length;
+  while (parts.length > required && parts[parts.length - 1] === NO_OPTION) parts.pop();
+  return parts.join("/");
 }
 
 /**
  * The axes that change what a book costs to print.
  *
- * Ink, quality and paper decide the per-page rate; cover lamination does not
- * change the price at all (both finishes carry `costRank` 0, measured). Keying
+ * Ink, quality and paper decide the per-page rate; cover lamination, linen
+ * colour and foil do not change the price at all (measured: every linen × foil
+ * × finish of a linen-wrap book quotes the same, to the cent). Keying
  * measured costs by these two alone halves the probes a calibration needs and
  * stops the same number being measured twice under different names.
  */
@@ -209,26 +314,38 @@ export function costVariantKey(selection: VariantSelection): string {
 
 export function parseVariantKey(key: string): VariantSelection | null {
   const parts = (key ?? "").split("/");
-  if (parts.length !== VARIANT_AXES.length) return null;
+  const required = VARIANT_AXES.length - OPTIONAL_VARIANT_AXES.length;
+  if (parts.length < required || parts.length > VARIANT_AXES.length) return null;
   const out = {} as VariantSelection;
   for (const [i, axis] of VARIANT_AXES.entries()) {
-    if (!variantOptionDef(axis, parts[i])) return null;
-    out[axis] = parts[i];
+    const value = parts[i] ?? NO_OPTION;
+    if (!variantOptionDef(axis, value)) return null;
+    out[axis] = value;
   }
   return out;
 }
 
-/** `Premium colour · 80# coated white · Gloss cover` — a variant in one line. */
+/**
+ * `Premium colour · 80# coated white · Gloss cover`, plus `Navy linen · Gold
+ * foil` on a cloth-bound book — a variant in one line.
+ */
 export function variantSummary(selection: VariantSelection): string {
-  return [
+  const parts = [
     variantOptionLabel("print", selection.print),
     variantOptionLabel("paper", selection.paper),
     `${variantOptionLabel("finish", selection.finish)} cover`,
-  ].join(" · ");
+  ];
+  if (selection.linen && selection.linen !== NO_OPTION) {
+    parts.push(`${variantOptionLabel("linen", selection.linen)} linen`);
+  }
+  if (selection.foil && selection.foil !== NO_OPTION) {
+    parts.push(`${variantOptionLabel("foil", selection.foil)} foil`);
+  }
+  return parts.join(" · ");
 }
 
 export function sameVariant(a: VariantSelection, b: VariantSelection): boolean {
-  return VARIANT_AXES.every((axis) => a[axis] === b[axis]);
+  return VARIANT_AXES.every((axis) => (a[axis] ?? NO_OPTION) === (b[axis] ?? NO_OPTION));
 }
 
 // ---- Per-product policy ----------------------------------------------------
@@ -310,22 +427,24 @@ export interface ProductVariantPolicy {
 }
 
 export function createDefaultVariantPolicy(): ProductVariantPolicy {
-  return { options: { print: [], paper: [], finish: [] }, exclusions: [] };
+  return { options: { print: [], paper: [], finish: [], linen: [], foil: [] }, exclusions: [] };
 }
 
 /** Whether a partial rule matches a variant (an empty rule matches nothing). */
 export function variantMatches(match: VariantMatch, selection: VariantSelection): boolean {
   const axes = VARIANT_AXES.filter((axis) => match[axis] != null);
-  return axes.length > 0 && axes.every((axis) => match[axis] === selection[axis]);
+  return axes.length > 0 && axes.every((axis) => match[axis] === (selection[axis] ?? NO_OPTION));
 }
 
 export function offeredValues(policy: ProductVariantPolicy, axis: VariantAxisId): string[] {
-  return policy.options[axis].map((o) => o.value);
+  return (policy.options[axis] ?? []).map((o) => o.value);
 }
 
 /** Whether a customer may order this exact variant of this product. */
 export function variantAllowed(policy: ProductVariantPolicy, selection: VariantSelection): boolean {
-  if (!VARIANT_AXES.every((axis) => offeredValues(policy, axis).includes(selection[axis]))) return false;
+  if (!VARIANT_AXES.every((axis) => offeredValues(policy, axis).includes(selection[axis] ?? NO_OPTION))) {
+    return false;
+  }
   return !policy.exclusions.some((rule) => variantMatches(rule, selection));
 }
 
@@ -370,7 +489,7 @@ export function variantPriceDelta(
   if (!selection) return 0;
   let total = 0;
   for (const axis of VARIANT_AXES) {
-    const choice = policy.options[axis].find((o) => o.value === selection[axis]);
+    const choice = (policy.options[axis] ?? []).find((o) => o.value === selection[axis]);
     const delta = choice?.priceDelta?.[currency];
     if (!delta) continue;
     total += delta.perCopy + delta.perPage * Math.max(0, pages);
@@ -425,27 +544,38 @@ export function firstAllowedVariant(
   return [...all].sort((a, b) => distanceFrom(a, base) - distanceFrom(b, base))[0];
 }
 
+/** The choices a customer still makes once the interior spec is fixed. */
+export type CustomerVariantChoice = Partial<Pick<VariantSelection, "finish" | "linen" | "foil">>;
+
+/** The axes the storefront lets a customer choose, in display order. */
+export const CUSTOMER_VARIANT_AXES = ["linen", "foil", "finish"] as const satisfies readonly VariantAxisId[];
+
 /**
  * Customer-facing print specification for illustrated books.
  *
  * Paper and interior print quality are intentionally not choices in the
  * storefront. Every quote and order uses the provider-recommended picture-book
- * specification, while cover finish remains a visible choice.
+ * specification, while cover finish — and, on a linen-wrap book, the cloth and
+ * foil colour — remain visible choices. A preference the format doesn't offer
+ * (navy linen on a paperback) falls back to the nearest one it does.
  */
 export function simplifiedPrintVariant(
   policy: ProductVariantPolicy,
-  preferredFinish = "gloss",
+  preferred: CustomerVariantChoice = {},
 ): VariantSelection | undefined {
   return firstAllowedVariant(policy, {
     print: "premium-colour",
     paper: "80-coated-white",
-    finish: preferredFinish,
+    finish: preferred.finish ?? "gloss",
+    linen: preferred.linen ?? NO_OPTION,
+    foil: preferred.foil ?? NO_OPTION,
   });
 }
 
 function distanceFrom(selection: VariantSelection, base: VariantSelection): number {
   return VARIANT_AXES.reduce(
-    (total, axis, i) => total + (selection[axis] === base[axis] ? 0 : 2 ** (VARIANT_AXES.length - i)),
+    (total, axis, i) =>
+      total + ((selection[axis] ?? NO_OPTION) === (base[axis] ?? NO_OPTION) ? 0 : 2 ** (VARIANT_AXES.length - i)),
     0,
   );
 }
@@ -498,6 +628,9 @@ export function normalizeVariantPolicy(
         variantOptionsFor(axis).findIndex((o) => o.value === a.value) -
         variantOptionsFor(axis).findIndex((o) => o.value === b.value),
     );
+    // A policy stored before an optional axis existed describes a book without
+    // it; leaving the axis empty would make every variant unorderable.
+    if (out.options[axis].length === 0 && isOptionalAxis(axis)) out.options[axis].push({ value: NO_OPTION });
   }
 
   for (const raw of Array.isArray(stored.exclusions) ? stored.exclusions : []) {

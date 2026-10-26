@@ -56,7 +56,7 @@ import { Button } from "../components/Button";
 import { Celebrate } from "../components/Celebrate";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
-import { FULFILLMENT_STATUS, STAGE_STATUS, orderHealth } from "./orderStatus";
+import { FULFILLMENT_STATUS, STAGE_STATUS, orderHealth, orderStatusDetail } from "./orderStatus";
 import { SurveyCard } from "./SurveyCard";
 
 function money(amount: number | string, currency: string): string {
@@ -397,7 +397,9 @@ function OrderBody({ paymentId }: { paymentId: string | null }) {
     return (sku: string) => map.get(sku) ?? "Printed book";
   }, []);
 
-  const settled = payment?.status === "paid" || payment?.status === "partially_refunded";
+  // A fully refunded order is settled too — just not in the customer's favour of a book.
+  const settled =
+    payment?.status === "paid" || payment?.status === "partially_refunded" || payment?.status === "refunded";
   // ONE reading of how this order is doing, so the headline and the status panel
   // below can't contradict each other. They did: the headline asked only whether
   // Stripe took the money, so a job the printer had already rejected still got
@@ -408,7 +410,7 @@ function OrderBody({ paymentId }: { paymentId: string | null }) {
     <>
       <Hero
         icon={<Package className="size-6" />}
-        eyebrow={health === "ok" ? "Order confirmed" : "Order received"}
+        eyebrow={health === "ok" ? "Order confirmed" : health === "cancelled" ? "Order canceled" : "Order received"}
         title={
           !settled
             ? "Thank you for your order"
@@ -416,7 +418,9 @@ function OrderBody({ paymentId }: { paymentId: string | null }) {
               ? "Your book is on its way"
               : health === "working"
                 ? "We're sorting something out"
-                : "Your order needs our attention"
+                : health === "cancelled"
+                  ? "This order was canceled"
+                  : "Your order needs our attention"
         }
         subtitle={
           !settled
@@ -425,7 +429,11 @@ function OrderBody({ paymentId }: { paymentId: string | null }) {
               ? "We've got your payment and your book is heading to the press. Everything below is also in your email."
               : health === "working"
                 ? "Your payment went through, but the press didn't accept the book first time. We're on it — the details are below."
-                : "Your payment went through, but we couldn't get this book onto the press. Our team has been alerted and will be in touch."
+                : health === "cancelled"
+                  ? payment?.status === "refunded"
+                    ? "You've been refunded in full. Refunds usually show on your statement within 5–10 days."
+                    : "No book is being printed for this order. Our team will email you about a reprint or a refund."
+                  : "Your payment went through, but we couldn't get this book onto the press. Our team has been alerted and will be in touch."
         }
         tone={health === "ok" ? "brand" : "neutral"}
         // Never celebrate an order that isn't actually going to arrive.
@@ -507,7 +515,7 @@ function FulfillmentPanel({
   // succeeded — the printer only refused the job afterwards.
   const health = orderHealth(payment, order);
   const tone =
-    health === "stuck"
+    health === "stuck" || health === "cancelled"
       ? "danger"
       : health === "working"
         ? "warning"
@@ -542,11 +550,15 @@ function FulfillmentPanel({
               too terse to be useful — "Issue" tells a customer nothing — so the
               fulfillment wording, which says what we're doing, leads instead. */}
           <p className="text-sm font-semibold text-ink-800">
-            {health === "ok" ? (stage?.label ?? fulfillment.label) : fulfillment.label}
+            {health === "ok"
+              ? (stage?.label ?? fulfillment.label)
+              : health === "cancelled"
+                ? payment.status === "refunded"
+                  ? "Canceled and refunded"
+                  : "Canceled"
+                : fulfillment.label}
           </p>
-          <p className="mt-0.5 text-xs leading-relaxed text-ink-600">
-            {payment.fulfillmentIssue ?? order?.statusMessage ?? fulfillment.detail}
-          </p>
+          <p className="mt-0.5 text-xs leading-relaxed text-ink-600">{orderStatusDetail(payment, order)}</p>
           {order && (
             <p className="mt-1.5 text-[11px] text-ink-400">
               Order <span className="font-mono">{order.id}</span>

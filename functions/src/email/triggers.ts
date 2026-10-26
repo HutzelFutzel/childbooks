@@ -42,6 +42,12 @@ export async function sendOrderShippedEmail(args: {
   orderRef: string;
   carrier?: string | null;
   trackingUrl?: string | null;
+  /**
+   * Whether this email carries tracking. The one with tracking is deduped
+   * separately, so a "shipped" email sent before the carrier link existed can
+   * be followed by the link.
+   */
+  withTracking?: boolean;
   /** Admin resend: bypass the once-per-order dedupe. */
   resend?: boolean;
 }): Promise<SendTemplateResult> {
@@ -53,8 +59,10 @@ export async function sendOrderShippedEmail(args: {
       carrier: args.carrier ?? undefined,
       trackingUrl: args.trackingUrl ?? undefined,
     },
-    // One "shipped" email per order (the provider may re-post SHIPPED webhooks).
-    dedupeKey: args.resend ? `shipped_${args.orderRef}_resend_${Date.now()}` : `shipped_${args.orderRef}`,
+    // One "shipped" email per order and tracking state (the provider may re-post SHIPPED webhooks).
+    dedupeKey: args.resend
+      ? `shipped_${args.orderRef}_resend_${Date.now()}`
+      : `shipped_${args.orderRef}${args.withTracking ? "_tracked" : ""}`,
   });
 }
 
@@ -62,15 +70,36 @@ export async function sendOrderFailedEmail(args: {
   uid: string;
   orderRef: string;
   paymentId: string;
+  /** The recipient detail the printer refused, when only the customer can fix it. */
+  fix?: string;
   /** Admin resend: bypass the once-per-payment dedupe. */
   resend?: boolean;
 }): Promise<SendTemplateResult> {
   return sendTemplatedEmail({
     templateId: "order_failed",
     uid: args.uid,
-    vars: { orderRef: args.orderRef },
+    vars: { orderRef: args.orderRef, ...(args.fix ? { fix: args.fix } : {}) },
     // One "problem" email per payment, even though retries exhaust over time.
     dedupeKey: args.resend ? `failed_${args.paymentId}_resend_${Date.now()}` : `failed_${args.paymentId}`,
+  });
+}
+
+export async function sendOrderCancelledEmail(args: {
+  uid: string;
+  orderRef: string;
+  /** The formatted refund, when one was issued. */
+  refundAmount?: string;
+  refunded: boolean;
+}): Promise<SendTemplateResult> {
+  return sendTemplatedEmail({
+    templateId: "order_cancelled",
+    uid: args.uid,
+    vars: {
+      orderRef: args.orderRef,
+      refunded: args.refunded,
+      ...(args.refundAmount ? { amount: args.refundAmount } : {}),
+    },
+    dedupeKey: `cancelled_${args.orderRef}`,
   });
 }
 

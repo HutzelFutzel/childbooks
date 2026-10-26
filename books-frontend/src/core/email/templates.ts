@@ -116,6 +116,23 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
   },
 
   order_failed: (vars, ctx) => {
+    if (vars.fix) {
+      const fix = escapeHtml(vars.fix);
+      const subject = `Please check the ${vars.fix} on your ${ctx.brand.brandName} order`;
+      const body = [
+        heading("One detail to check", ctx.brand),
+        paragraph(
+          `${greeting(vars.name)} our print partner couldn't accept the ${fix} on order ${escapeHtml(
+            vars.orderRef,
+          )}, so your book hasn't gone to the press yet.`,
+        ),
+        paragraph(
+          `Just reply to this email with the correct ${fix} and we'll send your book to print straight away. You won't be charged again.`,
+        ),
+      ].join("\n");
+      const text = `${greeting(vars.name)}\n\nOur print partner couldn't accept the ${vars.fix} on order ${vars.orderRef}, so your book hasn't gone to the press yet. Reply with the correct ${vars.fix} and we'll send it to print straight away. You won't be charged again.`;
+      return assemble(ctx, subject, "One detail to check", body, text);
+    }
     const subject = `We hit a snag with your ${ctx.brand.brandName} order`;
     const body = [
       heading("We're looking into your order", ctx.brand),
@@ -130,6 +147,25 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
     ].join("\n");
     const text = `${greeting(vars.name)}\n\nWe hit a problem sending order ${vars.orderRef} to print. No action needed — our team is on it. Reply anytime with questions.`;
     return assemble(ctx, subject, "We're looking into your order", body, text);
+  },
+
+  order_cancelled: (vars, ctx) => {
+    const subject = `Your ${ctx.brand.brandName} order was canceled`;
+    const refundLine = vars.refunded
+      ? `We've refunded ${vars.amount ? `<strong>${escapeHtml(vars.amount)}</strong>` : "your payment"} to your original payment method. It usually shows on your statement within 5–10 days.`
+      : "We'll be in touch about a reprint or a refund.";
+    const body = [
+      heading("Your order was canceled", ctx.brand),
+      paragraph(`${greeting(vars.name)} order ${escapeHtml(vars.orderRef)} has been canceled and won't be printed.`),
+      paragraph(refundLine),
+      paragraph("If this is unexpected or you have any questions, just reply to this email."),
+    ].join("\n");
+    const text = `${greeting(vars.name)}\n\nOrder ${vars.orderRef} has been canceled and won't be printed. ${
+      vars.refunded
+        ? `We've refunded ${vars.amount ?? "your payment"} to your original payment method; it usually shows within 5–10 days.`
+        : "We'll be in touch about a reprint or a refund."
+    }\n\nQuestions? Just reply to this email.`;
+    return assemble(ctx, subject, "Your order was canceled", body, text);
   },
 
   subscription_started: (vars, ctx) => {

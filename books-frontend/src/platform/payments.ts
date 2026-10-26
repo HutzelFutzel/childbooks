@@ -113,6 +113,8 @@ export interface CheckoutInput {
    * expecting a discount is the one outcome worse than refusing it.
    */
   couponCode?: string;
+  /** Spine foil lines, for a linen-wrap book. Re-fit to the provider's limits server side. */
+  foilStamp?: { title: string; author?: string };
 }
 
 /**
@@ -122,7 +124,7 @@ export interface CheckoutInput {
 export async function startOrderCheckout(
   input: CheckoutInput & { variant?: VariantSelection },
 ): Promise<{ url: string; paymentId: string }> {
-  const { draft, pageCount, variant, fingerprint, addressConfirmed, addressChoice, couponCode } = input;
+  const { draft, pageCount, variant, fingerprint, addressConfirmed, addressChoice, couponCode, foilStamp } = input;
   const assets = await Promise.all(draft.assets.map(assetToWire));
   const body = {
     // Format identity (base SKU). The server composes the print SKU from
@@ -141,6 +143,7 @@ export async function startOrderCheckout(
     addressConfirmed,
     addressChoice,
     couponCode,
+    foilStamp,
   };
   const res = await backendFetch("/checkout", {
     method: "POST",
@@ -166,6 +169,8 @@ export interface RetailPricePreview {
   total: number;
   /** Break-even at-cost total (Lulu production + Lulu shipping + Stripe fee, ex tax). */
   atCostTotal?: number;
+  /** "exclusive" when tax is added at payment, so the total is pre-tax. */
+  taxBehavior?: "inclusive" | "exclusive";
   /**
    * What the print provider's address validation made of the destination. Null
    * when it had no comment. Pricing already sends the full address, so this

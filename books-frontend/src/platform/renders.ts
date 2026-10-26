@@ -126,5 +126,5 @@ export interface AssembleRequest {
   /** Interior + cover: the page count the order is priced and bound at. */
   padToPages?: number;
   sku?: string;
-  cover?: { widthIn: number; heightIn: number; panelWidthIn: number };
+  cover?: { widthIn: number; heightIn: number; panelWidthIn: number; flapWidthIn?: number };
 }

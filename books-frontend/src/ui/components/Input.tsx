@@ -60,22 +60,38 @@ export interface FieldProps {
   required?: boolean;
   children: React.ReactNode;
   className?: string;
+  /**
+   * The id of the control this field labels. Ties the label to it, and gives
+   * the hint or error the id `${htmlFor}-msg` for the control's
+   * `aria-describedby` (see {@link fieldMessageId}).
+   */
+  htmlFor?: string;
 }
 
-export function Field({ label, hint, error, required, children, className }: FieldProps) {
+/** The id a {@link Field} gives its hint or error, for `aria-describedby`. */
+export function fieldMessageId(htmlFor: string): string {
+  return `${htmlFor}-msg`;
+}
+
+export function Field({ label, hint, error, required, children, className, htmlFor }: FieldProps) {
+  const messageId = htmlFor ? fieldMessageId(htmlFor) : undefined;
   return (
     <div className={cn("space-y-1.5", className)}>
       {label && (
-        <label className="flex items-center gap-1 text-sm font-medium text-ink-700">
+        <label htmlFor={htmlFor} className="flex items-center gap-1 text-sm font-medium text-ink-700">
           {label}
           {required && <span className="text-brand-500">*</span>}
         </label>
       )}
       {children}
       {error ? (
-        <p className="text-xs text-red-600">{error}</p>
+        <p id={messageId} role="alert" className="text-xs text-red-600">
+          {error}
+        </p>
       ) : hint ? (
-        <p className="text-xs text-ink-500">{hint}</p>
+        <p id={messageId} className="text-xs text-ink-500">
+          {hint}
+        </p>
       ) : null}
     </div>
   );

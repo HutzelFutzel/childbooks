@@ -41,6 +41,22 @@ export const CASEWRAP_COVER_SAFETY_MARGIN_IN = 0.75;
  */
 export const CASEWRAP_COVER_EXTENSION_IN = 0.875;
 
+/**
+ * A linen-wrap book's printed cover is a DUST JACKET, laid out
+ * `[flap][back][spine][front][flap]`. Lulu doesn't publish the split, only the
+ * total, so both numbers are read off its cover-dimensions response (8.5×11",
+ * 32 and 200 pages, sandbox and live alike: 25.0/25.5 × 11.75"):
+ *
+ *   - the jacket is 0.375" taller than the trim on each edge, which is the
+ *     panels' outer extension, as {@link coverExtensionFromHeight} derives;
+ *   - with panels of trim + that extension, exactly 3.5" is left over on each
+ *     side at every page count, and the remainder is the hardcover spine table's
+ *     width (0.25" at 32 pages, 0.75" at 200). That 3.5" is the flap, its fold
+ *     strip and the outer bleed.
+ */
+export const DUST_JACKET_EXTENSION_IN = 0.375;
+export const DUST_JACKET_FLAP_IN = 3.5;
+
 /** Spine text is not allowed at or below this page count (too thin to place). */
 export const SPINE_TEXT_MIN_PAGES = 80;
 /** Minimum clearance to leave between spine text and each spine edge. */
@@ -211,6 +227,16 @@ export function bindingIsWrapped(binding: Binding): boolean {
   return binding === "casewrap" || binding === "linen-wrap";
 }
 
+/** Whether a binding's printed cover is a dust jacket with flaps. */
+export function bindingHasDustJacket(binding: Binding): boolean {
+  return binding === "linen-wrap";
+}
+
+/** Width of each jacket flap allowance beyond its panel (0 without a jacket). */
+export function coverFlapWidthIn(binding: Binding): number {
+  return bindingHasDustJacket(binding) ? DUST_JACKET_FLAP_IN : 0;
+}
+
 /** Safety margin (inches inside the trim) for artwork on a binding's COVER. */
 export function coverSafetyMarginIn(binding: Binding): number {
   return bindingIsWrapped(binding) ? CASEWRAP_COVER_SAFETY_MARGIN_IN : SAFETY_MARGIN_IN;
@@ -218,10 +244,12 @@ export function coverSafetyMarginIn(binding: Binding): number {
 
 /**
  * Expected distance the cover artwork extends past the trim on its outer edges
- * (bleed for a paperback, wrap + overhang for a hardcover). A nominal value —
- * the provider's cover size is authoritative at render time.
+ * (bleed for a paperback, wrap + overhang for a hardcover, the jacket's
+ * overhang for linen wrap). A nominal value — the provider's cover size is
+ * authoritative at render time.
  */
 export function nominalCoverExtensionIn(binding: Binding, bleedIn: number): number {
+  if (bindingHasDustJacket(binding)) return DUST_JACKET_EXTENSION_IN;
   return bindingIsWrapped(binding) ? CASEWRAP_COVER_EXTENSION_IN : bleedIn;
 }
 

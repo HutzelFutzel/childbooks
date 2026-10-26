@@ -126,6 +126,18 @@ export function describeError(err: unknown): string {
         return err.message || "Something went wrong.";
     }
   }
+  if (isNetworkError(err)) return "We couldn't reach our servers. Check your connection and try again.";
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/**
+ * A request that never got an answer. Browsers word it differently ("Failed to
+ * fetch", "Load failed", "NetworkError when attempting to fetch resource") and
+ * none of those mean anything to a customer.
+ */
+export function isNetworkError(err: unknown): boolean {
+  if (err instanceof FulfillmentError) return err.kind === "network";
+  if (!(err instanceof Error)) return false;
+  return /failed to fetch|load failed|networkerror|network request failed|err_internet_disconnected/i.test(err.message);
 }

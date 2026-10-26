@@ -4,6 +4,7 @@ import {
   EBOOK_MEDIA_KEY,
   FALLBACK_ID,
   PRINT_OPTION_FEATURES,
+  activePhotosFor,
   bookMediaKey,
   optionMediaKey,
   packMediaKey,
@@ -12,12 +13,14 @@ import {
 import type { ProductDefinition } from "../../../../core/config/products";
 import type { SparkPack } from "../../../../core/config/sparks";
 import {
+  NO_OPTION,
   variantMediaKey,
   variantOptionsFor,
   type VariantAxisId,
 } from "../../../../core/config/variants";
 import { BINDINGS } from "../../../../core/fulfillment/types";
 import { SKU_AXES } from "../../../../core/fulfillment/lulu/skuAxes";
+import { useAppConfigStore } from "../../../../state/appConfigStore";
 import { cn } from "../../../lib/cn";
 import { PictureRow } from "./Pictures";
 import { Disclosure, Section } from "./parts";
@@ -52,9 +55,11 @@ const FEATURE_LABELS: Record<PrintOptionFeature, string> = {
   print: "Interior printing",
   paper: "Paper",
   finish: "Cover finish",
+  linen: "Linen color (linen hardcover)",
+  foil: "Spine foil (linen hardcover)",
 };
 
-const VARIANT_FEATURES: VariantAxisId[] = ["print", "paper", "finish"];
+const VARIANT_FEATURES: VariantAxisId[] = ["print", "paper", "finish", "linen", "foil"];
 
 /**
  * Every option value worth a picture, per feature. Format axes (trim, binding)
@@ -64,11 +69,13 @@ const VARIANT_FEATURES: VariantAxisId[] = ["print", "paper", "finish"];
 function optionEntries(feature: PrintOptionFeature): OptionEntry[] {
   if (VARIANT_FEATURES.includes(feature as VariantAxisId)) {
     const axis = feature as VariantAxisId;
-    return variantOptionsFor(axis).map((o) => ({
-      key: variantMediaKey(axis, o.value),
-      label: o.label,
-      hint: o.hint,
-    }));
+    return variantOptionsFor(axis)
+      .filter((o) => o.value !== NO_OPTION)
+      .map((o) => ({
+        key: variantMediaKey(axis, o.value),
+        label: o.label,
+        hint: o.hint,
+      }));
   }
   const axis = SKU_AXES.find((a) => a.id === feature);
   const entries: OptionEntry[] = [];
@@ -171,8 +178,22 @@ export function ProductPhotosPanel({
 }
 
 function PrintOptionPictures() {
+  const media = useAppConfigStore((s) => s.catalogMedia);
+  const missing = PRINT_OPTION_FEATURES.flatMap((feature) =>
+    optionEntries(feature).filter((o) => activePhotosFor(media, o.key).length === 0),
+  );
   return (
     <div className="space-y-3">
+      <p
+        className={cn(
+          "rounded-md px-3 py-2 text-[12px]",
+          missing.length === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800",
+        )}
+      >
+        {missing.length === 0
+          ? "Every print option has a photo."
+          : `Still without a photo (${missing.length}): ${missing.map((o) => o.label).join(", ")}.`}
+      </p>
       {PRINT_OPTION_FEATURES.map((feature) => (
         <div key={feature} className="space-y-1.5">
           <p className="text-xs font-medium text-ink-400">{FEATURE_LABELS[feature]}</p>

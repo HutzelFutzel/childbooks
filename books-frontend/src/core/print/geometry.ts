@@ -165,6 +165,18 @@ export function coverExtensionFromHeight(coverHeightIn: number, trimHeightIn: nu
   return Math.round(ext * 1000) / 1000;
 }
 
+/**
+ * The spine band's width for a cover of these dimensions, in inches: whatever
+ * the two panels (and a dust jacket's two flaps) leave of the provider's width.
+ */
+export function coverSpineWidthIn(cover: {
+  widthIn: number;
+  panelWidthIn: number;
+  flapWidthIn?: number;
+}): number {
+  return Math.max(0, cover.widthIn - cover.panelWidthIn * 2 - Math.max(0, cover.flapWidthIn ?? 0) * 2);
+}
+
 /** A rectangle normalized to the TRIM box (0..1), for placement checks. */
 export interface SafeArea {
   x: number;

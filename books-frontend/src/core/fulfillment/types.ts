@@ -132,6 +132,8 @@ export interface OrderDraft {
   idempotencyKey?: string;
   /** Public URL the provider posts status callbacks to (backend only). */
   callbackUrl?: string;
+  /** Spine foil lines for a linen-wrap book; ignored by every other binding. */
+  foilStamp?: { title: string; author?: string };
 }
 
 /** A lightweight request for a price/shipping quote (no print files needed). */
@@ -290,6 +292,11 @@ export interface FulfillmentOrder {
   /** Opaque fulfillment identity (provider-neutral; e.g. "print"). */
   providerId: string;
   stage: OrderStage;
+  /**
+   * When the provider says the job entered this stage (epoch ms), if it says.
+   * Webhooks can arrive out of order; this is what tells a late one from news.
+   */
+  statusChangedAt?: number;
   merchantReference?: string;
   shipments: ShipmentInfo[];
   charges: Money[];

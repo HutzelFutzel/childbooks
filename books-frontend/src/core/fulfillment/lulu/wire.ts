@@ -59,6 +59,9 @@ export interface LuluPrintJobLineItem {
     pod_package_id: string;
     interior: LuluSourceFile;
     cover: LuluSourceFile;
+    /** Linen wrap only: spine foil lines, 42 characters together at most. */
+    foil_stamp_title_text?: string;
+    foil_stamp_author_text?: string;
   };
 }
 
@@ -179,6 +182,28 @@ export interface LuluShippingOption {
 interface LuluPrintJobStatus {
   name?: string;
   message?: string;
+  /**
+   * What Lulu actually sends: notes keyed by kind (`info`, `error`, …), each a
+   * string or a list of them. A rejection's reason lives here, often only on
+   * the line item.
+   */
+  messages?: Record<string, unknown>;
+  /** When the job entered this status (ISO 8601). Orders webhook deliveries. */
+  changed?: string;
+}
+
+/** The human text in a Lulu status, whichever shape it came in. */
+function statusNote(status: LuluPrintJobStatus | undefined): string | null {
+  if (!status) return null;
+  if (typeof status.message === "string" && status.message.trim()) return status.message.trim();
+  const parts: string[] = [];
+  for (const [kind, value] of Object.entries(status.messages ?? {})) {
+    const items = Array.isArray(value) ? value : [value];
+    for (const item of items) {
+      if (typeof item === "string" && item.trim()) parts.push(kind === "info" ? item.trim() : `${kind}: ${item.trim()}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 interface LuluPrintJobLineItemResponse {
@@ -499,15 +524,25 @@ export function mapOrder(json: LuluPrintJobResponse): FulfillmentOrder {
   // Address warnings ride in `issues` too, so they reach the order's status note
   // and history — a correction the provider makes silently is exactly the kind
   // of thing that strands a paid order in "awaiting confirmation".
+  // A dead job's reason is usually on the line item, not the job.
+  const stage = mapStage(json.status?.name);
+  const jobNote = statusNote(json.status);
+  const itemNotes =
+    stage === "error" || stage === "onHold"
+      ? (json.line_items ?? []).map((li) => statusNote(li.status)).filter((n): n is string => Boolean(n))
+      : [];
   const issues = [
-    ...(json.status?.message ? [json.status.message] : []),
+    ...(jobNote ? [jobNote] : []),
+    ...itemNotes.filter((n) => n !== jobNote),
     ...(addressValidation?.warnings.map((w) => w.message) ?? []),
   ];
+  const changedAt = json.status?.changed ? Date.parse(json.status.changed) : NaN;
 
   return {
     id: String(json.id),
     providerId: "print",
-    stage: mapStage(json.status?.name),
+    stage,
+    ...(Number.isFinite(changedAt) ? { statusChangedAt: changedAt } : {}),
     merchantReference: json.external_id,
     shipments,
     charges,

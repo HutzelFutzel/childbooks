@@ -9,11 +9,13 @@ import type {
   ProductDefinition,
 } from "../../../../core/config/products";
 import { suggestVariantDeltas } from "../../../../core/config/productMath";
+import { targetMarginFor } from "../../../../core/config/targetMargin";
 import { Button } from "../../../components/Button";
 import {
   VARIANT_AXES,
   VARIANT_AXIS_DEFS,
   VARIANT_COST_AXES,
+  NO_OPTION,
   emptyVariantDelta,
   offeredValues,
   variantDeltaIsZero,
@@ -28,7 +30,9 @@ import {
   type VariantMatch,
   type VariantSelection,
 } from "../../../../core/config/variants";
-import { variantFromSku } from "../../../../core/fulfillment/lulu/skuAxes";
+import { bindingOfSku, variantFromSku } from "../../../../core/fulfillment/lulu/skuAxes";
+import { bindingVariantValues } from "../../../../core/fulfillment/lulu/products";
+import type { Binding } from "../../../../core/fulfillment/types";
 import { useAppConfigStore } from "../../../../state/appConfigStore";
 import { Field } from "../../../components/Input";
 import { cn } from "../../../lib/cn";
@@ -47,6 +51,7 @@ export function VariantsSection({ product, update }: { product: ProductDefinitio
   const settings = useAppConfigStore((s) => s.pricingSettings);
   const currencies = settings.currencies;
   const base = variantFromSku(product.provider.sku);
+  const binding = bindingOfSku(product.provider.sku);
   const policy = product.variants;
 
   const setPolicy = (next: ProductVariantPolicy) =>
@@ -118,10 +123,11 @@ export function VariantsSection({ product, update }: { product: ProductDefinitio
           </p>
         )}
 
-        {VARIANT_AXES.map((axis) => (
+        {VARIANT_AXES.filter((axis) => !axisIsMoot(binding, axis)).map((axis) => (
           <AxisEditor
             key={axis}
             axis={axis}
+            stocked={binding ? bindingVariantValues(binding, axis) : undefined}
             base={base}
             policy={policy}
             currencies={currencies}
@@ -173,7 +179,7 @@ function SuggestDeltas({
   settings: PricingSettings;
   setPolicy: (next: ProductVariantPolicy) => void;
 }) {
-  const [target, setTarget] = useState(() => settings.minMarginPct + 15);
+  const [target, setTarget] = useState(() => targetMarginFor(settings, product).pct);
   const measured = Object.keys(product.cost.variantPerPage ?? {}).length;
 
   const apply = () => {
@@ -236,8 +242,16 @@ function SuggestDeltas({
   );
 }
 
+/** An axis that is always "none" for this binding (linen on a paperback) has nothing to edit. */
+function axisIsMoot(binding: Binding | undefined, axis: VariantAxisId): boolean {
+  if (!binding) return false;
+  const stocked = bindingVariantValues(binding, axis);
+  return stocked.length === 1 && stocked[0] === NO_OPTION;
+}
+
 function AxisEditor({
   axis,
+  stocked,
   base,
   policy,
   currencies,
@@ -245,6 +259,8 @@ function AxisEditor({
   onDelta,
 }: {
   axis: VariantAxisId;
+  /** Values the printer stocks for this binding; others are hidden unless already on. */
+  stocked?: readonly string[];
   base: VariantSelection | null;
   policy: ProductVariantPolicy;
   currencies: CurrencyCode[];
@@ -256,6 +272,11 @@ function AxisEditor({
   // Only ink, quality and paper change what a page costs to make; a cover
   // finish costs the same at any length, so a per-page field there is noise.
   const costly = (VARIANT_COST_AXES as readonly VariantAxisId[]).includes(axis);
+  // An option already switched on stays visible even when it isn't stocked, so
+  // it can be switched back off.
+  const options = variantOptionsFor(axis).filter(
+    (opt) => !stocked || stocked.includes(opt.value) || offered.has(opt.value),
+  );
   return (
     <div className="space-y-2">
       <div>
@@ -263,9 +284,10 @@ function AxisEditor({
         <p className="text-[11px] text-ink-500">{def.hint}</p>
       </div>
       <div className="space-y-2">
-        {variantOptionsFor(axis).map((opt) => {
+        {options.map((opt) => {
           const isBase = base?.[axis] === opt.value;
           const on = offered.has(opt.value) || isBase;
+          const unstocked = stocked != null && !stocked.includes(opt.value);
           const choice = policy.options[axis].find((o) => o.value === opt.value);
           return (
             <div
@@ -275,12 +297,14 @@ function AxisEditor({
                 on ? "bg-white ring-ink-200" : "bg-ink-50/60 ring-ink-100 opacity-70",
               )}
             >
-              <PictureButton
-                mediaKey={variantMediaKey(axis, opt.value)}
-                label={opt.label}
-                hint={opt.hint}
-                className="mt-0.5"
-              />
+              {opt.value !== NO_OPTION && (
+                <PictureButton
+                  mediaKey={variantMediaKey(axis, opt.value)}
+                  label={opt.label}
+                  hint={opt.hint}
+                  className="mt-0.5"
+                />
+              )}
               <div className="min-w-0 flex-1 space-y-1.5">
                 <label className="flex cursor-pointer items-start gap-2">
                   <input
@@ -300,6 +324,11 @@ function AxisEditor({
                       )}
                     </span>
                     <span className="block text-[11px] text-ink-500">{opt.hint}</span>
+                    {unstocked && (
+                      <span className="block text-[11px] font-medium text-red-700">
+                        The printer doesn&apos;t stock this for this binding — turn it off.
+                      </span>
+                    )}
                   </span>
                 </label>
                 {on && !isBase && (

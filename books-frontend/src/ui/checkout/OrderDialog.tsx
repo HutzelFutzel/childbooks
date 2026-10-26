@@ -20,6 +20,8 @@ import { subdivisionsFor } from "../../core/config/subdivisions";
 import { countryFlag, countryLabel } from "../../core/analytics/markets";
 import {
   createDefaultVariantPolicy,
+  CUSTOMER_VARIANT_AXES,
+  NO_OPTION,
   normalizeVariantPolicy,
   simplifiedPrintVariant,
   variantOptionLabel,
@@ -37,11 +39,16 @@ import { coverDocumentKey, fetchRenderAvailability, renderBook } from "../../pla
 import { getCursor } from "../../core/versioning";
 import { illustrationUnits } from "../../state/bookUnits";
 import { unitIsDone } from "../../core/book/pageCompletion";
+import { isNetworkError } from "../../core/errors";
 import { FulfillmentError } from "../../core/fulfillment/errors";
 import type {
   Recipient,
   ShippingMethod,
 } from "../../core/fulfillment/types";
+import { coverLinesOf } from "../../core/book/coverLines";
+import { foilStampText } from "../../core/fulfillment/lulu/foilStamp";
+import { phoneProblem, taxIdProblem } from "../../core/fulfillment/recipientFormat";
+import { SpineStampFields, type SpineLines } from "./SpineStampFields";
 import { BASE_VARIANT } from "../../core/fulfillment/lulu/products";
 import { skuForVariant, variantFromSku } from "../../core/fulfillment/lulu/skuAxes";
 import { COVER_FRONT_ID, type BookDesign, type Project } from "../../core/types";
@@ -66,7 +73,7 @@ import { useShipCountry } from "../hooks/useShipCountry";
 import { Button } from "../components/Button";
 import { PageCountNotice } from "./PageCountNotice";
 import { Card, CardBody, CardHeader, CardTitle } from "../components/Card";
-import { Field, Input } from "../components/Input";
+import { Field, Input, fieldMessageId } from "../components/Input";
 import { Select } from "../components/Select";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
@@ -197,16 +204,39 @@ export function OrderCheckout({
     () =>
       simplifiedPrintVariant(
         variantPolicy,
-        (catalogProduct?.defaultVariant ?? variantFromSku(product.sku) ?? BASE_VARIANT).finish,
+        catalogProduct?.defaultVariant ?? variantFromSku(product.sku) ?? BASE_VARIANT,
       ) ?? BASE_VARIANT,
     [variantPolicy, catalogProduct, product.sku],
   );
   const [variant, setVariant] = useState<VariantSelection>(defaultVariant);
-  // Changing the binding can change which finishes exist. Preserve the visible
-  // finish choice while re-applying the fixed picture-book interior spec.
+  // The last linen and foil the customer picked, so trying another binding and
+  // coming back to the linen hardcover doesn't lose their colours.
+  const [clothChoice, setClothChoice] = useState<Pick<VariantSelection, "linen" | "foil"> | null>(null);
+  // Changing the binding can change which finishes and cloths exist. Preserve
+  // the visible choices while re-applying the fixed picture-book interior spec.
   useEffect(() => {
-    setVariant((prev) => simplifiedPrintVariant(variantPolicy, prev.finish) ?? defaultVariant);
-  }, [variantPolicy, defaultVariant]);
+    setVariant(
+      (prev) =>
+        simplifiedPrintVariant(variantPolicy, { ...defaultVariant, finish: prev.finish, ...clothChoice }) ??
+        defaultVariant,
+    );
+  }, [variantPolicy, defaultVariant, clothChoice]);
+  const spineDefaults = useMemo<SpineLines>(() => {
+    const lines = coverLinesOf(project);
+    return { title: lines.title, author: lines.author };
+  }, [project]);
+  // Null until the customer edits the spine: until then it follows the book.
+  const [spineEdit, setSpineEdit] = useState<SpineLines | null>(null);
+  const spineLines = spineEdit ?? spineDefaults;
+  const foilStamp = useMemo(
+    () => (variant.foil !== NO_OPTION ? foilStampText(spineLines) : null),
+    [variant.foil, spineLines],
+  );
+  const chooseVariant = (next: VariantSelection) => {
+    const chosen = simplifiedPrintVariant(variantPolicy, next) ?? defaultVariant;
+    if (chosen.linen !== NO_OPTION) setClothChoice({ linen: chosen.linen, foil: chosen.foil });
+    setVariant(chosen);
+  };
 
   const printSku = useMemo(
     () => skuForVariant(product.sku, variant) ?? product.sku,
@@ -307,6 +337,7 @@ export function OrderCheckout({
   // rejects a missing one when the print job is created, which is after the
   // customer has been charged.
   const [taxId, setTaxId] = useState("");
+  const [formatTouched, setFormatTouched] = useState({ phone: false, taxId: false });
   const [copies, setCopies] = useState(1);
   // Corrected to something this destination actually offers as soon as the
   // catalog and the country are both known. A fixed default was wrong for most
@@ -350,6 +381,7 @@ export function OrderCheckout({
   const [quote, setQuote] = useState<RetailPricePreview | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [quoteRetry, setQuoteRetry] = useState(0);
   // The address the current quote was made FOR. A carrier verdict is only a
   // verdict on that exact address; once a field changes it describes something
   // else, and offering its "correction" would overwrite what was just typed.
@@ -669,7 +701,9 @@ export function OrderCheckout({
           setQuoteError(
             err instanceof FulfillmentError && err.kind === "auth"
               ? "Please sign in again to see live pricing."
-              : (err instanceof Error && err.message) ||
+              : isNetworkError(err)
+                ? "We couldn't reach our servers to price this. Check your connection and try again."
+                : (err instanceof Error && err.message) ||
                   "We couldn't price this destination. Check the city, state and postal code.",
           );
         }
@@ -691,6 +725,7 @@ export function OrderCheckout({
     shipping,
     canQuote,
     pageCount,
+    quoteRetry,
   ]);
 
   function recipient(): Recipient {
@@ -757,9 +792,18 @@ export function OrderCheckout({
     alternative,
   ]);
 
+  // Checked as typed but only SHOWN once the field is left (or a saved address
+  // filled it), so nobody is told their number is too short while typing it.
+  const phoneError = phone.trim() ? phoneProblem(phone) : null;
+  const taxIdError = taxIdRequired ? taxIdProblem(destination, taxId) : null;
+  const phoneShown = formatTouched.phone || Boolean(selectedAddressId);
+  const taxIdShown = formatTouched.taxId;
+  const formatError = phoneError ? "Check the phone number." : taxIdError ? `Check the ${taxIdLabel}.` : null;
+
   const addressComplete = Boolean(
     name.trim() &&
       phone.trim() &&
+      !formatError &&
       line1.trim() &&
       city.trim() &&
       postal.trim() &&
@@ -797,7 +841,9 @@ export function OrderCheckout({
           ? `Choose a destination we currently ship to.`
           : regionUnrecognised
             ? "Choose a recognized state or province."
-            : !addressComplete
+            : formatError
+              ? formatError
+              : !addressComplete
               ? "Complete the required delivery address fields."
               : shippingChoices.length === 0
                 ? "Choose a destination with an available delivery method."
@@ -927,7 +973,7 @@ export function OrderCheckout({
         // The panels are the book's own trim plus its outer bleed; the spine is
         // whatever the provider's cover width leaves between them. Same split
         // the renderer draws to, so the artwork lands where the fold is cut.
-        const { panelWidthIn } = buildCoverPlan(project, pages, undefined, {
+        const { panelWidthIn, flapWidthIn } = buildCoverPlan(project, pages, undefined, {
           coverHeightIn: dims.heightMm / MM_PER_IN,
         });
         await renderBook({
@@ -943,6 +989,7 @@ export function OrderCheckout({
                 widthIn: dims.widthMm / MM_PER_IN,
                 heightIn: dims.heightMm / MM_PER_IN,
                 panelWidthIn,
+                ...(flapWidthIn > 0 ? { flapWidthIn } : {}),
               },
             },
           ],
@@ -1012,6 +1059,7 @@ export function OrderCheckout({
           !validation?.suggested || addressChoiceForSuggestion !== "unreviewed",
         addressChoice: recordedAddressChoice,
         couponCode: couponCode ?? undefined,
+        foilStamp: foilStamp ?? undefined,
       });
       if (runRef.current !== run) return;
       window.location.href = url;
@@ -1074,7 +1122,7 @@ export function OrderCheckout({
       <div className="fixed inset-x-4 bottom-4 z-30 rounded-2xl border border-ink-200 bg-white/95 p-2.5 shadow-lifted backdrop-blur lg:hidden">
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1 pl-1">
-            <p className="text-[11px] font-medium text-ink-500">Estimated total</p>
+            <p className="text-[11px] font-medium text-ink-500">{totalLabel(quote)}</p>
             <p className="truncate text-sm font-bold text-ink-900">
               {quote && quoteIsCurrent && !drawing.busy
                 ? money(String(totalDue), quoteCurrency)
@@ -1162,14 +1210,25 @@ export function OrderCheckout({
                 <VariantPicker
                   policy={variantPolicy}
                   value={variant}
-                  onChange={(next) =>
-                    setVariant(simplifiedPrintVariant(variantPolicy, next.finish) ?? defaultVariant)
-                  }
+                  onChange={chooseVariant}
                   currency={currency}
                   locale={locale}
                   pages={pageCount}
-                  visibleAxes={["finish"]}
+                  visibleAxes={CUSTOMER_VARIANT_AXES}
                 />
+
+                {variant.foil !== NO_OPTION && (
+                  <SpineStampFields
+                    value={spineLines}
+                    defaults={spineDefaults}
+                    foilLabel={variantOptionLabel("foil", variant.foil)}
+                    onChange={(next) =>
+                      setSpineEdit(
+                        next.title === spineDefaults.title && next.author === spineDefaults.author ? null : next,
+                      )
+                    }
+                  />
+                )}
 
                 <div>
                   <p className="text-[12px] font-semibold text-ink-800" id="copies-label">
@@ -1427,11 +1486,21 @@ export function OrderCheckout({
                       Add state / region (optional)
                     </button>
                   )}
-                  <Field label="Phone" required hint="For the carrier, if there's a delivery problem.">
+                  <Field
+                    label="Phone"
+                    required
+                    htmlFor="order-phone"
+                    hint="For the carrier, if there's a delivery problem."
+                    error={phoneShown ? (phoneError ?? undefined) : undefined}
+                  >
                     <Input
+                      id="order-phone"
                       type="tel"
                       value={phone}
                       onChange={(e) => editAddr(setPhone, e.target.value)}
+                      onBlur={() => setFormatTouched((t) => ({ ...t, phone: true }))}
+                      aria-invalid={phoneShown && phoneError ? true : undefined}
+                      aria-describedby={fieldMessageId("order-phone")}
                       autoComplete="shipping tel"
                     />
                   </Field>
@@ -1450,10 +1519,19 @@ export function OrderCheckout({
                     <Field
                       label={`Recipient ${taxIdLabel}`}
                       required
+                      htmlFor="order-tax-id"
                       className="sm:col-span-2"
                       hint="Customs in this country requires the recipient's tax number before a parcel can clear."
+                      error={taxIdShown ? (taxIdError ?? undefined) : undefined}
                     >
-                      <Input value={taxId} onChange={(e) => editAddr(setTaxId, e.target.value)} />
+                      <Input
+                        id="order-tax-id"
+                        value={taxId}
+                        onChange={(e) => editAddr(setTaxId, e.target.value)}
+                        onBlur={() => setFormatTouched((t) => ({ ...t, taxId: true }))}
+                        aria-invalid={taxIdShown && taxIdError ? true : undefined}
+                        aria-describedby={fieldMessageId("order-tax-id")}
+                      />
                     </Field>
                   )}
                 </form>
@@ -1576,8 +1654,18 @@ export function OrderCheckout({
                     {project.title || "Your storybook"}
                   </p>
                   <p className="mt-0.5 text-xs capitalize leading-relaxed text-ink-500">
-                    {bindingLabel} · {variantOptionLabel("finish", variant.finish)} cover
+                    {bindingLabel} · {variantOptionLabel("finish", variant.finish)}{" "}
+                    {variant.linen !== NO_OPTION ? "jacket" : "cover"}
+                    {variant.linen !== NO_OPTION &&
+                      ` · ${variantOptionLabel("linen", variant.linen)} linen · ${variantOptionLabel("foil", variant.foil)} foil`}
                   </p>
+                  {variant.foil !== NO_OPTION && (
+                    <p className="text-xs leading-relaxed text-ink-500">
+                      {foilStamp
+                        ? `Spine stamped: “${[foilStamp.title, foilStamp.author].filter(Boolean).join(" · ")}”`
+                        : "Plain spine — nothing stamped."}
+                    </p>
+                  )}
                   <p className="text-xs leading-relaxed text-ink-500">
                     {product.trim.widthIn}×{product.trim.heightIn}″ · {pageCount} printed pages
                   </p>
@@ -1586,13 +1674,20 @@ export function OrderCheckout({
 
               <div className="border-t border-ink-100 pt-4 text-sm">
                 {quoting ? (
-                  <div className="flex items-center gap-2 text-ink-500">
-                    <Loader2 className="size-4 animate-spin" /> Updating price…
+                  <div role="status" className="flex items-center gap-2 text-ink-500">
+                    <Loader2 className="size-4 animate-spin motion-reduce:animate-none" /> Updating price…
                   </div>
                 ) : quote ? (
-                  <QuoteLines quote={quote} discount={discount} total={totalDue} />
+                  <div aria-live="polite">
+                    <QuoteLines quote={quote} discount={discount} total={totalDue} />
+                  </div>
                 ) : quoteError ? (
-                  <p className="leading-relaxed text-rose-600">{quoteError}</p>
+                  <div role="alert" className="space-y-2">
+                    <p className="leading-relaxed text-rose-600">{quoteError}</p>
+                    <Button size="sm" variant="secondary" onClick={() => setQuoteRetry((n) => n + 1)}>
+                      Try again
+                    </Button>
+                  </div>
                 ) : (
                   <p className="leading-relaxed text-ink-500">
                     Complete the delivery address to see the total.
@@ -1794,9 +1889,16 @@ function QuoteLines({
       )}
       <Row label="Shipping" value={money(String(quote.shipping), currency)} />
       <div className="my-1 h-px bg-ink-100" />
-      <Row label="Estimated total" value={money(String(total), currency)} bold />
+      <Row label={totalLabel(quote)} value={money(String(total), currency)} bold />
+      {quote.taxBehavior !== "inclusive" && (
+        <p className="text-[11px] text-ink-400">Any sales tax is added at payment.</p>
+      )}
     </div>
   );
+}
+
+function totalLabel(quote: RetailPricePreview | null): string {
+  return quote?.taxBehavior === "inclusive" ? "Estimated total (incl. tax)" : "Estimated total (before tax)";
 }
 
 function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {

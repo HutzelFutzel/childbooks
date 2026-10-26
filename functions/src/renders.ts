@@ -319,7 +319,7 @@ export type DocumentRequest =
       kind: "cover";
       sku?: string;
       padToPages?: number;
-      cover: { widthIn: number; heightIn: number; panelWidthIn: number };
+      cover: { widthIn: number; heightIn: number; panelWidthIn: number; flapWidthIn?: number };
     };
 
 /**
@@ -463,7 +463,7 @@ async function assembleInterior(
 async function assembleCover(
   uid: string,
   fingerprint: string,
-  opts: { widthIn: number; heightIn: number; panelWidthIn: number },
+  opts: { widthIn: number; heightIn: number; panelWidthIn: number; flapWidthIn?: number },
 ): Promise<string> {
   const rasters = await loadRasters(uid, fingerprint);
   const find = (role: RasterRole) => rasters.find((r) => r.role === role);

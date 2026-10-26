@@ -15,7 +15,7 @@
  */
 import { MapPin, TriangleAlert } from "lucide-react";
 import { subdivisionsFor } from "../../core/config/subdivisions";
-import type { AddressValidation, SuggestedAddress } from "../../core/fulfillment/types";
+import type { AddressValidation, AddressWarning, SuggestedAddress } from "../../core/fulfillment/types";
 import { Button } from "../components/Button";
 
 /** The form's current address, in the shape the comparison needs. */
@@ -86,6 +86,31 @@ export function suggestionKey(validation: AddressValidation | null): string {
   return JSON.stringify(validation.suggested);
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  street1: "Street",
+  street2: "Apartment or unit",
+  city: "City",
+  state_code: "State or region",
+  postcode: "Postal code",
+  country_code: "Country",
+};
+
+/**
+ * A carrier remark in the customer's words. They arrive as
+ * "street1: Holstenstr. 40 -> Holstenstraße 40" — field codes and arrows meant
+ * for an operator. Anything we can't read is summarised rather than shown raw.
+ */
+export function friendlyAddressWarnings(warnings: AddressWarning[], mode: "changed" | "invalid"): string[] {
+  const lines = warnings.map((w) => {
+    const label = w.field ? FIELD_LABELS[w.field.toLowerCase()] : undefined;
+    if (!label) return mode === "invalid" ? "Part of this address couldn't be matched." : "Part of this address was reformatted.";
+    if (mode === "invalid") return `Check the ${label.toLowerCase()}.`;
+    const to = w.message.includes("->") ? w.message.slice(w.message.lastIndexOf("->") + 2).trim() : "";
+    return to ? `${label} will be printed as “${to}”.` : `${label} was reformatted.`;
+  });
+  return [...new Set(lines)];
+}
+
 export function AddressSuggestion({
   validation,
   entered,
@@ -117,9 +142,9 @@ export function AddressSuggestion({
         </p>
         {warnings.length > 0 && (
           <ul className="mt-1.5 space-y-0.5 pl-5 text-xs text-rose-800">
-            {warnings.map((w, i) => (
-              <li key={i} className="list-disc">
-                {w.message}
+            {friendlyAddressWarnings(warnings, "invalid").map((line) => (
+              <li key={line} className="list-disc">
+                {line}
               </li>
             ))}
           </ul>
@@ -138,9 +163,9 @@ export function AddressSuggestion({
           <MapPin className="size-3.5" /> The carrier adjusted your address slightly
         </p>
         <ul className="mt-1 space-y-0.5 pl-5">
-          {warnings.map((w, i) => (
-            <li key={i} className="list-disc">
-              {w.message}
+          {friendlyAddressWarnings(warnings, "changed").map((line) => (
+            <li key={line} className="list-disc">
+              {line}
             </li>
           ))}
         </ul>

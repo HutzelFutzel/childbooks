@@ -59,6 +59,34 @@ export class FulfillmentError extends Error {
   }
 }
 
+/** A recipient detail the customer can correct, when the printer refused it. */
+export type CustomerFixableField = "phone" | "taxId" | "email" | "address";
+
+/** How to name each fixable field to the customer. */
+export const CUSTOMER_FIX_LABEL: Record<CustomerFixableField, string> = {
+  phone: "phone number",
+  taxId: "tax id",
+  email: "email address",
+  address: "shipping address",
+};
+
+/**
+ * Which recipient detail a provider rejection is about, when it's one only the
+ * customer can supply. Lulu answers a bad field with a 400 whose body names it
+ * (`{"shipping_address": {"phone_number": ["…"]}}`), so the field names are
+ * matched in the response — the most specific first, since every one of them
+ * sits under `shipping_address`.
+ */
+export function customerFixableDetail(err: unknown): CustomerFixableField | null {
+  if (!(err instanceof FulfillmentError) || err.kind !== "validation") return null;
+  const text = `${err.message} ${err.details ?? ""}`.toLowerCase();
+  if (/phone/.test(text)) return "phone";
+  if (/tax_id|\b(cpf|cnpj|rut|rfc)\b/.test(text)) return "taxId";
+  if (/e-?mail/.test(text)) return "email";
+  if (/street1|street2|postcode|postal|\bcity\b|state_code|country_code|shipping_address/.test(text)) return "address";
+  return null;
+}
+
 /** Map an HTTP status code to a fulfillment error kind. */
 export function fulfillmentKindFromStatus(status: number): FulfillmentErrorKind {
   if (status === 401 || status === 403) return "auth";

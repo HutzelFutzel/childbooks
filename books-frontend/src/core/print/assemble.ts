@@ -10,7 +10,17 @@
  * Pure, DOM-free and isomorphic (pdf-lib runs in the browser and on Node), so
  * the backend can assemble exactly what the browser would have.
  */
-import { PDFDocument, rgb, type PDFImage } from "pdf-lib";
+import {
+  PDFDocument,
+  clip,
+  endPath,
+  popGraphicsState,
+  pushGraphicsState,
+  rectangle,
+  rgb,
+  type PDFImage,
+  type PDFPage,
+} from "pdf-lib";
 import { PT_PER_IN } from "./geometry";
 
 /** A rasterized page, ready to be placed. */
@@ -130,17 +140,25 @@ export interface CoverOptions {
   heightIn: number;
   /** Panel width (trim + outer bleed), in inches. */
   panelWidthIn: number;
+  /**
+   * Dust-jacket flap allowance outside each panel, in inches (0 or absent for
+   * every cover that isn't a jacket). Each flap carries its panel's artwork
+   * mirrored over the fold; a missing back panel leaves its flap the fill.
+   */
+  flapWidthIn?: number;
   /** Fallback fill behind everything, as an RGB triple in 0..1. */
   background?: { r: number; g: number; b: number };
 }
 
 /**
  * The wraparound cover: `[back][spine][front]` on one page sized to the
- * provider's own cover dimensions.
+ * provider's own cover dimensions — `[flap][back][spine][front][flap]` for a
+ * dust jacket.
  *
- * Panels are pinned to the OUTER edges and the spine is centred in whatever is
- * left, so the seams land where the provider expects them however the spine
- * width came out for this page count and binding.
+ * Panels are pinned to the OUTER edges (inside the flaps, when there are any)
+ * and the spine is centred in whatever is left, so the seams land where the
+ * provider expects them however the spine width came out for this page count
+ * and binding.
  */
 export async function buildCoverPdf(
   panels: CoverPanels,
@@ -151,14 +169,17 @@ export async function buildCoverPdf(
   const height = opts.heightIn * PT_PER_IN;
   const page = doc.addPage([width, height]);
   const panelWidth = opts.panelWidthIn * PT_PER_IN;
+  const flapWidth = Math.max(0, opts.flapWidthIn ?? 0) * PT_PER_IN;
 
   const bg = opts.background;
   if (bg) {
     page.drawRectangle({ x: 0, y: 0, width, height, color: rgb(bg.r, bg.g, bg.b) });
   }
 
-  const spineX = panelWidth;
-  const spineWidth = Math.max(0, width - panelWidth * 2);
+  const backX = flapWidth;
+  const frontX = width - flapWidth - panelWidth;
+  const spineX = backX + panelWidth;
+  const spineWidth = Math.max(0, frontX - spineX);
 
   if (panels.spine && spineWidth > 0) {
     const image = await embed(doc, panels.spine);
@@ -166,10 +187,42 @@ export async function buildCoverPdf(
   }
   if (panels.back) {
     const image = await embed(doc, panels.back);
-    page.drawImage(image, { x: 0, y: 0, width: panelWidth, height });
+    page.drawImage(image, { x: backX, y: 0, width: panelWidth, height });
+    if (flapWidth > 0) mirrorOntoFlap(page, image, { foldX: backX, flapX: 0, flapWidth, panelWidth, height });
   }
   const front = await embed(doc, panels.front);
-  page.drawImage(front, { x: width - panelWidth, y: 0, width: panelWidth, height });
+  page.drawImage(front, { x: frontX, y: 0, width: panelWidth, height });
+  if (flapWidth > 0) {
+    mirrorOntoFlap(page, front, { foldX: frontX + panelWidth, flapX: frontX + panelWidth, flapWidth, panelWidth, height });
+  }
 
   return doc.save();
+}
+
+/**
+ * Carry a panel's artwork over the fold onto its jacket flap: the panel
+ * reflected about the fold line, clipped to the flap. A reflection is the one
+ * extension that meets the panel without a seam at the fold, whatever the art.
+ */
+function mirrorOntoFlap(
+  page: PDFPage,
+  image: PDFImage,
+  at: { foldX: number; flapX: number; flapWidth: number; panelWidth: number; height: number },
+): void {
+  const awayFromPanel = at.flapX >= at.foldX;
+  page.pushOperators(
+    pushGraphicsState(),
+    rectangle(at.flapX, 0, at.flapWidth, at.height),
+    clip(),
+    endPath(),
+  );
+  // A negative width flips the image about its x; placed at the fold ± one
+  // panel width, the panel's fold-side edge lands on the fold.
+  page.drawImage(image, {
+    x: awayFromPanel ? at.foldX + at.panelWidth : at.foldX,
+    y: 0,
+    width: -at.panelWidth,
+    height: at.height,
+  });
+  page.pushOperators(popGraphicsState());
 }

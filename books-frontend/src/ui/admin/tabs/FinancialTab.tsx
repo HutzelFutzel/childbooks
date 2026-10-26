@@ -11,6 +11,11 @@ import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
 import { Grid, NumberField, Section, TabIntro } from "./products/parts";
 import { AdminSaveBar } from "../AdminPageHeader";
+import { maxTargetMargin } from "../../../core/config/targetMargin";
+import { BINDINGS, type Binding } from "../../../core/fulfillment/types";
+import { bindingNoun } from "../../../core/fulfillment/lulu/products";
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
  * Financial settings — the money plumbing shared by EVERY product and plan:
@@ -68,6 +73,21 @@ export function FinancialTab() {
     set({ currencies: draft.currencies.filter((x) => x !== c) });
   };
 
+  const setBindingMargin = (binding: Binding, raw: string) => {
+    const byBinding = { ...draft.targetMargins.byBinding };
+    if (raw.trim() === "") delete byBinding[binding];
+    else byBinding[binding] = Number(raw);
+    set({ targetMargins: { ...draft.targetMargins, byBinding } });
+  };
+
+  const marginCap = maxTargetMargin(draft);
+  const overCap = [
+    ...(draft.targetMargins.defaultPct > marginCap ? ["Default"] : []),
+    ...BINDINGS.filter((b) => (draft.targetMargins.byBinding[b] ?? 0) > marginCap).map((b) =>
+      capitalize(bindingNoun(b)),
+    ),
+  ];
+
   const onSave = async () => {
     setSaving(true);
     try {
@@ -113,6 +133,63 @@ export function FinancialTab() {
             Add
           </Button>
         </div>
+      </Section>
+
+      <Section
+        title="Print margins"
+        hint="The margin every print book's prices are set to, after the printer's cost, processor fees and the assumed tax. One default for the catalog; give a binding its own figure only where it should differ. Changing these doesn't touch any price by itself — products that are now off target are flagged in Catalog, and “Reprice to target margins” there previews and applies the new prices."
+      >
+        <Grid cols={3}>
+          <NumberField
+            label="Default target margin"
+            value={draft.targetMargins.defaultPct}
+            step="1"
+            suffix="%"
+            hint={`At most ${marginCap}% with these fees and tax rates.`}
+            onChange={(n) => set({ targetMargins: { ...draft.targetMargins, defaultPct: n } })}
+          />
+        </Grid>
+        <Grid cols={3}>
+          {BINDINGS.map((b) => {
+            const override = draft.targetMargins.byBinding[b];
+            return (
+              <Field key={b} label={capitalize(bindingNoun(b))} hint="Empty uses the default.">
+                <div className="relative">
+                  <Input
+                    type="number"
+                    min={0}
+                    step="1"
+                    value={override == null ? "" : String(override)}
+                    placeholder={String(draft.targetMargins.defaultPct)}
+                    onChange={(e) => setBindingMargin(b, e.target.value)}
+                    className="pr-10"
+                  />
+                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-ink-400">
+                    %
+                  </span>
+                </div>
+              </Field>
+            );
+          })}
+        </Grid>
+        {overCap.length > 0 && (
+          <p className="text-[11px] text-red-600">
+            {overCap.join(", ")} above {marginCap}% can&apos;t be reached in every currency; repricing will leave those
+            products as they are.
+          </p>
+        )}
+        <p className="text-[11px] text-ink-400">
+          Related: the sale floor and planned max discount are below, the exchange-rate buffer is under Currencies, the
+          shipping markup is in{" "}
+          <button type="button" onClick={() => setConfigTab("markets")} className="font-semibold text-brand-700 underline">
+            Markets
+          </button>
+          , and plan print discounts are in{" "}
+          <button type="button" onClick={() => setConfigTab("memberships")} className="font-semibold text-brand-700 underline">
+            Memberships
+          </button>
+          . Checkout never lets a discount go below break-even.
+        </p>
       </Section>
 
       <Section

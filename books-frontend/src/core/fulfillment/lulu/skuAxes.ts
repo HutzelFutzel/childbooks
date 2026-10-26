@@ -14,8 +14,12 @@
  * sweep). What that sweep found, most recently across all 288 combinations of the
  * three children's-book trims: no saddle stitch at 11×8.5" at all, no colour ink
  * on cream paper anywhere, and no standard colour on saddle stitch — 212
- * sellable. Sandbox and live agreed exactly. Linen wrap was rejected in every
- * combination, so it isn't offered here.
+ * sellable. Sandbox and live agreed exactly.
+ *
+ * Linen wrap is the one binding whose last two fields aren't `XX`: a cloth-bound
+ * book must name its linen and foil colour, and `…LW080CW444GXX` doesn't exist.
+ * Measured with real colours, it exists only at 8.5×11" of our trims — all six
+ * linens × three foils × both jacket finishes, 24–800 pages, sandbox and live.
  *
  * Sweep the CROSS PRODUCT, not one axis at a time. Holding the other fields at a
  * known-good colour hardcover is how cream paper was written off as nonexistent:
@@ -27,6 +31,9 @@
 import { optionMediaKey } from "../../config/catalogMedia";
 import {
   COVER_FINISHES,
+  FOIL_COLOURS,
+  LINEN_COLOURS,
+  NO_OPTION,
   PAPER_STOCKS,
   variantMediaKey,
   type VariantAxisId,
@@ -58,6 +65,25 @@ export const PAPER_CODES: Record<string, string> = {
 
 export const FINISH_CODES: Record<string, string> = { gloss: "G", matte: "M" };
 
+/** Lulu's linen letters; `X` is every format that isn't cloth-bound. */
+export const LINEN_CODES: Record<string, string> = {
+  [NO_OPTION]: "X",
+  navy: "N",
+  black: "B",
+  gray: "G",
+  red: "R",
+  tan: "T",
+  forest: "F",
+};
+
+/** Lulu's foil letters for the stamped linen spine. */
+export const FOIL_CODES: Record<string, string> = {
+  [NO_OPTION]: "X",
+  gold: "G",
+  white: "W",
+  black: "B",
+};
+
 export const BINDING_CODES: Record<Binding, string> = {
   "saddle-stitch": "SS",
   "perfect-bound": "PB",
@@ -70,15 +96,13 @@ function invert(map: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(map).map(([value, code]) => [code, value]));
 }
 
-/**
- * The catalog binding a code maps to, for keeping `spec.binding` in step.
- * Includes linen wrap even though the builder no longer offers it, so a SKU
- * pasted in by hand still maps to the right spec.
- */
+/** The catalog binding a code maps to, for keeping `spec.binding` in step. */
 export const BINDING_BY_CODE: Record<string, string> = invert(BINDING_CODES);
 
 const PAPER_BY_CODE = invert(PAPER_CODES);
 const FINISH_BY_CODE = invert(FINISH_CODES);
+const LINEN_BY_CODE = invert(LINEN_CODES);
+const FOIL_BY_CODE = invert(FOIL_CODES);
 
 /** Print tier for an ink+quality pair, or undefined for a pair we don't offer. */
 function printTierFor(ink: string, quality: string): string | undefined {
@@ -127,7 +151,8 @@ function variantAxisOptions(
       code: codes[o.value],
       label: o.label,
       hint: o.hint,
-      mediaKey: variantMediaKey(axis, o.value),
+      // "No linen" is the absence of a material; there's nothing to photograph.
+      mediaKey: o.value === NO_OPTION ? undefined : variantMediaKey(axis, o.value),
     }));
 }
 
@@ -195,6 +220,12 @@ export const SKU_AXES: SkuAxis[] = [
         hint: "A spiral through punched holes, so the book lies completely flat. Suits workbooks; doesn't look like a trade book.",
         mediaKey: optionMediaKey("binding", "coil-bound"),
       },
+      {
+        code: "LW",
+        label: "Linen wrap hardcover",
+        hint: "Cloth-covered boards with the title foil-stamped on the spine, under a printed dust jacket. Needs a linen and a foil color (not X).",
+        mediaKey: optionMediaKey("binding", "linen-wrap"),
+      },
     ],
   },
   { id: "paper", label: "Paper", width: 8, options: variantAxisOptions("paper", PAPER_CODES, PAPER_STOCKS) },
@@ -204,22 +235,10 @@ export const SKU_AXES: SkuAxis[] = [
     width: 1,
     options: variantAxisOptions("finish", FINISH_CODES, COVER_FINISHES),
   },
-  // Linen and foil describe how a CLOTH case is decorated, and the linen-wrap
-  // binding isn't offered here — every combination of these two with LW was
-  // rejected. They stay as fixed fields because the encoding reserves their two
-  // positions; with a single option each, the builder doesn't render them.
-  {
-    id: "linen",
-    label: "Linen",
-    width: 1,
-    options: [{ code: "X", label: "None" }],
-  },
-  {
-    id: "foil",
-    label: "Foil stamping",
-    width: 1,
-    options: [{ code: "X", label: "None" }],
-  },
+  // Linen and foil describe how a CLOTH case is decorated: `X` on every other
+  // binding, a colour on linen wrap (where `X` is rejected).
+  { id: "linen", label: "Linen", width: 1, options: variantAxisOptions("linen", LINEN_CODES, LINEN_COLOURS) },
+  { id: "foil", label: "Foil stamping", width: 1, options: variantAxisOptions("foil", FOIL_CODES, FOIL_COLOURS) },
 ];
 
 export type SkuParts = Record<SkuAxisId, string>;
@@ -290,8 +309,10 @@ export function skuPartsForVariant(selection: VariantSelection): Partial<SkuPart
   const print = PRINT_TIER_CODES[selection.print];
   const paper = PAPER_CODES[selection.paper];
   const finish = FINISH_CODES[selection.finish];
-  if (!print || !paper || !finish) return null;
-  return { ink: print.ink, quality: print.quality, paper, finish };
+  const linen = LINEN_CODES[selection.linen ?? NO_OPTION];
+  const foil = FOIL_CODES[selection.foil ?? NO_OPTION];
+  if (!print || !paper || !finish || !linen || !foil) return null;
+  return { ink: print.ink, quality: print.quality, paper, finish, linen, foil };
 }
 
 /**
@@ -314,8 +335,10 @@ export function variantFromSku(sku: string): VariantSelection | null {
   const print = printTierFor(parts.ink, parts.quality);
   const paper = PAPER_BY_CODE[parts.paper];
   const finish = FINISH_BY_CODE[parts.finish];
-  if (!print || !paper || !finish) return null;
-  return { print, paper, finish };
+  const linen = LINEN_BY_CODE[parts.linen];
+  const foil = FOIL_BY_CODE[parts.foil];
+  if (!print || !paper || !finish || !linen || !foil) return null;
+  return { print, paper, finish, linen, foil };
 }
 
 /**
@@ -326,6 +349,12 @@ export function sameFormat(a: string, b: string): boolean {
   const pa = parseSku(a);
   const pb = parseSku(b);
   return pa != null && pb != null && pa.trim === pb.trim && pa.binding === pb.binding;
+}
+
+/** The binding a SKU's two binding letters name, when it's one we sell. */
+export function bindingOfSku(sku: string): Binding | undefined {
+  const parts = parseSku(sku);
+  return parts ? (BINDING_BY_CODE[parts.binding] as Binding | undefined) : undefined;
 }
 
 /** Print tier for the ink+quality a SKU encodes (used to label a format). */

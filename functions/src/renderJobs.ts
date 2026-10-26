@@ -428,10 +428,12 @@ function parseDocuments(input: unknown): DocumentRequest[] {
       out.push({ kind: "interior", padToPages: Math.max(1, Math.floor(Number(d.padToPages) || 0)) });
     } else if (d?.kind === "cover") {
       const c = (d.cover ?? {}) as Record<string, unknown>;
+      const flapWidthIn = Number(c.flapWidthIn);
       const cover = {
         widthIn: Number(c.widthIn),
         heightIn: Number(c.heightIn),
         panelWidthIn: Number(c.panelWidthIn),
+        ...(Number.isFinite(flapWidthIn) && flapWidthIn > 0 ? { flapWidthIn } : {}),
       };
       if (!Number.isFinite(cover.widthIn) || !Number.isFinite(cover.heightIn)) continue;
       out.push({

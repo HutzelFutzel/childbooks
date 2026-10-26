@@ -1,10 +1,12 @@
 "use client";
 
+import { optionMediaKey, primaryPhotoFor } from "../../core/config/catalogMedia";
 import { pickTier } from "../../core/config/productMath";
 import type { PublicProduct } from "../../core/config/products";
 import { bindingBlurb, bindingNoun, type BookProduct } from "../../core/fulfillment";
 import { formatMoneyDelta } from "../../core/i18n/format";
 import { limitsOf, planPageCount, type PageCountPlan } from "../../core/print/pageCountPlan";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { cn } from "../lib/cn";
 
 /**
@@ -44,8 +46,12 @@ export function FormatPicker({
   locale?: string;
   className?: string;
 }) {
+  const media = useAppConfigStore((s) => s.catalogMedia);
   const rows = formats
-    .map((format) => describe(format, catalog.get(format.sku), contentPages, currency))
+    .map((format) => ({
+      ...describe(format, catalog.get(format.sku), contentPages, currency),
+      photo: primaryPhotoFor(media, optionMediaKey("binding", format.binding)),
+    }))
     .sort((a, b) => Number(b.fits) - Number(a.fits) || a.sortOrder - b.sortOrder);
 
   // Nothing to choose between — the product summary already names the format.
@@ -84,6 +90,12 @@ export function FormatPicker({
                     : "cursor-not-allowed bg-ink-50 opacity-60 ring-ink-100",
               )}
             >
+              {row.photo && (
+                <span className="mb-1 block aspect-[4/3] w-full overflow-hidden rounded-md bg-ink-100 ring-1 ring-inset ring-ink-200">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={row.photo.imageUrl} alt={row.photo.alt || row.label} className="size-full object-cover" />
+                </span>
+              )}
               <span className="flex items-baseline justify-between gap-2">
                 <span className="text-[12px] font-medium capitalize text-ink-800">{row.label}</span>
                 {row.fits && delta != null && Math.abs(delta) >= 0.005 && (

@@ -23,6 +23,7 @@ export const EMAIL_TEMPLATE_IDS = [
   "order_confirmation",
   "order_shipped",
   "order_failed",
+  "order_cancelled",
   "subscription_started",
   "subscription_cancelled",
   "sparks_purchased",
@@ -119,7 +120,10 @@ export interface EmailTemplateVarsMap {
   welcome: { name?: string; verifyUrl?: string };
   order_confirmation: { name?: string; orderRef: string; itemLabel: string; orderUrl?: string };
   order_shipped: { name?: string; orderRef: string; carrier?: string; trackingUrl?: string };
-  order_failed: { name?: string; orderRef: string };
+  /** `fix` names the detail the printer refused ("phone number") when only the customer can correct it. */
+  order_failed: { name?: string; orderRef: string; fix?: string };
+  /** The order was canceled; `amount` is the formatted refund when one was issued. */
+  order_cancelled: { name?: string; orderRef: string; refunded: boolean; amount?: string };
   subscription_started: { name?: string; planName: string; sparks?: number; manageUrl?: string };
   subscription_cancelled: { name?: string; planName: string; endDate?: string };
   sparks_purchased: { name?: string; sparks: number; balance?: number };

@@ -20,6 +20,7 @@ import {
   useAdminOrders,
   type OrderAction,
   type OrderDetail,
+  type OrderRecipientView,
   type PrinterConnection,
   type PrintPrepOverview,
 } from "../../../state/adminOrdersStore";
@@ -1060,12 +1061,17 @@ function OrderDetailView({ detail }: { detail: OrderDetail }) {
   const busy = useAdminOrders((s) => s.busyAction);
   const actionError = useAdminOrders((s) => s.actionError);
   const notice = useAdminOrders((s) => s.notice);
-  const [confirm, setConfirm] = useState<"cancel" | "replace" | null>(null);
+  const [confirm, setConfirm] = useState<"cancel" | "replace" | "cancel-and-refund" | null>(null);
   const [ackNote, setAckNote] = useState("");
+  const [refundReason, setRefundReason] = useState("");
+  const [editingRecipient, setEditingRecipient] = useState(false);
 
   const live = Boolean(r.currentJobId) && providerJobIsLive(r.luluStatus);
   const canRetry = !r.currentJobId && payment?.status !== "refunded" && (r.state === "paid" || r.state === "retrying" || r.state === "failed" || r.state === "placing");
   const canReplace = Boolean(r.currentJobId) && !live && payment?.status !== "refunded";
+  const canRefund =
+    (payment?.status === "paid" || payment?.status === "partially_refunded") && r.state !== "shipped";
+  const canCorrect = !live && payment?.status !== "refunded" && Boolean(payment?.recipient) && r.state !== "shipped";
   const run = (a: OrderAction, body?: Record<string, unknown>) => void act(r.key, a, body);
 
   return (
@@ -1121,6 +1127,21 @@ function OrderDetailView({ detail }: { detail: OrderDetail }) {
             Cancel at printer
           </Button>
         )}
+        {canRefund && (
+          <Button
+            size="sm"
+            variant="danger"
+            loading={busy === "cancel-and-refund"}
+            onClick={() => setConfirm("cancel-and-refund")}
+          >
+            Cancel &amp; refund
+          </Button>
+        )}
+        {canCorrect && !editingRecipient && (
+          <Button size="sm" variant="secondary" onClick={() => setEditingRecipient(true)}>
+            Correct recipient
+          </Button>
+        )}
         {(["confirmation", "shipped", "failed"] as const).map((kind) => (
           <Button
             key={kind}
@@ -1133,6 +1154,16 @@ function OrderDetailView({ detail }: { detail: OrderDetail }) {
           </Button>
         ))}
       </div>
+      {editingRecipient && payment?.recipient && (
+        <RecipientCorrectionForm
+          recipient={payment.recipient}
+          busy={busy === "recipient"}
+          onCancel={() => setEditingRecipient(false)}
+          onSubmit={async (fix) => {
+            if (await act(r.key, "recipient", fix)) setEditingRecipient(false);
+          }}
+        />
+      )}
       {actionError && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{actionError}</p>}
       {notice && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{notice}</p>}
 
@@ -1245,6 +1276,110 @@ function OrderDetailView({ detail }: { detail: OrderDetail }) {
         The current job is dead ({r.luluStatus ?? "no status"}), so a fresh one will be sent with the same files and address. The
         customer is not charged again.
       </ConfirmModal>
+      <ConfirmModal
+        open={confirm === "cancel-and-refund"}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => {
+          setConfirm(null);
+          run("cancel-and-refund", { reason: refundReason });
+          setRefundReason("");
+        }}
+        title="Cancel and refund this order?"
+        confirmLabel="Cancel & refund"
+        danger
+      >
+        <span className="block">
+          {live
+            ? "The print job is canceled at the printer first; if the printer refuses (production started), nothing is refunded."
+            : "No print job is active, so nothing is canceled at the printer."}{" "}
+          Then the rest of the payment
+          {payment ? ` (${fmtMoney(payment.amount - payment.refundedAmount, payment.currency)})` : ""} is refunded and the
+          customer gets a cancellation email. This can&apos;t be undone.
+        </span>
+        <input
+          value={refundReason}
+          onChange={(e) => setRefundReason(e.target.value)}
+          placeholder="Reason (for the timeline, optional)"
+          className="mt-3 h-9 w-full rounded-lg bg-white px-3 text-sm ring-1 ring-inset ring-ink-200 focus:outline-none focus:ring-2 focus:ring-brand-400"
+        />
+      </ConfirmModal>
+    </div>
+  );
+}
+
+const RECIPIENT_FIELDS = [
+  { key: "phoneNumber", label: "Phone" },
+  { key: "email", label: "Email" },
+  { key: "taxId", label: "Tax id (CPF / RUT / RFC)" },
+  { key: "name", label: "Name" },
+  { key: "line1", label: "Street" },
+  { key: "line2", label: "Apt / unit" },
+  { key: "townOrCity", label: "City" },
+  { key: "stateOrCounty", label: "State / region" },
+  { key: "postalOrZipCode", label: "Postal code" },
+] as const;
+
+type RecipientFix = Partial<Record<(typeof RECIPIENT_FIELDS)[number]["key"], string>>;
+
+function recipientValues(r: OrderRecipientView): Required<RecipientFix> {
+  return {
+    phoneNumber: r.phoneNumber ?? "",
+    email: r.email ?? "",
+    taxId: r.address.taxId ?? "",
+    name: r.name,
+    line1: r.address.line1,
+    line2: r.address.line2 ?? "",
+    townOrCity: r.address.townOrCity,
+    stateOrCounty: r.address.stateOrCounty ?? "",
+    postalOrZipCode: r.address.postalOrZipCode,
+  };
+}
+
+/** Edit what the printer refused, from the customer's reply. Only changed fields are sent. */
+function RecipientCorrectionForm({
+  recipient,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  recipient: OrderRecipientView;
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (fix: RecipientFix) => void;
+}) {
+  const initial = useMemo(() => recipientValues(recipient), [recipient]);
+  const [values, setValues] = useState(initial);
+  const changed = Object.fromEntries(
+    Object.entries(values).filter(([k, v]) => v !== initial[k as keyof RecipientFix]),
+  ) as RecipientFix;
+  const hasChanges = Object.keys(changed).length > 0;
+  return (
+    <div className="rounded-xl bg-ink-50 p-4 ring-1 ring-ink-100">
+      <p className="text-sm font-semibold text-ink-800">Correct recipient</p>
+      <p className="mt-0.5 text-xs text-ink-500">
+        Ships to {countryLabel(recipient.address.countryCode)} (the country can&apos;t change — it priced the order). Saving
+        places the order again with the corrected details.
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {RECIPIENT_FIELDS.map((f) => (
+          <label key={f.key} className="text-xs text-ink-500">
+            {f.label}
+            <input
+              value={values[f.key]}
+              onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+              className="mt-0.5 h-9 w-full rounded-lg bg-white px-3 text-sm text-ink-800 ring-1 ring-inset ring-ink-200 focus:outline-none focus:ring-2 focus:ring-brand-400"
+            />
+          </label>
+        ))}
+      </div>
+      <div className="mt-3 flex gap-2">
+        <Button size="sm" disabled={!hasChanges} loading={busy} onClick={() => onSubmit(changed)}>
+          Save and place again
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }

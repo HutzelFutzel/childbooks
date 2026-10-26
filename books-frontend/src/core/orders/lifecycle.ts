@@ -72,6 +72,7 @@ export type AttentionReason =
   | "not_placed"
   | "placement_failed"
   | "rejected"
+  | "cancelled_unrefunded"
   | "refunded_active"
   | "provider_unpaid"
   | "on_hold"
@@ -83,6 +84,7 @@ export const ATTENTION_REASON_LABEL: Record<AttentionReason, string> = {
   not_placed: "Paid but not sent to the printer",
   placement_failed: "Printer placement failed",
   rejected: "Printer rejected the job",
+  cancelled_unrefunded: "Canceled but the customer wasn't refunded",
   refunded_active: "Refunded but the print job is still active",
   provider_unpaid: "Printer is waiting for our payment",
   on_hold: "Printer is holding the job",
@@ -97,6 +99,8 @@ export const ATTENTION_REASON_ACTION: Record<AttentionReason, string> = {
   not_placed: "Open the order and retry placement. If it keeps failing, check the printer connection and the error below.",
   placement_failed: "Retries are exhausted. Fix the cause (see the error), then retry placement — or refund the customer.",
   rejected: "The printer will not make this book. Check the rejection reason: re-place it, or refund the customer.",
+  cancelled_unrefunded:
+    "The job was canceled (by us or by the printer) and no book is coming. Replace it, or use \"Cancel & refund\" to refund and email the customer.",
   refunded_active: "Cancel the job at the printer before production starts, or you pay for a book nobody will receive.",
   provider_unpaid: "The printer is not producing until its invoice is paid. Check the payment method on the printer account.",
   on_hold: "Open the job at the printer — it is usually waiting for an address confirmation or a file fix.",
@@ -183,6 +187,8 @@ export interface PrintOrderEmails {
   confirmationAt: number | null;
   shippedAt: number | null;
   failedAt: number | null;
+  /** Absent on records from before cancellation emails existed. */
+  cancelledAt?: number | null;
   lastError: string | null;
 }
 
@@ -476,6 +482,13 @@ function firstReason(
   }
   if (r.state === "rejected") {
     return { reason: "rejected", detail: `The printer rejected the job and it is not being re-placed.${error}` };
+  }
+  // Terminal at the printer, but the customer has paid for a book that isn't coming.
+  if (r.state === "cancelled" && r.paymentStatus !== "refunded") {
+    return {
+      reason: "cancelled_unrefunded",
+      detail: `The print job is canceled and the payment is ${r.paymentStatus ?? "not refunded"}.`,
+    };
   }
 
   if (r.state === "preparing_files" && r.printPrep) {

@@ -16,7 +16,7 @@ import {
   type ProductsConfig,
   type SkuVerification,
 } from "../../books-frontend/src/core/config/products";
-import { costVariantKey, enumerateVariants } from "../../books-frontend/src/core/config/variants";
+import { enumerateVariants, NO_OPTION, variantKey } from "../../books-frontend/src/core/config/variants";
 import { skuForVariant } from "../../books-frontend/src/core/fulfillment/lulu/skuAxes";
 import type { FulfillmentEnv } from "../../books-frontend/src/core/settings";
 import { mapLimit } from "./concurrency";
@@ -51,19 +51,24 @@ export async function verifyProduct(
   // customer can pick any of them, and the page range is a property of the paper
   // (thickness) as much as the binding: a variant that prints fewer pages than
   // the product's range would pass checkout and fail at the bindery. Finish is
-  // skipped — a cover coating doesn't change what can be bound.
+  // skipped — a cover coating doesn't change what can be bound. Linen and foil
+  // are not: each cloth × foil pair is its own package id, and one Lulu stops
+  // stocking fails only the books bound in it.
   const targets: { sku: string; label: string }[] = [{ sku: product.provider.sku, label: "" }];
   const seen = new Set<string>([product.provider.sku]);
   const perCost = new Map<string, ReturnType<typeof enumerateVariants>[number]>();
   for (const variant of enumerateVariants(product.variants)) {
-    const key = costVariantKey(variant);
+    const key = variantKey({ ...variant, finish: "" });
     if (!perCost.has(key)) perCost.set(key, variant);
   }
-  for (const [key, variant] of perCost) {
+  for (const variant of perCost.values()) {
     const sku = skuForVariant(product.provider.sku, variant);
     if (!sku || seen.has(sku)) continue;
     seen.add(sku);
-    targets.push({ sku, label: key });
+    const label = [variant.print, variant.paper, variant.linen, variant.foil]
+      .filter((v) => v && v !== NO_OPTION)
+      .join("/");
+    targets.push({ sku, label });
   }
 
   for (const target of targets) {

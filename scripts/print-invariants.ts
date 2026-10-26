@@ -20,6 +20,7 @@ import {
 import {
   coverExtensionFromHeight,
   coverPanelWindow,
+  coverSpineWidthIn,
   pageGeometry,
   splitBleedPixels,
   spreadLeaves,
@@ -60,9 +61,11 @@ import { bindingSideFor } from "../books-frontend/src/core/book/pageLayout";
 import {
   computePageGuides,
   computeSpineBrandLayout,
+  coverFlapWidthIn,
   coverSafetyMarginIn,
   nominalCoverExtensionIn,
   resolveFormatCapabilities,
+  spineWidthIn,
   CASEWRAP_COVER_EXTENSION_IN,
   SAFETY_MARGIN_IN,
   SPINE_BRAND_BAND_CM,
@@ -775,6 +778,53 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
     { widthIn, heightIn: geo.heightIn, panelWidthIn, background: { r: 1, g: 1, b: 1 } },
   );
   check("a cover with no back artwork still assembles", (await PDFDocument.load(noBack)).getPageCount() === 1);
+}
+
+// ---- Linen-wrap dust jacket -------------------------------------------------
+// Lulu's cover-dimensions for 8.5×11 linen wrap: 25.0×11.75″ at 32 pages and
+// 25.5×11.75″ at 200. The jacket is panels + spine + a 3.5″ flap allowance each side.
+{
+  const extension = coverExtensionFromHeight(11.75, 11);
+  check(
+    "a linen jacket's extension is what Lulu's height implies",
+    near(extension, nominalCoverExtensionIn("linen-wrap", 0.125), 1e-9),
+    `${extension} vs ${nominalCoverExtensionIn("linen-wrap", 0.125)}`,
+  );
+  const panelWidthIn = 8.5 + extension;
+  const flapWidthIn = coverFlapWidthIn("linen-wrap");
+  for (const [pages, widthIn] of [
+    [32, 25.0],
+    [200, 25.5],
+  ] as const) {
+    const spine = coverSpineWidthIn({ widthIn, panelWidthIn, flapWidthIn });
+    check(
+      `a linen jacket's spine at ${pages} pages matches the hardcover spine table`,
+      near(spine, spineWidthIn("linen-wrap", pages), 1e-9),
+      `${spine} vs ${spineWidthIn("linen-wrap", pages)}`,
+    );
+  }
+  check("only the linen wrap has jacket flaps", coverFlapWidthIn("casewrap") === 0 && coverFlapWidthIn("perfect-bound") === 0);
+  check(
+    "without flaps the spine is what the panels leave",
+    near(coverSpineWidthIn({ widthIn: 19, panelWidthIn: 9.25 }), 0.5, 1e-9),
+  );
+
+  const heightIn = 11.75;
+  const spineIn = coverSpineWidthIn({ widthIn: 25, panelWidthIn, flapWidthIn });
+  const bytes = await buildCoverPdf(
+    {
+      front: raster("front", panelWidthIn, heightIn),
+      back: raster("back", panelWidthIn, heightIn),
+      spine: raster("spine", spineIn, heightIn),
+    },
+    { widthIn: 25, heightIn, panelWidthIn, flapWidthIn, background: { r: 1, g: 1, b: 1 } },
+  );
+  const page = (await PDFDocument.load(bytes)).getPage(0);
+  check(
+    "a jacket with flaps is exactly the size Lulu asked for",
+    near(page.getWidth(), 25 * PT_PER_IN, 0.01) && near(page.getHeight(), heightIn * PT_PER_IN, 0.01),
+    `${page.getWidth()}×${page.getHeight()}pt`,
+  );
 }
 
 // ---- Ebook assembly --------------------------------------------------------

@@ -27,6 +27,7 @@ import {
   type OrderEventSource,
 } from "./printOrders";
 import { paymentIdFromExternalId, type PrintOrderPatch } from "../../books-frontend/src/core/orders/lifecycle";
+import { staleStatusReason } from "../../books-frontend/src/core/fulfillment/statusOrder";
 import { markFulfillmentRejected } from "./payments";
 import { productKey, recordFinanceEvent, toUsd } from "./finance";
 import { getProductsConfig } from "./products";
@@ -202,7 +203,7 @@ export async function persistCreatedOrder(args: PersistCreatedOrderArgs): Promis
     shippingMethod: draft.shippingMethod,
     recipient: neutralRecipient(draft),
     stage: order.stage,
-    statusMessage: order.issues[0] ?? null,
+    statusMessage: null as string | null,
     charges: stripUndefined(order.charges),
     shipments: stripUndefined(order.shipments),
     // The provider's verdict on the shipping address. A correction here means
@@ -214,13 +215,15 @@ export async function persistCreatedOrder(args: PersistCreatedOrderArgs): Promis
     // they already made as something that went wrong.
     addressChoice: args.addressChoice ?? null,
     fileUrls: stripUndefined(order.printFiles ?? {}),
-    statusHistory: [historyEntry],
+    statusHistory: [{ ...historyEntry, message: null }],
     createdAt: now,
     updatedAt: now,
   };
 
   const adminDoc = {
     ...userDoc,
+    statusMessage: historyEntry.message,
+    statusHistory: [historyEntry],
     ownerUid: uid,
     provider,
     env,
@@ -324,6 +327,14 @@ export async function applyOrderStatusUpdate(
   // delivery.
   const previousStage = snap.get("stage") as string | undefined;
   const previousMessage = (snap.get("statusMessage") as string | null | undefined) ?? null;
+  const stale = staleStatusReason(
+    { stage: previousStage, changedAt: (snap.get("statusChangedAt") as number | undefined) ?? null },
+    { stage: order.stage, changedAt: order.statusChangedAt ?? null },
+  );
+  if (stale) {
+    console.warn(`[orders] ignored ${order.stage} for job ${order.id} via ${source}: ${stale}`);
+    return true;
+  }
   const message = order.issues[0] ?? null;
   const historyEntry = {
     at: Date.now(),
@@ -335,14 +346,18 @@ export async function applyOrderStatusUpdate(
   // the customer's timeline for an order that had not moved.
   const changed = order.stage !== previousStage || message !== previousMessage;
 
-  // Fields safe for the neutral, user-facing record.
+  // Fields safe for the neutral, user-facing record. The printer's notes are
+  // written for operators (file names, field codes) and stay on the admin
+  // record; the customer's copy is derived from the stage.
   const userUpdate = {
     stage: order.stage,
-    statusMessage: message,
+    statusMessage: null,
     charges: stripUndefined(order.charges),
     shipments: stripUndefined(order.shipments),
     updatedAt: FieldValue.serverTimestamp(),
-    ...(changed ? { statusHistory: FieldValue.arrayUnion(historyEntry) } : {}),
+    ...(order.stage !== previousStage
+      ? { statusHistory: FieldValue.arrayUnion({ ...historyEntry, message: null }) }
+      : {}),
     // Only written when the provider has something to say: a later webhook
     // carrying no verdict must not erase the one recorded at placement.
     ...(order.addressValidation
@@ -351,9 +366,13 @@ export async function applyOrderStatusUpdate(
   };
 
   // Admin record additionally keeps the provider status name + raw payload.
+  const { statusHistory: _userHistory, ...userFields } = userUpdate;
   const adminUpdate = {
-    ...userUpdate,
+    ...userFields,
+    statusMessage: message,
+    ...(changed ? { statusHistory: FieldValue.arrayUnion(historyEntry) } : {}),
     statusName: statusNameOf(order.raw),
+    ...(order.statusChangedAt != null ? { statusChangedAt: order.statusChangedAt } : {}),
     ...(source === "lulu_webhook" ? { lastWebhookAt: FieldValue.serverTimestamp() } : {}),
     lastWebhookRaw: (order.raw as Record<string, unknown> | undefined) ?? null,
   };
@@ -454,15 +473,22 @@ export async function applyOrderStatusUpdate(
   // Notify the customer when the provider reports the order shipped. Deduped on
   // the order id (the provider may re-post SHIPPED), best-effort — an email
   // failure must never fail the webhook ack.
-  if (ownerUid && statusName === "SHIPPED") {
-    const shipment = order.shipments.find((s) => s.trackingUrl) ?? order.shipments[0];
+  // Tracking often follows the SHIPPED status by a delivery or two: an email
+  // sent without a link is followed by one with it, once.
+  const shipment = order.shipments.find((s) => s.trackingUrl) ?? order.shipments[0];
+  const hasTracking = Boolean(shipment?.trackingUrl);
+  const emailed = snap.get("shippedEmail") as "untracked" | "tracked" | undefined;
+  const shippedEmailDue = emailed !== "tracked" && !(emailed === "untracked" && !hasTracking);
+  if (ownerUid && statusName === "SHIPPED" && shippedEmailDue) {
     try {
       const sent = await sendOrderShippedEmail({
         uid: ownerUid,
         orderRef: order.id,
         carrier: shipment?.carrier ?? null,
         trackingUrl: shipment?.trackingUrl ?? null,
+        withTracking: hasTracking,
       });
+      if (sent.ok || sent.skipped === "duplicate") await adminRef.set({ shippedEmail: hasTracking ? "tracked" : "untracked" }, { merge: true });
       await recordOrderEmail(recordKey, "shipped", sent, source);
     } catch (err) {
       console.warn("[orders] shipped email failed", order.id, err);

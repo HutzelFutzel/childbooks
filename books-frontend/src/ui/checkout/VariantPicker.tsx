@@ -18,7 +18,7 @@ import { useAppConfigStore } from "../../state/appConfigStore";
 import { cn } from "../lib/cn";
 
 /**
- * Customer-facing print / paper / finish picker. Driven entirely by the
+ * Customer-facing print / paper / finish / linen / foil picker. Driven entirely by the
  * product's public variant policy — disabled options are ones that can't form
  * an orderable combination with the current selection (e.g. cream + colour).
  */
@@ -115,6 +115,8 @@ export function VariantPicker({
                       {photo ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={photo.imageUrl} alt={photo.alt || opt?.label || v} className="size-full object-cover" />
+                      ) : opt?.swatch ? (
+                        <span aria-hidden className="block size-full" style={{ backgroundColor: opt.swatch }} />
                       ) : (
                         <span className="flex size-full items-center justify-center text-[9px] font-medium uppercase tracking-wide text-ink-400">
                           {axis}

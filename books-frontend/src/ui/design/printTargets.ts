@@ -12,7 +12,7 @@
  */
 import { bookProductForConfig } from "../../core/book";
 import { EXPORT_DPI } from "../../core/config/options";
-import { coverSafetyMarginIn, nominalCoverExtensionIn } from "../../core/book/format";
+import { coverFlapWidthIn, coverSafetyMarginIn, nominalCoverExtensionIn } from "../../core/book/format";
 import {
   coverExtensionFromHeight,
   coverPanelWindow,
@@ -269,6 +269,8 @@ export interface CoverPlan {
   geometry: PageGeometry;
   /** Panel width (trim + outer bleed), inches. */
   panelWidthIn: number;
+  /** Dust-jacket flap allowance beyond each panel, inches; 0 without a jacket. */
+  flapWidthIn: number;
 }
 
 /**
@@ -332,7 +334,12 @@ export function buildCoverPlan(
     });
   }
 
-  return { targets, geometry, panelWidthIn: geometry.trimWidthIn + geometry.bleedIn };
+  return {
+    targets,
+    geometry,
+    panelWidthIn: geometry.trimWidthIn + geometry.bleedIn,
+    flapWidthIn: coverFlapWidthIn(product.binding),
+  };
 }
 
 function targetDesignPages(target: PlannedTarget): DesignPage[] {

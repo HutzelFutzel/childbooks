@@ -70,7 +70,14 @@ import {
   verificationCoversPages,
   verificationFor,
 } from "../../books-frontend/src/core/config/products";
-import type { VariantSelection } from "../../books-frontend/src/core/config/variants";
+import { NO_OPTION, type VariantSelection } from "../../books-frontend/src/core/config/variants";
+import { foilStampText } from "../../books-frontend/src/core/fulfillment/lulu/foilStamp";
+import { phoneProblem, taxIdProblem } from "../../books-frontend/src/core/fulfillment/recipientFormat";
+import {
+  CUSTOMER_FIX_LABEL,
+  FulfillmentError,
+  customerFixableDetail,
+} from "../../books-frontend/src/core/fulfillment/errors";
 import {
   effectivePrintDiscountPct,
   planEntitlements,
@@ -273,6 +280,8 @@ interface CheckoutBody {
   fingerprint?: string;
   /** A coupon code the customer typed. Validated server-side; never trusted. */
   couponCode?: string;
+  /** Spine foil lines for a linen-wrap book. Re-fit server side; ignored on other bindings. */
+  foilStamp?: { title?: unknown; author?: unknown };
 }
 
 function clientError(res: Response, message: string, status = 400): void {
@@ -867,6 +876,8 @@ interface PrintCheckoutArgs {
   merchantReference: string | null;
   /** A coupon code the customer typed in the order dialog. */
   couponCode?: string | null;
+  /** Spine foil lines, kept only when the print SKU is foil stamped. */
+  foilStamp?: { title?: unknown; author?: unknown } | null;
 }
 
 type PrintCheckoutResult =
@@ -1152,6 +1163,20 @@ async function shippingRefusal(
 }
 
 /**
+ * A phone or customs id the printer would refuse — caught here because it only
+ * refuses them when the job is created, after payment.
+ */
+function recipientFormatIssue(country: string, recipient: OrderDraft["recipient"]): string | null {
+  const phone = phoneProblem(recipient.phoneNumber ?? "");
+  if (phone) return `Recipient phone: ${phone}`;
+  if (TAX_ID_REQUIRED.has(country)) {
+    const taxId = taxIdProblem(country, recipient.address.taxId ?? "");
+    if (taxId) return `Recipient ${TAX_ID_LABEL[country] ?? "tax id"}: ${taxId}`;
+  }
+  return null;
+}
+
+/**
  * The tier to quote when the client didn't name one.
  *
  * The cheapest speed that actually reaches this destination, since that's what
@@ -1196,6 +1221,8 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
       error: "A recipient name, phone number, and complete shipping address are required.",
     };
   }
+  const formatIssue = recipientFormatIssue(destinationCountry, recipient);
+  if (formatIssue) return { ok: false, error: formatIssue };
   if (STATE_CODE_REQUIRED.has(destinationCountry) && !recipient.address.stateOrCounty?.trim()) {
     return {
       ok: false,
@@ -1379,6 +1406,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     // left to suggest and the only record of the decision is what they sent.
     addressChoice: args.addressChoice ?? null,
     estimatedCost,
+    foilStamp: variant.foil && variant.foil !== NO_OPTION ? foilStampText(args.foilStamp) : null,
   };
 
   const estimatedTotal = unitPrice * copies + finalShippingCharged;
@@ -1488,6 +1516,11 @@ export function registerStripeUserRoutes(app: Express): void {
         !recipient.address.postalOrZipCode
       ) {
         clientError(res, "A recipient name, phone number, and complete shipping address are required.");
+        return;
+      }
+      const formatIssue = recipientFormatIssue(destinationCountry, recipient);
+      if (formatIssue) {
+        clientError(res, formatIssue);
         return;
       }
       if (STATE_CODE_REQUIRED.has(destinationCountry) && !recipient.address.stateOrCounty) {
@@ -1705,6 +1738,7 @@ export function registerStripeUserRoutes(app: Express): void {
         printPrep,
         merchantReference: body.merchantReference ?? null,
         couponCode: body.couponCode ?? null,
+        foilStamp: body.foilStamp ?? null,
       });
       if (!result.ok) {
         clientError(res, result.error);
@@ -1834,6 +1868,8 @@ export function registerStripeUserRoutes(app: Express): void {
         shipping: priced.shippingCharged,
         total: Math.round((priced.unitPrice * copies + priced.shippingCharged) * 100) / 100,
         atCostTotal: priced.atCost.total,
+        // So the total can say "before tax" where tax is added at payment.
+        taxBehavior: settings.tax.perCurrency[currency]?.behavior ?? "exclusive",
         // The carrier's normalization of this address, so checkout can offer the
         // correction while it's still free to make.
         addressValidation: priced.addressValidation ?? null,
@@ -2174,6 +2210,7 @@ export function registerStripeUserRoutes(app: Express): void {
         sourceFileUrls: reorderFiles,
         printPrep: reorderPrep,
         merchantReference: plan.merchantReference ?? null,
+        foilStamp: plan.foilStamp ?? null,
       });
       if (!result.ok) {
         clientError(
@@ -2754,6 +2791,7 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
     currency: plan.currency,
     merchantReference: plan.merchantReference ?? undefined,
     idempotencyKey: placementKey,
+    foilStamp: plan.foilStamp ?? undefined,
   };
 
   await syncOrderFromPayment(
@@ -2900,14 +2938,28 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
     // throw (a 500 makes Stripe retry, which won't fix a fulfillment error).
     // The failure is persisted with retry state — a scheduled sweep retries it
     // with backoff, and an admin alert is raised so a human sees it too.
-    const message = (err as Error)?.message ?? "Unknown fulfillment error";
+    // The provider's own explanation lives in `details`; the message alone is
+    // just "request failed with status 400".
+    const details = err instanceof FulfillmentError && err.details ? ` — ${err.details.slice(0, 600)}` : "";
+    const message = `${(err as Error)?.message ?? "Unknown fulfillment error"}${details}`;
     console.error("[stripe] fulfillment after payment failed", paymentId, err);
     const attempt = payment.fulfillmentAttempts + 1;
+    // A request the provider refused as invalid will be refused identically on
+    // every retry; five of them over five hours only delayed telling anyone.
+    const permanent = err instanceof FulfillmentError && err.kind === "validation";
+    const fixable = customerFixableDetail(err);
+    const customerFix = fixable
+      ? fixable === "taxId"
+        ? (TAX_ID_LABEL[plan.recipient.address.countryCode?.toUpperCase() ?? ""] ?? CUSTOMER_FIX_LABEL.taxId)
+        : CUSTOMER_FIX_LABEL[fixable]
+      : null;
+    const exhausted = permanent || attempt >= MAX_FULFILLMENT_ATTEMPTS;
     await markFulfillmentFailed({
       paymentId,
       uid: payment.ownerUid,
       error: message,
-      exhausted: attempt >= MAX_FULFILLMENT_ATTEMPTS,
+      exhausted,
+      customerFix,
     });
     // The order record decides whether this needs a person (and pages #ops when it
     // does). This alert stays as the audit entry: one per ORDER, not one per
@@ -2918,17 +2970,24 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
       {
         type: "placement_failed",
         source: "fulfillment",
-        message: `Placement failed (attempt ${attempt} of ${MAX_FULFILLMENT_ATTEMPTS}): ${message}`.slice(0, 1000),
-        data: { attempt, placementKey },
+        message: (permanent
+          ? `Placement refused by the printer (not retried${customerFix ? `; customer asked for the correct ${customerFix}` : ""}): ${message}`
+          : `Placement failed (attempt ${attempt} of ${MAX_FULFILLMENT_ATTEMPTS}): ${message}`
+        ).slice(0, 1000),
+        data: { attempt, placementKey, permanent, customerFix },
       },
       // Out of retries: nothing is replacing the dead job any more.
       afterFailure?.fulfillmentState === "failed" ? { autoReplacing: false } : undefined,
     );
     await raiseAlert({
-      severity: "warning",
-      kind: "fulfillment.failed",
-      message: `Print order for paid payment ${paymentId} failed (attempt ${attempt}): ${message}`,
-      meta: { paymentId, uid: payment.ownerUid, attempt },
+      // Nothing automatic will fix a refused request, so it pages.
+      severity: permanent ? "critical" : "warning",
+      kind: permanent ? "fulfillment.refused" : "fulfillment.failed",
+      message: permanent
+        ? `Print order for paid payment ${paymentId} was refused by the printer and won't be retried` +
+          `${customerFix ? ` (customer emailed for the correct ${customerFix}; fix it with "Correct recipient")` : ""}: ${message}`
+        : `Print order for paid payment ${paymentId} failed (attempt ${attempt}): ${message}`,
+      meta: { paymentId, uid: payment.ownerUid, attempt, permanent },
       ref: paymentId,
     });
     await recordFinanceEvent({
@@ -2940,14 +2999,16 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
       ref: `${paymentId}_${attempt}`,
       meta: { paymentId, attempt, error: message.slice(0, 500) },
     });
-    // Once retries are exhausted, tell the customer we hit a snag (deduped on
-    // the payment id so it goes out at most once). Best-effort.
-    if (attempt >= MAX_FULFILLMENT_ATTEMPTS) {
+    // Once retries are exhausted (or pointless), tell the customer — naming the
+    // detail to correct when it's theirs. Deduped on the payment id so it goes
+    // out at most once. Best-effort.
+    if (exhausted) {
       try {
         const sent = await sendOrderFailedEmail({
           uid: payment.ownerUid,
           orderRef: payment.orderId ?? paymentId,
           paymentId,
+          ...(customerFix ? { fix: customerFix } : {}),
         });
         await recordOrderEmail(paymentId, "failed", sent);
       } catch (mailErr) {
@@ -2959,6 +3020,22 @@ export async function fulfillPaidOrder(paymentId: string): Promise<void> {
 }
 
 const MAX_FULFILLMENT_ATTEMPTS = 5;
+
+/**
+ * Refund whatever is left of a payment. Idempotent per payment, so a repeated
+ * click (or a retried request) can't refund twice. The webhook records the
+ * result on the payment as for any other refund.
+ */
+export async function refundRemaining(
+  payment: AdminPaymentRecord,
+): Promise<{ refundId: string; amount: number; currency: string }> {
+  if (!payment.stripePaymentIntentId) throw new Error("This payment has no captured charge to refund.");
+  const refund = await getStripe().refunds.create(
+    { payment_intent: payment.stripePaymentIntentId, metadata: { reason: "order_cancelled", paymentId: payment.id } },
+    { idempotencyKey: `order_cancel_refund_${payment.id}` },
+  );
+  return { refundId: refund.id, amount: toMajor(refund.amount, refund.currency), currency: refund.currency.toUpperCase() };
+}
 
 /**
  * Retry paid orders whose print placement failed, with linear backoff (30min ×

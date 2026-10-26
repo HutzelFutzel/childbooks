@@ -135,7 +135,7 @@ childbooks/
       price/shipping quote (`/lulu/quote`) as inputs change. Placing an order
       fetches the wraparound cover size (`/lulu/cover-dimensions`), renders the
       print files via `OrderAssetRunner` (full-bleed interior PDF + a composed
-      back|spine|front cover, see `core/fulfillment/coverLayout.ts`), assembles
+      back|spine|front cover, see `core/print/assemble.ts`), assembles
       the draft with `buildOrderDraft`, and submits via `/lulu/order`, showing the
       returned order id/stage. NOTE: print-file specs (bleed/spine/page-count
       minimums) follow the still-`verified:false` product catalog and need a Lulu

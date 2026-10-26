@@ -22,6 +22,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { EXPORT_DPI } from "../../core/config/options";
+import { coverSpineWidthIn } from "../../core/print/geometry";
 import { renderFingerprint } from "../../core/print/fingerprint";
 import { getCursor } from "../../core/versioning";
 import { COVER_BACK_ID, COVER_FRONT_ID, type BookDesign, type Project } from "../../core/types";
@@ -49,7 +50,7 @@ type DocumentRequest =
       kind: "cover";
       sku?: string;
       padToPages?: number;
-      cover: { widthIn: number; heightIn: number; panelWidthIn: number };
+      cover: { widthIn: number; heightIn: number; panelWidthIn: number; flapWidthIn?: number };
     };
 
 /** One page for the renderer to photograph, and where it belongs. */
@@ -319,7 +320,7 @@ async function prepare(): Promise<RenderState> {
 
       // The spine is ours to draw: it isn't a design page, it's the band
       // between the two panels, sized by how thick this order's book is.
-      const spineWidthIn = Math.max(0, doc.cover.widthIn - doc.cover.panelWidthIn * 2);
+      const spineWidthIn = coverSpineWidthIn(doc.cover);
       if (spineWidthIn > 0) {
         const text =
           spineWidthIn >= MIN_TITLED_SPINE_IN

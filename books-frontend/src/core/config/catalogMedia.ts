@@ -36,9 +36,9 @@ export type MediaScope = (typeof MEDIA_SCOPES)[number];
 
 /**
  * The print features that can be photographed (the `option` scope's first
- * segment). `trim` and `binding` describe a format; `print`, `paper` and `finish`
- * are the {@link VARIANT_AXES} a customer chooses, and share their ids so a
- * variant's pictures need no mapping to find.
+ * segment). `trim` and `binding` describe a format; `print`, `paper`, `finish`,
+ * `linen` and `foil` are the {@link VARIANT_AXES} a customer chooses, and share
+ * their ids so a variant's pictures need no mapping to find.
  */
 export const PRINT_OPTION_FEATURES = [
   "trim",
@@ -46,6 +46,8 @@ export const PRINT_OPTION_FEATURES = [
   "print",
   "paper",
   "finish",
+  "linen",
+  "foil",
 ] as const;
 
 export type PrintOptionFeature = (typeof PRINT_OPTION_FEATURES)[number];

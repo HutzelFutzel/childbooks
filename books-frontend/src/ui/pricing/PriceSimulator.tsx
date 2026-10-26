@@ -15,6 +15,8 @@ import {
   simulatePublicOrder,
 } from "../../core/config/productMath";
 import {
+  CUSTOMER_VARIANT_AXES,
+  NO_OPTION,
   normalizeVariantPolicy,
   simplifiedPrintVariant,
   type VariantSelection,
@@ -173,8 +175,14 @@ export function PriceSimulator({
 
   useEffect(() => {
     setVariant((current) => {
-      const finish = current?.finish ?? product?.defaultVariant?.finish;
-      return simplifiedPrintVariant(variantPolicy, finish) ?? null;
+      const keepCloth = current && current.linen !== NO_OPTION;
+      return (
+        simplifiedPrintVariant(variantPolicy, {
+          ...product?.defaultVariant,
+          ...(current ? { finish: current.finish } : {}),
+          ...(keepCloth ? { linen: current.linen, foil: current.foil } : {}),
+        }) ?? null
+      );
     });
   }, [variantPolicy, product]);
 
@@ -377,12 +385,12 @@ export function PriceSimulator({
               policy={variantPolicy}
               value={variant}
               onChange={(next) =>
-                setVariant(simplifiedPrintVariant(variantPolicy, next.finish) ?? variant)
+                setVariant(simplifiedPrintVariant(variantPolicy, next) ?? variant)
               }
               currency={currency}
               pages={pages}
               media={media}
-              visibleAxes={["finish"]}
+              visibleAxes={CUSTOMER_VARIANT_AXES}
             />
           )}
 

@@ -63,7 +63,29 @@ const BINDINGS = [
   { id: "perfect-bound", code: "PB", label: "Perfect bound" },
   { id: "coil-bound", code: "CO", label: "Coil bound" },
   { id: "casewrap", code: "CW", label: "Casewrap hardcover" },
+  // Swept only at the one interior spec we sell it with (premium colour on 80#
+  // coated), across every cloth × foil — the full cross product is 1,300 probes.
+  { id: "linen-wrap", code: "LW", label: "Linen wrap hardcover", cloth: true },
 ];
+
+/** Cloth colour and spine foil, the last two characters of a linen-wrap package id. */
+const LINENS = [
+  { id: "navy", code: "N" },
+  { id: "black", code: "B" },
+  { id: "gray", code: "G" },
+  { id: "red", code: "R" },
+  { id: "tan", code: "T" },
+  { id: "forest", code: "F" },
+];
+const FOILS = [
+  { id: "gold", code: "G" },
+  { id: "white", code: "W" },
+  { id: "black", code: "B" },
+];
+const NO_CLOTH = { id: "", linen: { id: "none", code: "X" }, foil: { id: "none", code: "X" } };
+const CLOTHS = LINENS.flatMap((linen) =>
+  FOILS.map((foil) => ({ id: `${linen.id} linen + ${foil.id} foil`, linen, foil })),
+);
 
 /** Interior ink + print quality, as the one choice a customer actually makes. */
 const PRINT_TIERS = [
@@ -84,8 +106,8 @@ const FINISHES = [
   { id: "matte", code: "M", label: "Matte" },
 ];
 
-const sku = (trim, binding, print, paper, finish) =>
-  `${trim.code}${print.ink}${print.quality}${binding.code}${paper.code}${finish.code}XX`;
+const sku = (trim, binding, print, paper, finish, cloth = NO_CLOTH) =>
+  `${trim.code}${print.ink}${print.quality}${binding.code}${paper.code}${finish.code}${cloth.linen.code}${cloth.foil.code}`;
 
 // ---- Provider --------------------------------------------------------------
 
@@ -190,15 +212,19 @@ for (const trim of TRIMS) {
   for (const binding of BINDINGS) {
     for (const print of PRINT_TIERS) {
       for (const paper of PAPERS) {
+        if (binding.cloth && (print.id !== "premium-colour" || paper.id !== "80-coated-white")) continue;
         for (const finish of FINISHES) {
-          combos.push({
-            trim,
-            binding,
-            print,
-            paper,
-            finish,
-            sku: sku(trim, binding, print, paper, finish),
-          });
+          for (const cloth of binding.cloth ? CLOTHS : [NO_CLOTH]) {
+            combos.push({
+              trim,
+              binding,
+              print,
+              paper,
+              finish,
+              cloth,
+              sku: sku(trim, binding, print, paper, finish, cloth),
+            });
+          }
         }
       }
     }
@@ -208,7 +234,8 @@ for (const trim of TRIMS) {
 console.log(
   `\n▶ Probing ${combos.length} combinations against the ${which} catalog ` +
     `(${TRIMS.length} trims × ${BINDINGS.length} bindings × ${PRINT_TIERS.length} print tiers × ` +
-    `${PAPERS.length} papers × ${FINISHES.length} finishes)\n`,
+    `${PAPERS.length} papers × ${FINISHES.length} finishes; linen wrap at premium colour on 80# ` +
+    `× ${CLOTHS.length} cloth/foil pairs)\n`,
 );
 
 let done = 0;
@@ -246,7 +273,7 @@ for (const trim of TRIMS) {
     if (ranges.length > 1) {
       for (const r of good) {
         console.log(
-          `       ${r.print.id}/${r.paper.id}/${r.finish.id}: ` +
+          `       ${r.print.id}/${r.paper.id}/${r.finish.id}${r.cloth.id ? ` (${r.cloth.id})` : ""}: ` +
             `${r.pages ? `${r.pages.min}–${r.pages.max}` : "unbounded"}`,
         );
       }
@@ -260,6 +287,8 @@ for (const [axis, options, pick] of [
   ["Print", PRINT_TIERS, (r) => r.print.id],
   ["Paper", PAPERS, (r) => r.paper.id],
   ["Finish", FINISHES, (r) => r.finish.id],
+  ["Linen", LINENS.map((l) => ({ ...l, label: l.id })), (r) => r.cloth.linen.id],
+  ["Foil", FOILS.map((f) => ({ ...f, label: f.id })), (r) => r.cloth.foil.id],
 ]) {
   for (const option of options) {
     const formats = new Set(ok.filter((r) => pick(r) === option.id).map((r) => `${r.trim.id}/${r.binding.id}`));
@@ -295,6 +324,8 @@ if (out) {
           print: r.print.id,
           paper: r.paper.id,
           finish: r.finish.id,
+          linen: r.cloth.linen.id,
+          foil: r.cloth.foil.id,
           ok: r.verdict,
           pages: r.pages ?? null,
           message: r.message ?? null,

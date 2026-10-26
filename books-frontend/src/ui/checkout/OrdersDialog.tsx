@@ -15,7 +15,14 @@ import { Receipt } from "lucide-react";
 import type { OrderRecord, OrderStage } from "../../core/fulfillment/types";
 import type { PaymentStatus, UserPaymentRecord } from "../../platform/payments";
 import { startReorderCheckout } from "../../platform/payments";
-import { FULFILLMENT_STATUS, STAGE_STATUS, orderHealth, orderNeedsAttention } from "./orderStatus";
+import {
+  FULFILLMENT_STATUS,
+  STAGE_DETAIL,
+  STAGE_STATUS,
+  orderHealth,
+  orderNeedsAttention,
+  orderStatusDetail,
+} from "./orderStatus";
 import { createFulfillment } from "../../platform/fulfillment";
 import { useOrdersStore } from "../../state/ordersStore";
 import { usePaymentsStore } from "../../state/paymentsStore";
@@ -212,7 +219,14 @@ function PaymentCard({ payment }: { payment: UserPaymentRecord }) {
       {payment.status === "paid" && payment.fulfillmentState && health !== "ok" && (
         <FulfillmentNotice
           state={health === "working" ? "retrying" : "failed"}
-          issue={payment.fulfillmentIssue}
+          label={
+            health === "cancelled"
+              ? "Canceled"
+              : order?.stage === "onHold" && payment.fulfillmentState !== "retrying"
+                ? STAGE_STATUS.onHold.label
+                : undefined
+          }
+          issue={orderStatusDetail(payment, order)}
           className="mt-3"
         />
       )}
@@ -252,10 +266,13 @@ const FULFILLMENT_TONE: Record<"info" | "success" | "warning" | "danger", string
 export function FulfillmentNotice({
   state,
   issue,
+  label,
   className,
 }: {
   state: NonNullable<UserPaymentRecord["fulfillmentState"]>;
   issue: string | null;
+  /** Overrides the state's own label, when the printer's stage says it better. */
+  label?: string;
   className?: string;
 }) {
   const s = FULFILLMENT_STATUS[state];
@@ -270,7 +287,7 @@ export function FulfillmentNotice({
     >
       <Icon className={cn("mt-0.5 size-3.5 shrink-0", state === "pending" && "animate-spin")} />
       <span>
-        <span className="font-semibold">{s.label}</span> — {issue ?? s.detail}
+        <span className="font-semibold">{label ?? s.label}</span> — {issue ?? s.detail}
       </span>
     </div>
   );
@@ -319,17 +336,17 @@ function OrderCard({
 
       {/* Attention banner — the actionable bit (bad address, page count, etc.).
           Tone follows the stage so it can't read amber under a rose badge. */}
-      {needsAttention && order.statusMessage && (
+      {(needsAttention || order.stage === "onHold" || order.stage === "cancelled") && (
         <div
           className={cn(
             "mt-3 flex items-start gap-2 rounded-xl border px-3 py-2 text-xs",
-            order.stage === "error"
+            order.stage === "error" || order.stage === "cancelled"
               ? "border-rose-200 bg-rose-50 text-rose-800"
               : "border-amber-200 bg-amber-50 text-amber-800",
           )}
         >
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-          <span>{order.statusMessage}</span>
+          <span>{STAGE_DETAIL[order.stage]}</span>
         </div>
       )}
 
@@ -423,7 +440,6 @@ function OrderCard({
                       <StageDot stage={entry.stage} />
                       <div className="min-w-0">
                         <p className="font-medium text-ink-700">{s.label}</p>
-                        {entry.message && <p className="text-ink-500">{entry.message}</p>}
                         <p className="text-ink-400">{formatDate(entry.at)}</p>
                       </div>
                     </li>
@@ -465,7 +481,7 @@ function StageDot({ stage }: { stage: OrderStage }) {
 export function OrdersButton() {
   const [open, setOpen] = useState(false);
   const needsAttention = useOrdersStore((s) =>
-    s.orders.some((o) => o.stage === "onHold" || o.stage === "error"),
+    s.orders.some((o) => orderNeedsAttention(o.stage)),
   );
 
   return (

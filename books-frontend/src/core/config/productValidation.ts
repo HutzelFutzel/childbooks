@@ -22,9 +22,12 @@ import { bookMediaKey, resolvedPhotosFor, type CatalogMediaConfig } from "./cata
 import { availableMethodsFor, type MarketCapability } from "./marketCapability";
 import { EMPTY_MARKET_REGISTRY, type MarketRegistry } from "./markets";
 import { createDefaultShippingSettings, type ShippingSettings } from "./shipping";
-import { variantFromSku } from "../fulfillment/lulu/skuAxes";
+import { bindingOfSku, variantFromSku } from "../fulfillment/lulu/skuAxes";
+import { bindingNoun, bindingVariantValues } from "../fulfillment/lulu/products";
+import { planChangesPrices, repricePlan } from "./targetMargin";
 import {
   VARIANT_AXES,
+  VARIANT_AXIS_DEFS,
   cheapestVariant,
   enumerateVariants,
   offeredValues,
@@ -259,6 +262,24 @@ export function validateProduct(
       }
     }
   }
+  // Every offered value must be one the printer stocks for THIS binding: a
+  // linen colour on a paperback, or a linen book without one, composes a
+  // package id that's refused at checkout.
+  const binding = bindingOfSku(p.provider.sku);
+  if (binding) {
+    for (const axis of VARIANT_AXES) {
+      const stocked = bindingVariantValues(binding, axis);
+      const extra = offeredValues(p.variants, axis).filter((v) => !stocked.includes(v));
+      if (extra.length > 0) {
+        err(
+          "variants",
+          `${VARIANT_AXIS_DEFS[axis].label}: ${extra.map((v) => variantOptionDef(axis, v)?.label ?? v).join(", ")} ${
+            extra.length === 1 ? "isn't" : "aren't"
+          } available for a ${bindingNoun(binding)}. Turn ${extra.length === 1 ? "it" : "them"} off.`,
+        );
+      }
+    }
+  }
 
   // Pricing — page tiers: shape, coverage, and a price for every currency.
   const tiers = p.pricing.tiers;
@@ -318,6 +339,25 @@ export function validateProduct(
           `Max discount ${m.maxDiscountPct}% exceeds break-even ${m.breakEvenDiscountPct}% for ${currency}${at}.`,
         );
       }
+    }
+  }
+
+  // Prices are set from the target margin, then stored. Once a cost, fee, rate
+  // or the target itself moves they no longer hit it — say so, with the fix.
+  if (!costTableIsEmpty(p.cost) && tiers.length > 0) {
+    const plan = repricePlan(p, settings, shippingSettings);
+    if (planChangesPrices(plan)) {
+      warn(
+        "pricing.target",
+        `Prices are off the ${plan.target.pct}% target margin (${plan.changes.length} price${
+          plan.changes.length === 1 ? "" : "s"
+        }${plan.variantsChange ? " and variant surcharges" : ""} would change). Use "Reprice to target margins".`,
+      );
+    } else if (plan.status === "unreachable") {
+      warn(
+        "pricing.target",
+        `A ${plan.target.pct}% margin can't be reached in ${plan.unreachable.join(", ")} after fees and tax. Lower the target.`,
+      );
     }
   }
 
