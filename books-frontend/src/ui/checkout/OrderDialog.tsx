@@ -1,6 +1,23 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, Loader2, MapPin, Minus, Plus, ShieldCheck, TriangleAlert } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "framer-motion";
+import {
+  ArrowLeft,
+  BookOpen,
+  Check,
+  ChevronDown,
+  Loader2,
+  Lock,
+  MapPin,
+  Minus,
+  Package,
+  Plus,
+  Rocket,
+  ShieldCheck,
+  Truck,
+  TriangleAlert,
+  Zap,
+} from "lucide-react";
 import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
 import {
@@ -24,6 +41,8 @@ import {
   NO_OPTION,
   normalizeVariantPolicy,
   simplifiedPrintVariant,
+  variantMediaKey,
+  variantOptionDef,
   variantOptionLabel,
   type VariantSelection,
 } from "../../core/config/variants";
@@ -77,6 +96,10 @@ import { Field, Input, fieldMessageId } from "../components/Input";
 import { Select } from "../components/Select";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
+import { spring, springSoft } from "../lib/motion";
+import { optionMediaKey, resolvedPhotosFor } from "../../core/config/catalogMedia";
+import { AnimatedMoney, AnimatedSwap, Collapse, EASE_OUT, Enter } from "./CheckoutKit";
+import { OptionVisual, type SwatchKind } from "./OptionTile";
 import { insetPageText, type DesignPage } from "../design/designInit";
 import { BookMockup } from "../components/BookMockup";
 import { buildCoverPlan } from "../design/printTargets";
@@ -175,6 +198,7 @@ export function OrderCheckout({
   // Subscription access gate. The backend is the authoritative check at
   // checkout; this mirrors it so we can disable ordering + explain why up front.
   const publicProducts = useAppConfigStore((s) => s.products.products);
+  const catalogMedia = useAppConfigStore((s) => s.catalogMedia);
   const publicPlans = useAppConfigStore((s) => s.plans.plans);
   // The open markets bound the country picker. Empty until the snapshot lands,
   // which is the right way round — offering a country we don't ship to sends
@@ -479,6 +503,7 @@ export function OrderCheckout({
           // number rather than withheld.
           price: terms ? terms.base + terms.perCopy * copies : null,
           transit: transitLabel(row.transitDaysMin, row.transitDaysMax),
+          days: row.transitDaysMax ?? row.transitDaysMin ?? null,
         };
       })
       .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
@@ -519,8 +544,25 @@ export function OrderCheckout({
   const validation = quoteIsCurrent ? (quote?.addressValidation ?? null) : null;
   const pendingSuggestion = suggestionKey(validation);
   const pendingKey = pendingSuggestion ? `${pendingSuggestion}|${addressSig}` : "";
-  const addressChoiceForSuggestion: AddressChoice =
-    pendingKey && decision?.key === pendingKey ? decision.choice : "unreviewed";
+  // Answered already, for THIS address. Adopting the carrier's version rewrites
+  // the form, which makes the quote stale and sends the corrected address back to
+  // the carrier — and the carrier does not always agree with its own output
+  // ("Rd" vs "Road", "#18" vs "Apt 18", ZIP+4 added or dropped). Keyed on the
+  // suggestion alone, that second, different answer counted as a new question and
+  // the customer was asked to choose all over again. The address they answered
+  // about is the one in the form, so that is what the answer is tied to.
+  const answeredForThisAddress = decision != null && decision.afterSig === addressSig;
+  const addressChoiceForSuggestion: AddressChoice = !pendingKey
+    ? "unreviewed"
+    : decision?.key === pendingKey || answeredForThisAddress
+      ? (decision?.choice ?? "unreviewed")
+      : "unreviewed";
+  // The customer took the carrier's version, and this is it. A further remark from
+  // the carrier about its own correction is shown as a note, never as a question —
+  // except when it can't validate the address at all, which still has to be fixed.
+  const adoptedCarrierAddress = decision?.choice === "suggested" && decision.afterSig === addressSig;
+  const showSuggestionCard =
+    validation != null && (validation.severity === "error" || !adoptedCarrierAddress);
   // What to record on the order: the answer to a suggestion still on screen, or
   // — once the carrier's version has been adopted and there is nothing left to
   // suggest — the fact that this address IS the carrier's.
@@ -1085,102 +1127,224 @@ export function OrderCheckout({
   const bindingLabel = bindingNoun(product.binding);
   const quoteCurrency = quote?.currency || currency;
 
+  // ---- The overview: what's settled and what's left, in the customer's words ----
+  const reduceMotion = useReducedMotion();
+  const bookDone = !requirementError && accessGate.ok && !drawing.busy;
+  const addressDone = addressComplete && !unserviced && !regionUnrecognised && !addressNeedsReview;
+  const speedDone = shippingChoices.some((o) => o.value === shipping);
+  const priceDone = quote != null && quoteIsCurrent && !quoting && !quoteError;
+  const deliveryDone = addressDone && speedDone;
+  const ready = canOrder && accessGate.ok;
+  const checklist = [
+    { id: "book", label: "Book options", done: bookDone },
+    { id: "address", label: "Delivery address", done: addressDone },
+    { id: "speed", label: "Delivery speed", done: speedDone },
+    { id: "price", label: "Price confirmed", done: priceDone },
+  ];
+  const remaining = checklist.filter((item) => !item.done);
+  const steps: CheckoutStep[] = [
+    { id: "order-book-section", label: "Your book", done: bookDone },
+    { id: "order-delivery-section", label: "Delivery", done: deliveryDone },
+    { id: "order-summary", label: "Payment", done: false, ready },
+  ];
+  const scrollToStep = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+  };
+
+  const finishDef = variantOptionDef("finish", variant.finish);
+  const linenDef = variant.linen !== NO_OPTION ? variantOptionDef("linen", variant.linen) : undefined;
+  const foilDef = variant.foil !== NO_OPTION ? variantOptionDef("foil", variant.foil) : undefined;
+  const specRows: SpecRowData[] = [
+    {
+      key: "binding",
+      label: "Binding",
+      value: bindingLabel,
+      photos: resolvedPhotosFor(catalogMedia, optionMediaKey("binding", product.binding)),
+      kind: "plain",
+    },
+    {
+      key: "finish",
+      label: variant.linen !== NO_OPTION ? "Jacket finish" : "Cover finish",
+      value: variantOptionLabel("finish", variant.finish),
+      photos: resolvedPhotosFor(catalogMedia, variantMediaKey("finish", variant.finish)),
+      swatch: finishDef?.swatch,
+      kind: variant.finish === "gloss" ? "gloss" : variant.finish === "matte" ? "matte" : "plain",
+    },
+    ...(linenDef
+      ? [
+          {
+            key: "linen",
+            label: "Cloth",
+            value: `${linenDef.label} linen`,
+            photos: resolvedPhotosFor(catalogMedia, variantMediaKey("linen", variant.linen)),
+            swatch: linenDef.swatch,
+            kind: "cloth" as SwatchKind,
+          },
+        ]
+      : []),
+    ...(foilDef
+      ? [
+          {
+            key: "foil",
+            label: "Spine foil",
+            value: foilStamp
+              ? `${foilDef.label} · “${[foilStamp.title, foilStamp.author].filter(Boolean).join(" · ")}”`
+              : `${foilDef.label} · plain spine`,
+            photos: resolvedPhotosFor(catalogMedia, variantMediaKey("foil", variant.foil)),
+            swatch: foilDef.swatch,
+            kind: "foil" as SwatchKind,
+          },
+        ]
+      : []),
+  ];
+  const bookSummary = [bindingLabel, variantOptionLabel("finish", variant.finish), linenDef ? `${linenDef.label} linen` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const deliverySummary = deliveryDone
+    ? `${city.trim()}, ${country} · ${shippingChoices.find((o) => o.value === shipping)?.label ?? ""}`
+    : "";
+  // The two choices worth flagging on the delivery speeds: cheapest and fastest.
+  const pricedSpeeds = shippingChoices.filter((o) => o.price != null);
+  const cheapestSpeed = pricedSpeeds.length > 1 ? pricedSpeeds[0].value : null;
+  const timedSpeeds = shippingChoices.filter((o) => o.days != null);
+  const fastestSpeed =
+    timedSpeeds.length > 1
+      ? timedSpeeds.reduce((best, o) => ((o.days as number) < (best.days as number) ? o : best)).value
+      : null;
+
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 pb-28 pt-6 sm:px-6 lg:py-8">
-      <header className="flex items-start gap-4">
-        <Button
-          variant="ghost"
-          size="sm"
-          leftIcon={<ArrowLeft className="size-4" />}
-          onClick={leave}
-          disabled={phase === "submitting"}
-          className="mt-0.5 shrink-0"
+    <div className="min-h-full bg-aurora">
+      <div className="mx-auto w-full max-w-6xl px-4 pt-6 sm:px-6 lg:pt-8">
+        <motion.header
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: EASE_OUT }}
+          className="flex items-start gap-4"
         >
-          Back
-        </Button>
-        <div className="min-w-0">
-          <h1 className="font-display text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
-            Order your printed book
-          </h1>
-          <p className="mt-1 text-sm leading-relaxed text-ink-500">
-            Choose your book, tell us where to send it, then pay securely.
-          </p>
-        </div>
-      </header>
-
-      {drawing.busy && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="mt-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800"
-        >
-          <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin motion-reduce:animate-none" />
-          <span>{busyReason(drawing)} Ordering is on hold so the book prints as you see it.</span>
-        </div>
-      )}
-
-      <div className="fixed inset-x-4 bottom-4 z-30 rounded-2xl border border-ink-200 bg-white/95 p-2.5 shadow-lifted backdrop-blur lg:hidden">
-        <div className="flex items-center gap-3">
-          <div className="min-w-0 flex-1 pl-1">
-            <p className="text-[11px] font-medium text-ink-500">{totalLabel(quote)}</p>
-            <p className="truncate text-sm font-bold text-ink-900">
-              {quote && quoteIsCurrent && !drawing.busy
-                ? money(String(totalDue), quoteCurrency)
-                : checkoutBlockReason}
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={<ArrowLeft className="size-4" />}
+            onClick={leave}
+            disabled={phase === "submitting"}
+            className="mt-0.5 shrink-0"
+          >
+            Back
+          </Button>
+          <div className="min-w-0 flex-1">
+            <h1 className="font-display text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
+              Order your printed book
+            </h1>
+            <p className="mt-1 text-sm leading-relaxed text-ink-500">
+              Choose your book, tell us where to send it, then pay securely.
             </p>
           </div>
-          <Button
-            onClick={() => void beginRender()}
-            loading={busy}
-            disabled={busy || !canOrder || !accessGate.ok}
-          >
-            {checkoutCtaLabel}
-          </Button>
-        </div>
+          <span className="mt-1 hidden shrink-0 items-center gap-1.5 rounded-full bg-white/80 px-3 py-1.5 text-xs font-medium text-ink-600 shadow-soft ring-1 ring-ink-100 backdrop-blur sm:inline-flex">
+            <Lock className="size-3.5 text-brand-600" />
+            Secure checkout
+          </span>
+        </motion.header>
       </div>
 
-      <div className="mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
-        <Card>
-          <CardBody className="p-5 sm:p-6">
+      <CheckoutSteps steps={steps} onJump={scrollToStep} />
+
+      <div className="mx-auto w-full max-w-6xl px-4 pb-28 pt-6 sm:px-6 lg:pb-12">
+        <AnimatePresence initial={false}>
+          {drawing.busy && (
+            <Collapse key="drawing">
+              <div
+                role="status"
+                aria-live="polite"
+                className="mb-6 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800"
+              >
+                <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin motion-reduce:animate-none" />
+                <span>{busyReason(drawing)} Ordering is on hold so the book prints as you see it.</span>
+              </div>
+            </Collapse>
+          )}
+        </AnimatePresence>
+
+        <motion.div
+          initial={{ y: 90, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ ...springSoft, delay: 0.3 }}
+          className="fixed inset-x-4 bottom-4 z-30 rounded-2xl border border-ink-200 bg-white/90 p-2.5 shadow-lifted backdrop-blur-xl lg:hidden"
+        >
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1 pl-1">
+              <p className="text-[11px] font-medium text-ink-500">{totalLabel(quote)}</p>
+              <p className="truncate text-sm font-bold text-ink-900">
+                {quote && quoteIsCurrent && !drawing.busy ? (
+                  <AnimatedMoney value={totalDue} currency={quoteCurrency} />
+                ) : (
+                  checkoutBlockReason
+                )}
+              </p>
+            </div>
+            <Button
+              onClick={() => void beginRender()}
+              loading={busy}
+              disabled={busy || !canOrder || !accessGate.ok}
+              leftIcon={ready && !busy ? <Lock className="size-4" /> : undefined}
+            >
+              {checkoutCtaLabel}
+            </Button>
+          </div>
+        </motion.div>
+
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
             {/* Everything the customer can change, locked as one while the print
                 files are being prepared. Editing mid-render used to leave the
                 order being placed out of step with the form on screen: the
                 payment step runs from the values the render started with. */}
-            <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0">
+            <fieldset disabled={busy} className="m-0 min-w-0 space-y-6 border-0 p-0">
               <legend className="sr-only">Order details</legend>
 
               {/* ---- 1 · Your book ------------------------------------------- */}
-              <section className="space-y-5" aria-labelledby="order-book-heading">
+              <Enter delay={0.05}>
+              <Card id="order-book-section" className="scroll-mt-20">
+              <CardBody className="p-5 sm:p-6">
+              <section className="[&>*+*]:mt-5" aria-labelledby="order-book-heading">
                 <SectionHeading
                   id="order-book-heading"
                   n={1}
                   title="Your book"
                   hint="How it's bound, how the cover feels, and how many you need."
+                  done={bookDone}
+                  summary={bookSummary}
                 />
 
                 {/* Subscription gate — this product is restricted to certain plans. */}
-                {!accessGate.ok && (
-                  <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
-                    <ShieldCheck className="mt-0.5 size-4 shrink-0" />
-                    <span>
-                      {accessGate.mode === "subscribersOnly"
-                        ? "This printed product is available with any paid subscription. Upgrade your plan to order it."
-                        : "This printed product is available on select subscription plans. Upgrade your plan to order it."}
-                    </span>
-                  </div>
-                )}
+                <AnimatePresence initial={false}>
+                  {!accessGate.ok && (
+                    <Collapse key="gate" stacked>
+                      <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
+                        <ShieldCheck className="mt-0.5 size-4 shrink-0" />
+                        <span>
+                          {accessGate.mode === "subscribersOnly"
+                            ? "This printed product is available with any paid subscription. Upgrade your plan to order it."
+                            : "This printed product is available on select subscription plans. Upgrade your plan to order it."}
+                        </span>
+                      </div>
+                    </Collapse>
+                  )}
+                </AnimatePresence>
 
                 {/* Format requirement gate — the book doesn't fit this product yet.
                     (Too-long is explained by the binding notice below, with its fix.) */}
-                {requirementError && pagePlan.status !== "too-long" && (
-                  <div
-                    role="alert"
-                    className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm text-rose-700"
-                  >
-                    <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-                    <span>{requirementError}</span>
-                  </div>
-                )}
+                <AnimatePresence initial={false}>
+                  {requirementError && pagePlan.status !== "too-long" && (
+                    <Collapse key="requirement" stacked>
+                      <div
+                        role="alert"
+                        className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm text-rose-700"
+                      >
+                        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                        <span>{requirementError}</span>
+                      </div>
+                    </Collapse>
+                  )}
+                </AnimatePresence>
 
                 {/* WHAT to make, before WHERE to send it. None of it touches the
                     designed pages — that's why these are asked here and not back
@@ -1197,15 +1361,21 @@ export function OrderCheckout({
 
                 {/* Whenever blank pages get added: a quiet note for a page or two,
                     a warning when it's mostly padding or too long. */}
-                <PageCountNotice
-                  plan={pagePlan}
-                  binding={bindingLabel}
-                  alternative={alternative}
-                  onSwitch={(sku) => void updateConfig({ productSku: sku })}
-                  spareTemplates={BACK_PAGE_TEMPLATES}
-                  onUseSpare={useSparePage}
-                  onEditInStudio={leave}
-                />
+                <AnimatePresence initial={false}>
+                  {pagePlan.status !== "exact" && (
+                    <Collapse key="page-count" stacked>
+                      <PageCountNotice
+                        plan={pagePlan}
+                        binding={bindingLabel}
+                        alternative={alternative}
+                        onSwitch={(sku) => void updateConfig({ productSku: sku })}
+                        spareTemplates={BACK_PAGE_TEMPLATES}
+                        onUseSpare={useSparePage}
+                        onEditInStudio={leave}
+                      />
+                    </Collapse>
+                  )}
+                </AnimatePresence>
 
                 <VariantPicker
                   policy={variantPolicy}
@@ -1217,49 +1387,55 @@ export function OrderCheckout({
                   visibleAxes={CUSTOMER_VARIANT_AXES}
                 />
 
-                {variant.foil !== NO_OPTION && (
-                  <SpineStampFields
-                    value={spineLines}
-                    defaults={spineDefaults}
-                    foilLabel={variantOptionLabel("foil", variant.foil)}
-                    onChange={(next) =>
-                      setSpineEdit(
-                        next.title === spineDefaults.title && next.author === spineDefaults.author ? null : next,
-                      )
-                    }
-                  />
-                )}
+                <AnimatePresence initial={false}>
+                  {variant.foil !== NO_OPTION && (
+                    <Collapse key="spine" stacked>
+                      <SpineStampFields
+                        value={spineLines}
+                        defaults={spineDefaults}
+                        foilLabel={variantOptionLabel("foil", variant.foil)}
+                        onChange={(next) =>
+                          setSpineEdit(
+                            next.title === spineDefaults.title && next.author === spineDefaults.author
+                              ? null
+                              : next,
+                          )
+                        }
+                      />
+                    </Collapse>
+                  )}
+                </AnimatePresence>
 
                 <div>
-                  <p className="text-[12px] font-semibold text-ink-800" id="copies-label">
+                  <p className="text-[13px] font-semibold text-ink-800" id="copies-label">
                     Copies
                   </p>
                   <div
                     role="group"
                     aria-labelledby="copies-label"
-                    className="mt-2 inline-flex items-center rounded-xl2 bg-white ring-1 ring-inset ring-ink-200"
+                    className="mt-2 inline-flex items-center rounded-2xl bg-white p-1 shadow-soft ring-1 ring-inset ring-ink-200"
                   >
                     <button
                       type="button"
                       aria-label="One fewer copy"
                       disabled={copies <= 1}
                       onClick={() => setCopies((c) => Math.max(1, c - 1))}
-                      className="flex size-10 items-center justify-center rounded-l-xl2 text-ink-600 transition hover:bg-ink-50 disabled:opacity-30"
+                      className="flex size-9 items-center justify-center rounded-xl text-ink-600 transition hover:bg-ink-100 active:scale-90 disabled:opacity-30 disabled:hover:bg-transparent motion-reduce:transition-none"
                     >
                       <Minus className="size-4" />
                     </button>
                     <output
                       aria-live="polite"
-                      className="w-10 text-center text-sm font-semibold tabular-nums text-ink-900"
+                      className="flex w-12 justify-center text-center text-base font-semibold tabular-nums text-ink-900"
                     >
-                      {copies}
+                      <AnimatedSwap value={copies} />
                     </output>
                     <button
                       type="button"
                       aria-label="One more copy"
                       disabled={copies >= maxCopies}
                       onClick={() => setCopies((c) => Math.min(c + 1, maxCopies))}
-                      className="flex size-10 items-center justify-center rounded-r-xl2 text-ink-600 transition hover:bg-ink-50 disabled:opacity-30"
+                      className="flex size-9 items-center justify-center rounded-xl text-ink-600 transition hover:bg-ink-100 active:scale-90 disabled:opacity-30 disabled:hover:bg-transparent motion-reduce:transition-none"
                     >
                       <Plus className="size-4" />
                     </button>
@@ -1274,7 +1450,9 @@ export function OrderCheckout({
                     into the fold, a page with no artwork. Collapsed, because it is
                     advice rather than a step; shown here because this is the last
                     moment before it costs money to be wrong. */}
+                <AnimatePresence initial={false}>
                 {preflight.length > 0 && (
+                  <Collapse key="preflight" stacked>
                   <div className="rounded-xl border border-amber-200 bg-amber-50 text-sm text-amber-800">
                     <button
                       type="button"
@@ -1289,10 +1467,15 @@ export function OrderCheckout({
                           : `${preflight.length} things worth a look before you print`}
                       </span>
                       <ChevronDown
-                        className={cn("size-4 shrink-0 transition", checkOpen && "rotate-180")}
+                        className={cn(
+                          "size-4 shrink-0 transition-transform duration-300 motion-reduce:transition-none",
+                          checkOpen && "rotate-180",
+                        )}
                       />
                     </button>
+                    <AnimatePresence initial={false}>
                     {checkOpen && (
+                      <Collapse key="preflight-detail">
                       <div className="space-y-2.5 border-t border-amber-200 px-3.5 pb-3 pt-2.5">
                         <ul className="space-y-1 pl-5 text-xs leading-relaxed">
                           {preflight.slice(0, 6).map((issue) => (
@@ -1313,21 +1496,30 @@ export function OrderCheckout({
                           You can order anyway — these are judgment calls, not errors.
                         </p>
                       </div>
+                      </Collapse>
                     )}
+                    </AnimatePresence>
                   </div>
+                  </Collapse>
                 )}
+                </AnimatePresence>
               </section>
+              </CardBody>
+              </Card>
+              </Enter>
 
               {/* ---- 2 · Delivery -------------------------------------------- */}
-              <section
-                className="mt-8 space-y-5 border-t border-ink-100 pt-8"
-                aria-labelledby="order-delivery-heading"
-              >
+              <Enter delay={0.12}>
+              <Card id="order-delivery-section" className="scroll-mt-20">
+              <CardBody className="p-5 sm:p-6">
+              <section className="[&>*+*]:mt-5" aria-labelledby="order-delivery-heading">
                 <SectionHeading
                   id="order-delivery-heading"
                   n={2}
                   title="Delivery"
                   hint="Where to send it, and how fast."
+                  done={deliveryDone}
+                  summary={deliverySummary}
                 />
 
                 {/* Saved address picker — lets returning customers reuse an address. */}
@@ -1412,15 +1604,20 @@ export function OrderCheckout({
                       autoComplete="shipping address-line1"
                     />
                   </Field>
-                  {showLine2 || line2.trim() ? (
-                    <Field label="Apartment, suite, etc." className="sm:col-span-2">
-                      <Input
-                        value={line2}
-                        onChange={(e) => editAddr(setLine2, e.target.value)}
-                        autoComplete="shipping address-line2"
-                      />
-                    </Field>
-                  ) : (
+                  <AnimatePresence initial={false}>
+                    {(showLine2 || line2.trim()) && (
+                      <Collapse key="line2" className="sm:col-span-2">
+                        <Field label="Apartment, suite, etc.">
+                          <Input
+                            value={line2}
+                            onChange={(e) => editAddr(setLine2, e.target.value)}
+                            autoComplete="shipping address-line2"
+                          />
+                        </Field>
+                      </Collapse>
+                    )}
+                  </AnimatePresence>
+                  {!(showLine2 || line2.trim()) && (
                     <button
                       type="button"
                       onClick={() => setShowLine2(true)}
@@ -1539,30 +1736,38 @@ export function OrderCheckout({
                 {/* The carrier's verdict on the address, from the live quote. Asked
                     here — while it's still free — because a mismatch discovered
                     after payment parks the print job awaiting manual confirmation. */}
-                {validation && (
-                  <AddressSuggestion
-                    validation={validation}
-                    entered={enteredAddress}
-                    choice={addressChoiceForSuggestion}
-                    onUseSuggested={applyAddressChoice}
-                    onKeepEntered={keepEnteredAddress}
-                  />
-                )}
+                <AnimatePresence initial={false}>
+                  {showSuggestionCard && validation && (
+                    <Collapse key="suggestion" stacked>
+                      <AddressSuggestion
+                        validation={validation}
+                        entered={enteredAddress}
+                        choice={addressChoiceForSuggestion}
+                        onUseSuggested={applyAddressChoice}
+                        onKeepEntered={keepEnteredAddress}
+                      />
+                    </Collapse>
+                  )}
+                </AnimatePresence>
 
                 {/* Right after taking the carrier's version the old verdict no longer
                     applies (it was about the previous address) and the new one is
                     still on its way. Say so, rather than letting the card vanish. */}
-                {!validation && decision?.choice === "suggested" && decision.afterSig === addressSig && (
-                  <p
-                    role="status"
-                    className="flex items-center gap-1.5 rounded-xl border border-ink-200 bg-white px-3.5 py-2.5 text-xs text-ink-600"
-                  >
-                    <MapPin className="size-3.5 shrink-0 text-brand-600" />
-                    {quoteIsCurrent
-                      ? "Using the carrier's corrected address."
-                      : "Using the carrier's corrected address — checking it…"}
-                  </p>
-                )}
+                <AnimatePresence initial={false}>
+                  {!showSuggestionCard && adoptedCarrierAddress && (
+                    <Collapse key="corrected" stacked>
+                      <p
+                        role="status"
+                        className="flex items-center gap-1.5 rounded-xl border border-ink-200 bg-white px-3.5 py-2.5 text-xs text-ink-600"
+                      >
+                        <MapPin className="size-3.5 shrink-0 text-brand-600" />
+                        {quoteIsCurrent
+                          ? "Using the carrier's corrected address."
+                          : "Using the carrier's corrected address — checking it…"}
+                      </p>
+                    </Collapse>
+                  )}
+                </AnimatePresence>
 
                 {/* Save this address for faster reordering next time. */}
                 <label className="flex items-center gap-2 text-sm text-ink-600">
@@ -1591,211 +1796,358 @@ export function OrderCheckout({
                             : "No delivery options are currently available for this destination."}
                     </p>
                   ) : (
-                    <div className="space-y-1.5">
-                      {shippingChoices.map((option) => (
-                        <label
-                          key={option.value}
-                          className={cn(
-                            "flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition",
-                            shipping === option.value
-                              ? "border-brand-400 bg-brand-50/60"
-                              : "border-ink-100 hover:border-ink-200",
-                          )}
-                        >
-                          <input
-                            type="radio"
-                            name="shipping-method"
-                            checked={shipping === option.value}
-                            onChange={() => setShipping(option.value)}
-                            className="size-4 shrink-0 border-ink-300 text-brand-600 focus:ring-brand-400"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-ink-800">{option.label}</span>
-                            <span className="block text-xs text-ink-400">
-                              {option.transit ?? "Delivery time confirmed at checkout"}
-                            </span>
-                          </span>
-                          <span className="shrink-0 text-sm font-medium text-ink-700">
-                            {option.price == null
-                              ? "—"
-                              : option.price === 0
-                                ? "Free"
-                                : money(String(option.price), currency)}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
+                    <LayoutGroup id="shipping-speed">
+                      <div className="space-y-2" role="radiogroup" aria-label="Delivery speed">
+                        {shippingChoices.map((option) => {
+                          const selected = shipping === option.value;
+                          const Icon = SPEED_ICON[option.value] ?? Truck;
+                          return (
+                            <label
+                              key={option.value}
+                              className={cn(
+                                "group/speed relative flex cursor-pointer items-center gap-3 rounded-2xl bg-white px-3 py-3 text-sm ring-1 ring-inset transition duration-200 motion-reduce:transition-none",
+                                "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand-400",
+                                selected
+                                  ? "bg-brand-50/60 ring-transparent"
+                                  : "ring-ink-200 hover:-translate-y-px hover:shadow-soft hover:ring-ink-300",
+                              )}
+                            >
+                              {selected && (
+                                <motion.span
+                                  layoutId="speed-selection"
+                                  aria-hidden
+                                  transition={springSoft}
+                                  className="pointer-events-none absolute inset-0"
+                                  style={{
+                                    borderRadius: 16,
+                                    boxShadow:
+                                      "0 0 0 2px var(--color-brand-500), 0 10px 28px -14px color-mix(in srgb, var(--color-brand-600) 55%, transparent)",
+                                  }}
+                                />
+                              )}
+                              <input
+                                type="radio"
+                                name="shipping-method"
+                                checked={selected}
+                                onChange={() => setShipping(option.value)}
+                                className="sr-only"
+                              />
+                              <span
+                                aria-hidden
+                                className={cn(
+                                  "relative flex size-10 shrink-0 items-center justify-center rounded-xl transition-colors duration-300",
+                                  selected ? "bg-brand-500 text-white" : "bg-ink-100 text-ink-500",
+                                )}
+                              >
+                                <Icon className="size-[18px]" />
+                              </span>
+                              <span className="relative min-w-0 flex-1">
+                                <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                  <span className="font-medium text-ink-800">{option.label}</span>
+                                  {option.value === cheapestSpeed && cheapestSpeed !== fastestSpeed && (
+                                    <SpeedBadge tone="green">Cheapest</SpeedBadge>
+                                  )}
+                                  {option.value === fastestSpeed && cheapestSpeed !== fastestSpeed && (
+                                    <SpeedBadge tone="brand">Fastest</SpeedBadge>
+                                  )}
+                                </span>
+                                <span className="block text-xs text-ink-500">
+                                  {option.transit ?? "Delivery time confirmed at checkout"}
+                                </span>
+                              </span>
+                              <span className="relative flex shrink-0 items-center gap-2 text-sm font-semibold text-ink-800">
+                                {option.price == null ? (
+                                  "—"
+                                ) : option.price === 0 ? (
+                                  "Free"
+                                ) : (
+                                  <AnimatedMoney value={option.price} currency={currency} />
+                                )}
+                                <AnimatePresence initial={false}>
+                                  {selected && (
+                                    <motion.span
+                                      key="tick"
+                                      initial={{ scale: 0, opacity: 0 }}
+                                      animate={{ scale: 1, opacity: 1 }}
+                                      exit={{ scale: 0, opacity: 0, transition: { duration: 0.12 } }}
+                                      transition={spring}
+                                      className="flex size-5 items-center justify-center rounded-full bg-brand-500 text-white"
+                                    >
+                                      <Check className="size-3" strokeWidth={3.5} />
+                                    </motion.span>
+                                  )}
+                                </AnimatePresence>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </LayoutGroup>
                   )}
                 </Field>
               </section>
+              </CardBody>
+              </Card>
+              </Enter>
             </fieldset>
-          </CardBody>
-        </Card>
 
-        <aside className="lg:sticky lg:top-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Order summary</CardTitle>
-            </CardHeader>
-            <CardBody className="space-y-5">
-              <div className="flex items-start gap-4">
-                <div className="flex shrink-0 items-center justify-center rounded-xl bg-ink-50 p-3">
-                  <BookMockup
-                    blobId={cover?.blobId}
-                    title={project.title}
-                    pageDesign={design.pages[COVER_FRONT_ID]}
-                    aspect={cover?.aspect ?? product.trim.widthIn / product.trim.heightIn}
-                    width={64}
-                    variant="flat"
-                  />
+        <aside id="order-summary" className="scroll-mt-20 lg:sticky lg:top-20">
+          <Enter delay={0.18}>
+            <Card className="overflow-hidden">
+              {/* The book itself, large — the thing being bought, before the numbers. */}
+              <div className="relative overflow-hidden bg-linear-to-b from-brand-50 via-brand-50/40 to-white px-5 pb-5 pt-7">
+                <div aria-hidden className="bg-grid absolute inset-0 opacity-60" />
+                <div className="relative">
+                  <motion.div
+                    key={product.sku}
+                    initial={{ scale: 0.93, opacity: 0.5, y: 6 }}
+                    animate={{ scale: 1, opacity: 1, y: 0 }}
+                    transition={spring}
+                  >
+                    <BookMockup
+                      blobId={cover?.blobId}
+                      title={project.title}
+                      pageDesign={design.pages[COVER_FRONT_ID]}
+                      aspect={cover?.aspect ?? product.trim.widthIn / product.trim.heightIn}
+                      width={116}
+                      variant="flat"
+                    />
+                  </motion.div>
+                  <div className="mt-5 text-center">
+                    <p className="truncate font-display text-base font-semibold text-ink-900">
+                      {project.title || "Your storybook"}
+                    </p>
+                    <p className="mt-0.5 flex items-center justify-center gap-1.5 text-xs text-ink-500">
+                      <span>
+                        {product.trim.widthIn}×{product.trim.heightIn}″
+                      </span>
+                      <span aria-hidden>·</span>
+                      <AnimatedSwap value={`${pageCount} printed pages`} />
+                      <span aria-hidden>·</span>
+                      <AnimatedSwap value={`${copies} ${copies === 1 ? "copy" : "copies"}`} />
+                    </p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-ink-900">
-                    {project.title || "Your storybook"}
-                  </p>
-                  <p className="mt-0.5 text-xs capitalize leading-relaxed text-ink-500">
-                    {bindingLabel} · {variantOptionLabel("finish", variant.finish)}{" "}
-                    {variant.linen !== NO_OPTION ? "jacket" : "cover"}
-                    {variant.linen !== NO_OPTION &&
-                      ` · ${variantOptionLabel("linen", variant.linen)} linen · ${variantOptionLabel("foil", variant.foil)} foil`}
-                  </p>
-                  {variant.foil !== NO_OPTION && (
-                    <p className="text-xs leading-relaxed text-ink-500">
-                      {foilStamp
-                        ? `Spine stamped: “${[foilStamp.title, foilStamp.author].filter(Boolean).join(" · ")}”`
-                        : "Plain spine — nothing stamped."}
+              </div>
+
+              <CardBody className="space-y-5 pt-1">
+                {/* What was chosen, each with the picture of it — so the last look
+                    before paying is the same cloth, foil and binding they picked. */}
+                <div className="divide-y divide-ink-100">
+                  <AnimatePresence initial={false}>
+                    {specRows.map((row) => (
+                      <Collapse key={row.key}>
+                        <SpecRow row={row} />
+                      </Collapse>
+                    ))}
+                  </AnimatePresence>
+                </div>
+
+                <div className="border-t border-ink-100 pt-4 text-sm">
+                  {quote ? (
+                    <div className="relative">
+                      <div
+                        aria-live="polite"
+                        className={cn(
+                          "transition-opacity duration-300 motion-reduce:transition-none",
+                          quoting && "opacity-45",
+                        )}
+                      >
+                        <QuoteLines quote={quote} discount={discount} total={totalDue} />
+                      </div>
+                      <AnimatePresence initial={false}>
+                        {quoting && (
+                          <motion.div
+                            key="updating"
+                            role="status"
+                            initial={{ opacity: 0, y: -4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0 }}
+                            className="absolute right-0 top-0 inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-ink-600 shadow-soft ring-1 ring-ink-100"
+                          >
+                            <Loader2 className="size-3 animate-spin motion-reduce:animate-none" /> Updating price…
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  ) : quoting ? (
+                    <div role="status" aria-label="Updating price…" className="space-y-2.5">
+                      <div className="h-4 w-full animate-pulse rounded-full bg-ink-100" />
+                      <div className="h-4 w-4/5 animate-pulse rounded-full bg-ink-100" />
+                      <div className="h-6 w-full animate-pulse rounded-full bg-ink-100" />
+                    </div>
+                  ) : quoteError ? (
+                    <div role="alert" className="space-y-2">
+                      <p className="leading-relaxed text-rose-600">{quoteError}</p>
+                      <Button size="sm" variant="secondary" onClick={() => setQuoteRetry((n) => n + 1)}>
+                        Try again
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="leading-relaxed text-ink-500">
+                      Complete the delivery address to see the total.
                     </p>
                   )}
-                  <p className="text-xs leading-relaxed text-ink-500">
-                    {product.trim.widthIn}×{product.trim.heightIn}″ · {pageCount} printed pages
-                  </p>
-                </div>
-              </div>
-
-              <div className="border-t border-ink-100 pt-4 text-sm">
-                {quoting ? (
-                  <div role="status" className="flex items-center gap-2 text-ink-500">
-                    <Loader2 className="size-4 animate-spin motion-reduce:animate-none" /> Updating price…
-                  </div>
-                ) : quote ? (
-                  <div aria-live="polite">
-                    <QuoteLines quote={quote} discount={discount} total={totalDue} />
-                  </div>
-                ) : quoteError ? (
-                  <div role="alert" className="space-y-2">
-                    <p className="leading-relaxed text-rose-600">{quoteError}</p>
-                    <Button size="sm" variant="secondary" onClick={() => setQuoteRetry((n) => n + 1)}>
-                      Try again
-                    </Button>
-                  </div>
-                ) : (
-                  <p className="leading-relaxed text-ink-500">
-                    Complete the delivery address to see the total.
-                  </p>
-                )}
-                {/* Only once there's a total: a code is validated against the
-                    order value, so offering the box before the price is known
-                    would be checking it against nothing. Locked while preparing,
-                    for the same reason as the form. */}
-                {quote && (
-                  <fieldset disabled={busy} className="m-0 mt-3 min-w-0 border-0 p-0">
-                    <CouponField
-                      itemType="print"
-                      subtotal={quote.items}
-                      orderTotal={quote.total}
-                      atCostTotal={quote.atCostTotal}
-                      currency={quoteCurrency}
-                      productId={offerableCatalog.get(product.sku)?.id}
-                      country={country}
-                      onChange={setCouponCode}
-                      onDiscount={setCouponDiscount}
-                    />
-                  </fieldset>
-                )}
-                {/* What else this order earns — shown before the button, because
-                    a reward discovered in a receipt changed nobody's mind. */}
-                {quote && quoteIsCurrent && (
-                  <OfferPreviewNote
-                    className="mt-3"
-                    itemType="print"
-                    amount={quoteCurrency === pricingSettings.baseCurrency ? totalDue : undefined}
-                    productId={offerableCatalog.get(product.sku)?.id}
-                    projectId={project.id}
-                  />
-                )}
-              </div>
-
-              {busy && (
-                <div
-                  role="status"
-                  aria-live="polite"
-                  className="rounded-xl bg-brand-50 px-3 py-2.5 text-sm text-brand-700"
-                >
-                  <div className="flex items-center gap-2">
-                    <Loader2 className="size-4 shrink-0 animate-spin motion-reduce:animate-none" />
-                    <span className="min-w-0 truncate" title={status}>
-                      {status}
-                    </span>
-                  </div>
-                  {phase === "rendering" && (
-                    <>
-                      {progress && (
-                        <div
-                          role="progressbar"
-                          aria-valuemin={0}
-                          aria-valuemax={progress.total}
-                          aria-valuenow={progress.done}
-                          className="mt-2 h-1.5 overflow-hidden rounded-full bg-brand-100"
-                        >
-                          <div
-                            className="h-full rounded-full bg-brand-500 transition-[width] duration-500"
-                            style={{ width: `${Math.round((progress.done / progress.total) * 100)}%` }}
+                  {/* Only once there's a total: a code is validated against the
+                      order value, so offering the box before the price is known
+                      would be checking it against nothing. Locked while preparing,
+                      for the same reason as the form. */}
+                  <AnimatePresence initial={false}>
+                    {quote && (
+                      <Collapse key="coupon" stacked>
+                        <fieldset disabled={busy} className="m-0 mt-3 min-w-0 border-0 p-0">
+                          <CouponField
+                            itemType="print"
+                            subtotal={quote.items}
+                            orderTotal={quote.total}
+                            atCostTotal={quote.atCostTotal}
+                            currency={quoteCurrency}
+                            productId={offerableCatalog.get(product.sku)?.id}
+                            country={country}
+                            onChange={setCouponCode}
+                            onDiscount={setCouponDiscount}
                           />
-                        </div>
-                      )}
-                      <p className="mt-2 text-xs leading-relaxed text-brand-700/80">
-                        Preparing your print files takes about a minute. Please keep this tab open —
-                        you&apos;ll go straight to payment when it&apos;s done.
-                      </p>
-                    </>
+                        </fieldset>
+                      </Collapse>
+                    )}
+                  </AnimatePresence>
+                  {/* What else this order earns — shown before the button, because
+                      a reward discovered in a receipt changed nobody's mind. */}
+                  {quote && quoteIsCurrent && (
+                    <OfferPreviewNote
+                      className="mt-3"
+                      itemType="print"
+                      amount={quoteCurrency === pricingSettings.baseCurrency ? totalDue : undefined}
+                      productId={offerableCatalog.get(product.sku)?.id}
+                      projectId={project.id}
+                    />
                   )}
                 </div>
-              )}
 
-              <Button
-                size="lg"
-                className="w-full"
-                onClick={() => void beginRender()}
-                loading={busy}
-                disabled={busy || !canOrder || !accessGate.ok}
-              >
-                {checkoutCtaLabel}
-              </Button>
+                <AnimatePresence initial={false}>
+                  {busy && (
+                    <Collapse key="busy">
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className="rounded-2xl bg-brand-50 px-3.5 py-3 text-sm text-brand-700 ring-1 ring-inset ring-brand-100"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="size-4 shrink-0 animate-spin motion-reduce:animate-none" />
+                          <span className="min-w-0 truncate" title={status}>
+                            {status}
+                          </span>
+                        </div>
+                        {phase === "rendering" && (
+                          <>
+                            <div
+                              role="progressbar"
+                              aria-valuemin={0}
+                              aria-valuemax={progress?.total ?? 1}
+                              aria-valuenow={progress?.done ?? 0}
+                              aria-label="Preparing print files"
+                              className="relative mt-2.5 h-1.5 overflow-hidden rounded-full bg-brand-100"
+                            >
+                              {progress ? (
+                                <motion.div
+                                  className="h-full rounded-full bg-brand-500"
+                                  initial={false}
+                                  animate={{ width: `${Math.round((progress.done / progress.total) * 100)}%` }}
+                                  transition={{ duration: 0.5, ease: EASE_OUT }}
+                                />
+                              ) : (
+                                <motion.div
+                                  className="absolute inset-y-0 w-1/3 rounded-full bg-brand-500"
+                                  animate={{ x: ["-100%", "300%"] }}
+                                  transition={{ duration: 1.4, ease: "easeInOut", repeat: Infinity }}
+                                />
+                              )}
+                            </div>
+                            <p className="mt-2 text-xs leading-relaxed text-brand-700/80">
+                              Preparing your print files takes about a minute. Please keep this tab open —
+                              you&apos;ll go straight to payment when it&apos;s done.
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    </Collapse>
+                  )}
+                </AnimatePresence>
 
-              {!busy && checkoutBlockReason && (
-                <p className="-mt-2 text-center text-xs leading-relaxed text-ink-500">
-                  {checkoutBlockReason}
-                </p>
-              )}
+                {/* Not a wall of requirements: only what is still missing, and it
+                    shrinks as each one is done. */}
+                <AnimatePresence initial={false} mode="wait">
+                  {!busy &&
+                    (remaining.length > 0 ? (
+                      <motion.ul
+                        key="remaining"
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        transition={{ duration: 0.2 }}
+                        aria-label="Still to do"
+                        className="space-y-1.5 rounded-2xl bg-ink-50/80 px-3.5 py-3"
+                      >
+                        {checklist.map((item) => (
+                          <ChecklistItem key={item.id} label={item.label} done={item.done} />
+                        ))}
+                      </motion.ul>
+                    ) : (
+                      <motion.p
+                        key="ready"
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        transition={{ duration: 0.2 }}
+                        className="flex items-center gap-2 rounded-2xl bg-emerald-50 px-3.5 py-3 text-sm font-medium text-emerald-700 ring-1 ring-inset ring-emerald-100"
+                      >
+                        <span className="flex size-5 items-center justify-center rounded-full bg-emerald-500 text-white">
+                          <Check className="size-3" strokeWidth={3.5} />
+                        </span>
+                        Everything&apos;s ready — you can pay.
+                      </motion.p>
+                    ))}
+                </AnimatePresence>
 
-              {onChooseEbook && !busy && (
-                <button
-                  type="button"
-                  onClick={onChooseEbook}
-                  className="-mt-2 block w-full text-center text-xs font-medium text-ink-500 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-700"
+                <Button
+                  size="lg"
+                  className="w-full"
+                  onClick={() => void beginRender()}
+                  loading={busy}
+                  disabled={busy || !canOrder || !accessGate.ok}
+                  leftIcon={ready && !busy ? <Lock className="size-4" /> : undefined}
                 >
-                  Prefer a digital copy? Get the ebook instead
-                </button>
-              )}
+                  {checkoutCtaLabel}
+                </Button>
 
-              <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-400">
-                <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
-                Stripe securely handles payment and shows tax before you pay. Your book goes to
-                print only after payment succeeds.
-              </p>
-            </CardBody>
-          </Card>
+                <AnimatePresence initial={false}>
+                  {!busy && checkoutBlockReason && (
+                    <Collapse key="block-reason">
+                      <p className="text-center text-xs leading-relaxed text-ink-500">{checkoutBlockReason}</p>
+                    </Collapse>
+                  )}
+                </AnimatePresence>
+
+                {onChooseEbook && !busy && (
+                  <button
+                    type="button"
+                    onClick={onChooseEbook}
+                    className="-mt-2 block w-full text-center text-xs font-medium text-ink-500 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-700"
+                  >
+                    Prefer a digital copy? Get the ebook instead
+                  </button>
+                )}
+
+                <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-400">
+                  <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
+                  Stripe securely handles payment and shows tax before you pay. Your book goes to
+                  print only after payment succeeds.
+                </p>
+              </CardBody>
+            </Card>
+          </Enter>
         </aside>
+      </div>
       </div>
     </div>
   );
@@ -1806,27 +2158,253 @@ function SectionHeading({
   n,
   title,
   hint,
+  done,
+  summary,
 }: {
   id: string;
   n: number;
   title: string;
   hint: string;
+  /** Everything this section asks for has been settled. */
+  done?: boolean;
+  /** The answer so far, in a few words — for skimming back up the page. */
+  summary?: string;
 }) {
   return (
     <div className="flex items-start gap-3">
       <span
         aria-hidden
-        className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-ink-900 text-xs font-semibold text-white"
+        className={cn(
+          "relative mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white transition-colors duration-300 motion-reduce:transition-none",
+          done ? "bg-brand-500" : "bg-ink-900",
+        )}
       >
-        {n}
+        <AnimatePresence mode="popLayout" initial={false}>
+          {done ? (
+            <motion.span
+              key="done"
+              initial={{ scale: 0, rotate: -70 }}
+              animate={{ scale: 1, rotate: 0 }}
+              exit={{ scale: 0 }}
+              transition={spring}
+              className="flex"
+            >
+              <Check className="size-3.5" strokeWidth={3.25} />
+            </motion.span>
+          ) : (
+            <motion.span
+              key="n"
+              initial={{ scale: 0.4, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.4, opacity: 0 }}
+              transition={spring}
+              className="flex"
+            >
+              {n}
+            </motion.span>
+          )}
+        </AnimatePresence>
       </span>
-      <div>
+      <div className="min-w-0 flex-1">
         <h2 id={id} className="font-display text-lg font-semibold leading-7 text-ink-900">
           {title}
         </h2>
         <p className="text-xs leading-relaxed text-ink-500">{hint}</p>
       </div>
+      {summary && (
+        <span className="mt-1 hidden max-w-[45%] shrink-0 rounded-full bg-ink-50 px-3 py-1 text-xs font-medium text-ink-600 ring-1 ring-inset ring-ink-100 sm:inline-flex">
+          <AnimatedSwap value={summary} className="capitalize" />
+        </span>
+      )}
     </div>
+  );
+}
+
+interface CheckoutStep {
+  /** The element id to scroll to. */
+  id: string;
+  label: string;
+  done: boolean;
+  /** Last step only: everything before it is settled and it can be taken. */
+  ready?: boolean;
+}
+
+/**
+ * Where the customer is in the order, pinned to the top while they scroll: done
+ * steps tick, the first unfinished one is lit, the rest wait. Each is a way to
+ * jump there — on a form this long the overview is also the navigation.
+ */
+function CheckoutSteps({ steps, onJump }: { steps: CheckoutStep[]; onJump: (id: string) => void }) {
+  const activeIndex = Math.max(
+    0,
+    steps.findIndex((step) => !step.done),
+  );
+  return (
+    <nav
+      aria-label="Order progress"
+      className="sticky top-0 z-20 mt-4 border-y border-ink-100/70 bg-canvas/75 backdrop-blur-xl"
+    >
+      <ol className="mx-auto flex w-full max-w-6xl items-center px-4 py-2.5 sm:px-6">
+        {steps.map((step, i) => {
+          const done = step.done;
+          const active = i === activeIndex;
+          const last = i === steps.length - 1;
+          return (
+            <li key={step.id} className={cn("flex items-center", !last && "flex-1")}>
+              <button
+                type="button"
+                onClick={() => onJump(step.id)}
+                aria-current={active ? "step" : undefined}
+                className="group/step flex items-center gap-2 rounded-full py-1 pr-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+              >
+                <span
+                  className={cn(
+                    "relative flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors duration-300 motion-reduce:transition-none",
+                    done || step.ready
+                      ? "bg-brand-500 text-white"
+                      : active
+                        ? "bg-ink-900 text-white"
+                        : "bg-white text-ink-400 ring-1 ring-inset ring-ink-200",
+                  )}
+                >
+                  {active && !done && (
+                    <motion.span
+                      aria-hidden
+                      className="absolute inset-0 rounded-full ring-2 ring-ink-900/30"
+                      animate={{ scale: [1, 1.5], opacity: [0.7, 0] }}
+                      transition={{ duration: 1.8, repeat: Infinity, ease: "easeOut" }}
+                    />
+                  )}
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    <motion.span
+                      key={done ? "done" : step.ready ? "ready" : "n"}
+                      initial={{ scale: 0.3, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.3, opacity: 0 }}
+                      transition={spring}
+                      className="flex"
+                    >
+                      {done ? (
+                        <Check className="size-3.5" strokeWidth={3.25} />
+                      ) : step.ready ? (
+                        <Lock className="size-3.5" />
+                      ) : (
+                        i + 1
+                      )}
+                    </motion.span>
+                  </AnimatePresence>
+                </span>
+                <span
+                  className={cn(
+                    "text-[13px] font-medium transition-colors duration-300 motion-reduce:transition-none",
+                    done || active ? "text-ink-900" : "text-ink-400 group-hover/step:text-ink-600",
+                  )}
+                >
+                  {step.label}
+                </span>
+              </button>
+              {!last && (
+                <span aria-hidden className="mx-2 h-0.5 flex-1 overflow-hidden rounded-full bg-ink-100 sm:mx-4">
+                  <motion.span
+                    className="block h-full origin-left rounded-full bg-brand-500"
+                    initial={false}
+                    animate={{ scaleX: done ? 1 : 0 }}
+                    transition={{ duration: 0.5, ease: EASE_OUT }}
+                  />
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
+  );
+}
+
+interface SpecRowData {
+  key: string;
+  label: string;
+  value: string;
+  photos: ReturnType<typeof resolvedPhotosFor>;
+  swatch?: string;
+  kind: SwatchKind;
+}
+
+/** One choice in the order summary, with the picture of what was chosen. */
+function SpecRow({ row }: { row: SpecRowData }) {
+  const hasVisual = row.photos.length > 0 || Boolean(row.swatch) || row.kind !== "plain";
+  const value = row.key === "binding" ? row.value.charAt(0).toUpperCase() + row.value.slice(1) : row.value;
+  return (
+    <div className="flex items-center gap-3 py-2.5">
+      <span className="group/tile relative size-10 shrink-0 overflow-hidden rounded-xl bg-ink-100 ring-1 ring-inset ring-ink-200">
+        {hasVisual ? (
+          <OptionVisual photo={row.photos[0]} swatch={row.swatch} kind={row.kind} label={row.value} />
+        ) : (
+          <span className="flex size-full items-center justify-center text-ink-400">
+            <BookOpen className="size-4" />
+          </span>
+        )}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[10px] font-semibold uppercase tracking-wider text-ink-400">{row.label}</span>
+        <AnimatedSwap value={value} className="w-full text-[13px] font-medium text-ink-800" />
+      </span>
+    </div>
+  );
+}
+
+/** A line of "what's still to do" that ticks itself off. */
+function ChecklistItem({ label, done }: { label: string; done: boolean }) {
+  return (
+    <li className="flex items-center gap-2.5 text-[13px]">
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-4 shrink-0 items-center justify-center rounded-full transition-colors duration-300 motion-reduce:transition-none",
+          done ? "bg-brand-500 text-white" : "bg-white ring-1 ring-inset ring-ink-300",
+        )}
+      >
+        <AnimatePresence initial={false}>
+          {done && (
+            <motion.span
+              key="tick"
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0 }}
+              transition={spring}
+              className="flex"
+            >
+              <Check className="size-2.5" strokeWidth={4} />
+            </motion.span>
+          )}
+        </AnimatePresence>
+      </span>
+      <span className={cn("transition-colors duration-300", done ? "text-ink-400 line-through" : "text-ink-700")}>
+        {label}
+      </span>
+      <span className="sr-only">{done ? "(done)" : "(still to do)"}</span>
+    </li>
+  );
+}
+
+const SPEED_ICON: Partial<Record<ShippingMethod, typeof Truck>> = {
+  Budget: Package,
+  Standard: Truck,
+  StandardPlus: Truck,
+  Express: Zap,
+  Overnight: Rocket,
+};
+
+function SpeedBadge({ tone, children }: { tone: "green" | "brand"; children: string }) {
+  return (
+    <span
+      className={cn(
+        "rounded-full px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide",
+        tone === "green" ? "bg-emerald-100 text-emerald-700" : "bg-brand-100 text-brand-700",
+      )}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -1870,10 +2448,10 @@ function QuoteLines({
   const currency = quote.currency || "USD";
   const hasDiscount = quote.discountPct > 0 && quote.listUnitPrice > quote.unitPrice;
   return (
-    <div className="space-y-1 text-ink-700">
+    <div className="space-y-1.5 text-ink-700">
       <Row
         label={`Books (${quote.copies} × ${money(String(quote.unitPrice), currency)})`}
-        value={money(String(quote.items), currency)}
+        value={<AnimatedMoney value={quote.items} currency={currency} />}
       />
       {hasDiscount && (
         <p className="text-xs text-emerald-600">
@@ -1881,15 +2459,24 @@ function QuoteLines({
           per copy).
         </p>
       )}
-      {discount > 0 && (
-        <div className="flex items-center justify-between text-emerald-700">
-          <span>Discount code</span>
-          <span>−{money(String(discount), currency)}</span>
-        </div>
-      )}
-      <Row label="Shipping" value={money(String(quote.shipping), currency)} />
-      <div className="my-1 h-px bg-ink-100" />
-      <Row label={totalLabel(quote)} value={money(String(total), currency)} bold />
+      <AnimatePresence initial={false}>
+        {discount > 0 && (
+          <Collapse key="discount">
+            <div className="flex items-center justify-between text-emerald-700">
+              <span>Discount code</span>
+              <span>
+                −<AnimatedMoney value={discount} currency={currency} />
+              </span>
+            </div>
+          </Collapse>
+        )}
+      </AnimatePresence>
+      <Row label="Shipping" value={<AnimatedMoney value={quote.shipping} currency={currency} />} />
+      <div className="!my-3 h-px bg-ink-100" />
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="font-semibold text-ink-800">{totalLabel(quote)}</span>
+        <AnimatedMoney value={total} currency={currency} className="font-display text-xl font-semibold text-ink-900" />
+      </div>
       {quote.taxBehavior !== "inclusive" && (
         <p className="text-[11px] text-ink-400">Any sales tax is added at payment.</p>
       )}
@@ -1901,11 +2488,11 @@ function totalLabel(quote: RetailPricePreview | null): string {
   return quote?.taxBehavior === "inclusive" ? "Estimated total (incl. tax)" : "Estimated total (before tax)";
 }
 
-function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
+function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-center justify-between">
-      <span className={bold ? "font-semibold text-ink-800" : "text-ink-600"}>{label}</span>
-      <span className={bold ? "font-semibold text-ink-900" : "text-ink-700"}>{value}</span>
+      <span className="text-ink-600">{label}</span>
+      <span className="text-ink-700">{value}</span>
     </div>
   );
 }

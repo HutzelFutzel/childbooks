@@ -13,7 +13,7 @@
  * often enough that silently overwriting them would ship books to the wrong
  * place. Either answer unblocks checkout; refusing to answer does not.
  */
-import { MapPin, TriangleAlert } from "lucide-react";
+import { CircleCheck, MapPin, TriangleAlert } from "lucide-react";
 import { subdivisionsFor } from "../../core/config/subdivisions";
 import type { AddressValidation, AddressWarning, SuggestedAddress } from "../../core/fulfillment/types";
 import { Button } from "../components/Button";
@@ -174,102 +174,118 @@ export function AddressSuggestion({
   }
 
   const corrected = applySuggestion(entered, suggested);
-  const decided = choice !== "unreviewed";
+
+  // Already answered: one quiet line with the address that will be used, and the
+  // way back to the other one. Not a second form to fill in.
+  if (choice !== "unreviewed") {
+    return (
+      <div className="rounded-2xl border border-ink-200 bg-white px-3.5 py-3">
+        <p className="flex items-center gap-1.5 text-sm font-semibold text-ink-800">
+          <CircleCheck className="size-4 shrink-0 text-emerald-600" />
+          Shipping address confirmed
+        </p>
+        <div className="mt-1.5 text-xs leading-relaxed text-ink-600">
+          <AddressLines current={entered} compareTo={entered} />
+        </div>
+        {choice === "entered" && (
+          <button
+            type="button"
+            onClick={() => onUseSuggested(corrected)}
+            className="mt-2 text-xs font-medium text-ink-500 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-700"
+          >
+            Use the carrier&apos;s version instead
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div
-      className={
-        decided
-          ? "rounded-xl border border-ink-200 bg-white px-3.5 py-3"
-          : "rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-3"
-      }
-    >
-      <p
-        className={
-          decided
-            ? "flex items-center gap-1.5 text-sm font-semibold text-ink-800"
-            : "flex items-center gap-1.5 text-sm font-semibold text-amber-900"
-        }
-      >
+    <div role="group" aria-label="Confirm your shipping address" className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3.5">
+      <p className="flex items-center gap-1.5 text-sm font-semibold text-amber-900">
         <MapPin className="size-4 shrink-0" />
-        {decided ? "Shipping address confirmed" : "Check your shipping address"}
+        Is this the right address?
       </p>
-      {!decided && (
-        <p className="mt-0.5 text-xs leading-relaxed text-amber-800">
-          The delivery carrier suggests a slightly different version. Picking theirs is the
-          safest way to make sure your book arrives.
-        </p>
-      )}
+      <p className="mt-0.5 text-xs leading-relaxed text-amber-800">
+        The delivery carrier would write it slightly differently. We recommend their version — it&apos;s
+        the one their system can deliver to.
+      </p>
 
-      <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
-        <Option
-          label="You entered"
-          lines={formatLines(entered)}
-          selected={choice === "entered"}
-          onSelect={onKeepEntered}
-        />
-        <Option
-          label="Carrier suggests"
-          lines={formatLines(corrected)}
-          recommended
-          selected={choice === "suggested"}
-          onSelect={() => onUseSuggested(corrected)}
-        />
+      <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-3.5 py-2.5">
+        <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+          Recommended
+          <span className="rounded-full bg-emerald-100 px-1.5 py-px text-[10px] font-medium normal-case tracking-normal text-emerald-700">
+            Changes highlighted
+          </span>
+        </p>
+        <div className="text-sm leading-relaxed text-ink-800">
+          <AddressLines current={corrected} compareTo={entered} highlight />
+        </div>
       </div>
 
-      {!decided && (
-        <div className="mt-2.5 flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => onUseSuggested(corrected)}>
-            Use suggested address
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onKeepEntered}>
-            Keep mine as entered
-          </Button>
-        </div>
-      )}
+      <p className="mt-2 text-xs leading-relaxed text-amber-800/90">
+        <span className="font-medium">You typed:</span> {formatLines(entered).join(" · ")}
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Button size="sm" onClick={() => onUseSuggested(corrected)}>
+          Use this address
+        </Button>
+        <button
+          type="button"
+          onClick={onKeepEntered}
+          className="text-xs font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 transition hover:text-amber-950"
+        >
+          Keep what I typed
+        </button>
+      </div>
     </div>
   );
 }
 
-function Option({
-  label,
-  lines,
-  selected,
-  recommended,
-  onSelect,
+/**
+ * An address as a label would print it, with the parts that differ from
+ * `compareTo` marked. Compared field by field and exactly (not loosely like the
+ * server does): what's shown is what changed on the page, however small.
+ */
+function AddressLines({
+  current,
+  compareTo,
+  highlight = false,
 }: {
-  label: string;
-  lines: string[];
-  selected: boolean;
-  recommended?: boolean;
-  onSelect: () => void;
+  current: EnteredAddress;
+  compareTo: EnteredAddress;
+  highlight?: boolean;
 }) {
+  const seg = (value: string, other: string) => {
+    const text = value.trim();
+    if (!text) return null;
+    const changed = highlight && text !== other.trim();
+    return changed ? (
+      <mark className="rounded bg-emerald-100 px-0.5 font-medium text-emerald-900">{text}</mark>
+    ) : (
+      <span>{text}</span>
+    );
+  };
+  const street = [seg(current.line1, compareTo.line1), seg(current.line2, compareTo.line2)].filter(Boolean);
+  const locality = [
+    seg(current.city, compareTo.city),
+    seg(current.region, compareTo.region),
+    seg(current.postal, compareTo.postal),
+  ].filter(Boolean);
+  const country = seg(current.country, compareTo.country);
+  const join = (items: React.ReactNode[]) =>
+    items.map((item, i) => (
+      <span key={i}>
+        {i > 0 && ", "}
+        {item}
+      </span>
+    ));
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className={
-        selected
-          ? "rounded-lg border-2 border-brand-500 bg-white px-3 py-2 text-left transition"
-          : "rounded-lg border border-ink-200 bg-white px-3 py-2 text-left transition hover:border-ink-300"
-      }
-    >
-      <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-        {label}
-        {recommended && (
-          <span className="rounded-full bg-emerald-100 px-1.5 py-px text-[10px] font-medium normal-case tracking-normal text-emerald-700">
-            Recommended
-          </span>
-        )}
-      </span>
-      <span className="mt-1 block text-xs leading-relaxed text-ink-700">
-        {lines.map((line, i) => (
-          <span key={i} className="block">
-            {line}
-          </span>
-        ))}
-      </span>
-    </button>
+    <>
+      {street.length > 0 && <span className="block">{join(street)}</span>}
+      {locality.length > 0 && <span className="block">{join(locality)}</span>}
+      {country && <span className="block">{country}</span>}
+    </>
   );
 }

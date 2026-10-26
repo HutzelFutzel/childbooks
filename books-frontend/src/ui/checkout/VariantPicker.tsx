@@ -1,6 +1,8 @@
 "use client";
 
-import { primaryPhotoFor, type CatalogMediaConfig } from "../../core/config/catalogMedia";
+import { useState } from "react";
+import { LayoutGroup } from "framer-motion";
+import { resolvedPhotosFor, type CatalogMediaConfig, type CatalogPhoto } from "../../core/config/catalogMedia";
 import {
   VARIANT_AXES,
   VARIANT_AXIS_DEFS,
@@ -16,6 +18,8 @@ import {
 import { formatMoneyDelta } from "../../core/i18n/format";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { cn } from "../lib/cn";
+import { MediaLightboxModal } from "./MediaLightboxModal";
+import { OptionDetail, OptionTile, type SwatchKind } from "./OptionTile";
 
 /**
  * Customer-facing print / paper / finish / linen / foil picker. Driven entirely by the
@@ -58,6 +62,13 @@ export function VariantPicker({
 }) {
   const storeMedia = useAppConfigStore((s) => s.catalogMedia);
   const media = mediaOverride ?? storeMedia;
+  // Kept after closing so the lightbox can play its exit with the photos still in it.
+  const [gallery, setGallery] = useState<{
+    open: boolean;
+    title: string;
+    subtitle: string;
+    photos: readonly CatalogPhoto[];
+  }>({ open: false, title: "", subtitle: "", photos: [] });
 
   // Hide axes with only one offered value — there's nothing to choose.
   const axes = visibleAxes.filter((axis) => offeredValues(policy, axis).length > 1);
@@ -76,81 +87,104 @@ export function VariantPicker({
   };
 
   return (
-    <div className={cn("space-y-4", className)}>
+    <div className={cn("space-y-6", className)}>
       {axes.map((axis) => {
         const def = VARIANT_AXIS_DEFS[axis];
         const values = offeredValues(policy, axis);
+        const options = values.map((v) => {
+          const opt = variantOptionDef(axis, v);
+          return {
+            v,
+            opt,
+            photos: resolvedPhotosFor(media, variantMediaKey(axis, v)),
+            kind: swatchKindFor(axis, v, Boolean(opt?.swatch)),
+          };
+        });
+        // A picture area only where there is something to put in it — an upload,
+        // a swatch, or a drawn stand-in. An axis with none stays plain text, which
+        // is what the print/paper rows on the pricing page want.
+        const showVisual = options.some((o) => o.photos.length > 0 || o.opt?.swatch || o.kind !== "plain");
+        // Long rows of materials (six cloths, three foils) read as a palette: small
+        // square chips, with the selected one described underneath.
+        const chip = showVisual && (axis === "linen" || axis === "foil" || values.length > 4);
+        const current = options.find((o) => o.v === value[axis]);
+        const open = (o: (typeof options)[number]) =>
+          setGallery({ open: true, title: o.opt?.label ?? o.v, subtitle: def.label, photos: o.photos });
+
         return (
-          <fieldset key={axis} className="space-y-2">
-            <legend className="text-[12px] font-semibold text-ink-800">{def.label}</legend>
-            <p className="text-[11px] text-ink-500">{def.hint}</p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {values.map((v) => {
-                const opt = variantOptionDef(axis, v);
-                const selected = value[axis] === v;
-                const ok = optionSelectable(policy, axis, v, value);
-                const photo = primaryPhotoFor(media, variantMediaKey(axis, v));
-                // Delta of switching ONLY this axis — clearer while shopping
-                // than the absolute surcharge of the whole selection.
-                const switchDelta =
-                  axisDelta(policy, axis, v, currency, pages) -
-                  axisDelta(policy, axis, value[axis], currency, pages);
-                return (
-                  <button
-                    key={v}
-                    type="button"
-                    disabled={!ok && !selected}
-                    onClick={() => pick(axis, v)}
-                    aria-pressed={selected}
-                    className={cn(
-                      "flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-left ring-1 ring-inset transition",
-                      selected
-                        ? "bg-brand-50 ring-brand-300"
-                        : ok
-                          ? "bg-white ring-ink-200 hover:ring-ink-300"
-                          : "cursor-not-allowed bg-ink-50 ring-ink-100 opacity-50",
-                    )}
-                  >
-                    <span className="relative size-12 shrink-0 overflow-hidden rounded-md bg-ink-100 ring-1 ring-inset ring-ink-200">
-                      {photo ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={photo.imageUrl} alt={photo.alt || opt?.label || v} className="size-full object-cover" />
-                      ) : opt?.swatch ? (
-                        <span aria-hidden className="block size-full" style={{ backgroundColor: opt.swatch }} />
-                      ) : (
-                        <span className="flex size-full items-center justify-center text-[9px] font-medium uppercase tracking-wide text-ink-400">
-                          {axis}
-                        </span>
-                      )}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-baseline justify-between gap-2">
-                        <span className="text-[12px] font-medium text-ink-800">{opt?.label ?? v}</span>
-                        {Math.abs(switchDelta) >= 0.005 && ok && (
-                          <span className="shrink-0 text-[11px] tabular-nums text-ink-500">
-                            {formatMoneyDelta(locale, switchDelta, currency)}
-                          </span>
-                        )}
-                      </span>
-                      {opt?.hint && (
-                        <span className="mt-0.5 block text-[11px] leading-snug text-ink-500">{opt.hint}</span>
-                      )}
-                      {!ok && !selected && (
-                        <span className="mt-0.5 block text-[10px] text-ink-400">
-                          Not available with the current selection
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+          <fieldset key={axis} className="space-y-3">
+            <legend className="text-[13px] font-semibold text-ink-800">{def.label}</legend>
+            <p className="-mt-2 text-[11px] text-ink-500">{def.hint}</p>
+            <LayoutGroup id={`variant-${axis}`}>
+              <div className={cn("grid gap-2.5", chip ? CHIP_GRID : "sm:grid-cols-2")}>
+                {options.map((o) => {
+                  const selected = value[axis] === o.v;
+                  const ok = optionSelectable(policy, axis, o.v, value);
+                  // Delta of switching ONLY this axis — clearer while shopping
+                  // than the absolute surcharge of the whole selection.
+                  const switchDelta =
+                    axisDelta(policy, axis, o.v, currency, pages) -
+                    axisDelta(policy, axis, value[axis], currency, pages);
+                  return (
+                    <OptionTile
+                      key={o.v}
+                      label={o.opt?.label ?? o.v}
+                      description={o.opt?.hint}
+                      delta={
+                        Math.abs(switchDelta) >= 0.005 && ok
+                          ? formatMoneyDelta(locale, switchDelta, currency)
+                          : null
+                      }
+                      selected={selected}
+                      disabled={!ok}
+                      onSelect={() => pick(axis, o.v)}
+                      photos={o.photos}
+                      swatch={o.opt?.swatch}
+                      kind={o.kind}
+                      showVisual={showVisual}
+                      layout={chip ? "chip" : "card"}
+                      onOpenPhotos={() => open(o)}
+                    />
+                  );
+                })}
+              </div>
+            </LayoutGroup>
+            {chip && current && (
+              <OptionDetail
+                id={`${axis}:${current.v}`}
+                label={current.opt?.label ?? current.v}
+                description={current.opt?.hint}
+                photos={current.photos}
+                swatch={current.opt?.swatch}
+                kind={current.kind}
+                onOpenPhotos={() => open(current)}
+              />
+            )}
           </fieldset>
         );
       })}
+      <MediaLightboxModal
+        isOpen={gallery.open}
+        onClose={() => setGallery((g) => ({ ...g, open: false }))}
+        title={gallery.title}
+        subtitle={gallery.subtitle}
+        photos={gallery.photos}
+      />
     </div>
   );
 }
+
+/** What to draw for an option nobody has photographed. */
+function swatchKindFor(axis: VariantAxisId, value: string, hasSwatch: boolean): SwatchKind {
+  if (axis === "linen") return hasSwatch ? "cloth" : "plain";
+  if (axis === "foil") return hasSwatch ? "foil" : "plain";
+  if (axis === "finish") return value === "gloss" ? "gloss" : value === "matte" ? "matte" : "plain";
+  return "plain";
+}
+
+// The same chip size whether there are three options or six, so a short row
+// doesn't stretch into giant tiles next to a long one above it.
+const CHIP_GRID = "grid-cols-3 sm:grid-cols-6";
 
 /** One option's surcharge at this length, in this currency. */
 function axisDelta(

@@ -1,6 +1,8 @@
 "use client";
 
-import { optionMediaKey, primaryPhotoFor } from "../../core/config/catalogMedia";
+import { useState } from "react";
+import { LayoutGroup } from "framer-motion";
+import { optionMediaKey, resolvedPhotosFor, type CatalogPhoto } from "../../core/config/catalogMedia";
 import { pickTier } from "../../core/config/productMath";
 import type { PublicProduct } from "../../core/config/products";
 import { bindingBlurb, bindingNoun, type BookProduct } from "../../core/fulfillment";
@@ -8,6 +10,8 @@ import { formatMoneyDelta } from "../../core/i18n/format";
 import { limitsOf, planPageCount, type PageCountPlan } from "../../core/print/pageCountPlan";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { cn } from "../lib/cn";
+import { MediaLightboxModal } from "./MediaLightboxModal";
+import { OptionTile } from "./OptionTile";
 
 /**
  * Customer-facing binding picker: hardcover, softcover, stapled, coil.
@@ -47,10 +51,16 @@ export function FormatPicker({
   className?: string;
 }) {
   const media = useAppConfigStore((s) => s.catalogMedia);
+  // Kept after closing so the lightbox can play its exit with the photos still in it.
+  const [gallery, setGallery] = useState<{ open: boolean; title: string; photos: readonly CatalogPhoto[] }>({
+    open: false,
+    title: "",
+    photos: [],
+  });
   const rows = formats
     .map((format) => ({
       ...describe(format, catalog.get(format.sku), contentPages, currency),
-      photo: primaryPhotoFor(media, optionMediaKey("binding", format.binding)),
+      photos: resolvedPhotosFor(media, optionMediaKey("binding", format.binding)),
     }))
     .sort((a, b) => Number(b.fits) - Number(a.fits) || a.sortOrder - b.sortOrder);
 
@@ -59,66 +69,64 @@ export function FormatPicker({
 
   const selected = rows.find((r) => r.sku === value);
   const basePrice = selected?.price ?? null;
+  // A picture area only when somebody has uploaded one. All-text cards are the
+  // honest answer to "no photos yet"; one lone photo among blanks is not.
+  const showVisual = rows.some((r) => r.photos.length > 0);
 
   return (
-    <fieldset className={cn("space-y-2", className)}>
-      <legend className="text-[12px] font-semibold text-ink-800">Binding</legend>
-      <p className="text-[11px] text-ink-500">
+    <fieldset className={cn("space-y-3", className)}>
+      <legend className="text-[13px] font-semibold text-ink-800">Binding</legend>
+      <p className="-mt-2 text-[11px] text-ink-500">
         How the book is held together. Every option prints the same pages at the same size.
       </p>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {rows.map((row) => {
-          const isSelected = row.sku === value;
-          // Price difference from the current choice, at each binding's own page
-          // count: a stapled book rounds its length differently to a hardcover,
-          // and the charge follows that rounding.
-          const delta =
-            basePrice != null && row.price != null ? row.price - basePrice : null;
-          return (
-            <button
-              key={row.sku}
-              type="button"
-              disabled={!row.fits && !isSelected}
-              onClick={() => onChange(row.sku)}
-              aria-pressed={isSelected}
-              className={cn(
-                "flex flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left ring-1 ring-inset transition",
-                isSelected
-                  ? "bg-brand-50 ring-brand-300"
-                  : row.fits
-                    ? "bg-white ring-ink-200 hover:ring-ink-300"
-                    : "cursor-not-allowed bg-ink-50 opacity-60 ring-ink-100",
-              )}
-            >
-              {row.photo && (
-                <span className="mb-1 block aspect-[4/3] w-full overflow-hidden rounded-md bg-ink-100 ring-1 ring-inset ring-ink-200">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={row.photo.imageUrl} alt={row.photo.alt || row.label} className="size-full object-cover" />
-                </span>
-              )}
-              <span className="flex items-baseline justify-between gap-2">
-                <span className="text-[12px] font-medium capitalize text-ink-800">{row.label}</span>
-                {row.fits && delta != null && Math.abs(delta) >= 0.005 && (
-                  <span className="shrink-0 text-[11px] tabular-nums text-ink-500">
-                    {formatMoneyDelta(locale, delta, currency)}
-                  </span>
-                )}
-              </span>
-              <span className="text-[11px] leading-snug text-ink-500">
-                {row.fits ? row.blurb : row.reason}
-              </span>
-              {/* The arithmetic lives in the order summary. It's repeated on a card
-                  only where the padding is large enough to be a reason to pick
-                  another binding — on every card it read as noise. */}
-              {row.fits && row.plan.status === "padded-heavy" && (
-                <span className="text-[10px] text-ink-500">
-                  {row.plan.story} + {row.plan.blank} blank = {row.pageCount} printed pages
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      <LayoutGroup id="binding-picker">
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {rows.map((row) => {
+            const isSelected = row.sku === value;
+            // Price difference from the current choice, at each binding's own page
+            // count: a stapled book rounds its length differently to a hardcover,
+            // and the charge follows that rounding.
+            const delta = basePrice != null && row.price != null ? row.price - basePrice : null;
+            return (
+              <OptionTile
+                key={row.sku}
+                label={row.label}
+                description={row.fits ? row.blurb : undefined}
+                delta={
+                  row.fits && delta != null && Math.abs(delta) >= 0.005
+                    ? formatMoneyDelta(locale, delta, currency)
+                    : null
+                }
+                selected={isSelected}
+                disabled={!row.fits}
+                disabledReason={row.reason}
+                onSelect={() => onChange(row.sku)}
+                photos={row.photos}
+                kind="plain"
+                showVisual={showVisual}
+                onOpenPhotos={() => setGallery({ open: true, title: row.label, photos: row.photos })}
+                note={
+                  // The arithmetic lives in the order summary. It's repeated on a card
+                  // only where the padding is large enough to be a reason to pick
+                  // another binding — on every card it read as noise.
+                  row.fits && row.plan.status === "padded-heavy" ? (
+                    <span className="text-[10px] text-ink-500">
+                      {row.plan.story} + {row.plan.blank} blank = {row.pageCount} printed pages
+                    </span>
+                  ) : undefined
+                }
+              />
+            );
+          })}
+        </div>
+      </LayoutGroup>
+      <MediaLightboxModal
+        isOpen={gallery.open}
+        onClose={() => setGallery((g) => ({ ...g, open: false }))}
+        title={gallery.title}
+        subtitle="Binding"
+        photos={gallery.photos}
+      />
     </fieldset>
   );
 }
