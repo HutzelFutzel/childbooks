@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Loader2, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, Circle, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Field, Input, Textarea } from "../../components/Input";
 import { Select } from "../../components/Select";
@@ -32,7 +32,7 @@ import { capabilityForFormat } from "../../../core/config/productCapability";
 import { enabledMarkets } from "../../../core/config/markets";
 import type { ShippingMethod } from "../../../core/fulfillment/types";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
-import { bookMediaKey, optionMediaKey } from "../../../core/config/catalogMedia";
+import { activePhotosFor, bookMediaKey } from "../../../core/config/catalogMedia";
 import { BINDINGS, FINISHES } from "../../../core/fulfillment/types";
 import {
   isOfferable,
@@ -81,8 +81,8 @@ import {
   repricePlan,
   type RepricePlan,
 } from "../../../core/config/targetMargin";
-import { PictureButton } from "./products/Pictures";
-import { ProductPhotosPanel } from "./products/PicturesSection";
+import { PictureRow, PictureThumb } from "./products/Pictures";
+import { specSummary } from "./products/PicturesSection";
 import { VariantsSection } from "./products/VariantsSection";
 import { AdminSaveBar } from "../AdminPageHeader";
 
@@ -90,14 +90,17 @@ type Update = (fn: (p: ProductDefinition) => ProductDefinition) => void;
 
 const ORIENTATIONS = ["square", "landscape", "portrait"] as const;
 
+/**
+ * Four tabs, in the order the work happens: how the book reads and whether it's
+ * ready, what it costs and sells for, which options it offers, and — last, and
+ * rarely — the technical settings. Pictures are not here at all: they're shared
+ * and live under Print options.
+ */
 const EDITOR_TABS = [
-  { id: "details", label: "Details" },
-  { id: "format", label: "Format" },
-  { id: "variants", label: "Variants" },
+  { id: "overview", label: "Overview" },
   { id: "pricing", label: "Pricing" },
-  { id: "costs", label: "Costs" },
-  { id: "shipping", label: "Shipping" },
-  { id: "photos", label: "Photos" },
+  { id: "options", label: "Options" },
+  { id: "advanced", label: "Advanced" },
 ];
 
 export function ProductsTab() {
@@ -145,7 +148,13 @@ export function ProductsTab() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [seeding, setSeeding] = useState(false);
-  const [editorTab, setEditorTab] = useState<string>("details");
+  const [editorTab, setEditorTab] = useState<string>("overview");
+  // Which Advanced group the setup checklist is sending you to; opens it on arrival.
+  const [advancedFocus, setAdvancedFocus] = useState<AdvancedFocus | undefined>();
+  const goTo: GoTo = (tab, focus) => {
+    setAdvancedFocus(focus);
+    setEditorTab(tab);
+  };
 
   useEffect(() => {
     let live = true;
@@ -309,7 +318,7 @@ export function ProductsTab() {
     setSelectedId(p.id);
     setDraft(structuredClone(p));
     setDirty(false);
-    setEditorTab("details");
+    goTo("overview");
   };
 
   const update: Update = (fn) => {
@@ -324,7 +333,7 @@ export function ProductsTab() {
     setSelectedId(p.id);
     setDraft(structuredClone(p));
     setDirty(true);
-    setEditorTab("details");
+    goTo("overview");
   };
 
   const onSave = async () => {
@@ -579,7 +588,7 @@ export function ProductsTab() {
                           {p.presentation.name || "Untitled"}
                         </span>
                         <span className="block truncate text-xs text-ink-400">
-                          {p.provider.sku || "no SKU"}
+                          {p.provider.sku ? specSummary(p) : "no SKU yet"}
                         </span>
                         {offTarget && (
                           <span className="block truncate text-[10px] font-medium text-amber-700">
@@ -619,7 +628,6 @@ export function ProductsTab() {
                       </span>
                     ) : null}
                   </div>
-                  <SetupRail product={draft} onGoTo={setEditorTab} />
                 </div>
                 <Button
                   variant="ghost"
@@ -633,23 +641,32 @@ export function ProductsTab() {
 
               <ValidationBanner issues={issues} />
 
-              <EditorTabs items={EDITOR_TABS} value={editorTab} onChange={setEditorTab} />
+              <EditorTabs items={EDITOR_TABS} value={editorTab} onChange={(tab) => goTo(tab)} />
 
               <div>
-                {editorTab === "details" && <DetailsSection product={draft} update={update} />}
-                {editorTab === "format" && (
-                  <FormatSection product={draft} update={update} dirty={dirty} onVerified={applyCatalog} />
+                {editorTab === "overview" && (
+                  <OverviewSection product={draft} update={update} onGoTo={goTo} />
                 )}
-                {editorTab === "variants" && <VariantsSection product={draft} update={update} />}
                 {editorTab === "pricing" && (
-                  <PricingSection product={draft} update={update} settings={settings} />
+                  <div className="space-y-3">
+                    <PricingSection product={draft} update={update} settings={settings} />
+                    <Disclosure
+                      label="Costs — what the printer charges you"
+                      defaultOpen={!(draft.cost.table.basePerUnit > 0 || draft.cost.table.perPage > 0)}
+                    >
+                      <CostSection product={draft} update={update} dirty={dirty} onCalibrated={applyCatalog} />
+                    </Disclosure>
+                  </div>
                 )}
-                {editorTab === "costs" && (
-                  <CostSection product={draft} update={update} dirty={dirty} onCalibrated={applyCatalog} />
-                )}
-                {editorTab === "shipping" && <ShippingSection product={draft} update={update} />}
-                {editorTab === "photos" && (
-                  <ProductPhotosPanel product={draft} products={products} />
+                {editorTab === "options" && <VariantsSection product={draft} update={update} />}
+                {editorTab === "advanced" && (
+                  <AdvancedSection
+                    product={draft}
+                    update={update}
+                    dirty={dirty}
+                    onVerified={applyCatalog}
+                    focus={advancedFocus}
+                  />
                 )}
               </div>
             </div>
@@ -681,56 +698,12 @@ function productStatus(
 }
 
 /**
- * The route from a fresh product to a sellable one. Hidden once every step
- * is done — the error banner covers anything that later breaks.
- */
-function SetupRail({
-  product,
-  onGoTo,
-}: {
-  product: ProductDefinition;
-  onGoTo: (tab: string) => void;
-}) {
-  const verified = Object.values(product.provider.verifiedIn ?? {}).some((v) => v?.ok);
-  const measured = product.cost.table.basePerUnit > 0 || product.cost.table.perPage > 0;
-  const shippingMeasured = (product.shipping.fallback ?? []).length > 0;
-  const priced = product.pricing.tiers.some((t) => Object.values(t.prices).some((v) => v > 0));
-  const steps = [
-    { tab: "format", done: verified, label: "SKU" },
-    { tab: "costs", done: measured, label: "Cost" },
-    { tab: "shipping", done: shippingMeasured, label: "Shipping" },
-    { tab: "pricing", done: priced, label: "Price" },
-  ];
-  if (steps.every((s) => s.done)) return null;
-
-  return (
-    <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-500">
-      {steps.map((s, i) => (
-        <span key={s.tab} className="inline-flex items-center gap-x-2">
-          {i > 0 ? <span className="text-ink-200">·</span> : null}
-          <button
-            type="button"
-            onClick={() => onGoTo(s.tab)}
-            className={cn(
-              "hover:underline",
-              s.done ? "text-ink-400" : "font-medium text-ink-800",
-            )}
-          >
-            {s.done ? `${s.label} ✓` : s.label}
-          </button>
-        </span>
-      ))}
-    </p>
-  );
-}
-
-/**
  * What each issue's fix is CALLED, so the message can point at the tool instead
  * of leaving you to guess which tab it lives on.
  */
 const FIX_HINTS: Record<NonNullable<ProductIssue["fix"]>, string> = {
-  verify: "Fixed by: Verify on the Format tab, or Catalog tools",
-  measure: "Fixed by: Measure cost from the provider (Costs tab)",
+  verify: "Fixed by: Verify under Advanced → Print provider & SKU, or the ⋯ menu",
+  measure: "Fixed by: Measure cost from the provider (Pricing tab → Costs)",
 };
 
 function ValidationBanner({ issues }: { issues: ProductIssue[] }) {
@@ -778,74 +751,278 @@ function ValidationBanner({ issues }: { issues: ProductIssue[] }) {
 
 // ---- Sections --------------------------------------------------------------
 
-function DetailsSection({ product, update }: { product: ProductDefinition; update: Update }) {
+/** Where the setup checklist can send you inside the Advanced tab: open that group on arrival. */
+type AdvancedFocus = "provider" | "shipping";
+
+type GoTo = (tab: string, focus?: AdvancedFocus) => void;
+
+/**
+ * What stands between this book and a sale, as a short list with one button per
+ * gap. Replaces a row of terse links in the header: each step says what it is,
+ * what state it is in, and takes you straight to where it is fixed. Collapses to
+ * one reassuring line once everything is done.
+ */
+function ReadinessChecklist({
+  product,
+  update,
+  onGoTo,
+}: {
+  product: ProductDefinition;
+  update: Update;
+  onGoTo: GoTo;
+}) {
+  const env = useAdminHealth((s) => s.runtime)?.env;
+  const record = env ? verificationFor(product.provider, env) : undefined;
+  const verified = env
+    ? Boolean(record?.ok) && verificationCoversPages(record, product.conditions.pages)
+    : Object.values(product.provider.verifiedIn ?? {}).some((v) => v?.ok);
+  const measured = product.cost.table.basePerUnit > 0 || product.cost.table.perPage > 0;
+  const shippingMeasured = (product.shipping.fallback ?? []).length > 0;
+  const priced = product.pricing.tiers.some((t) => Object.values(t.prices).some((v) => v > 0));
+
+  const steps: {
+    id: string;
+    done: boolean;
+    label: string;
+    detail: string;
+    action: { label: string; run: () => void };
+  }[] = [
+    {
+      id: "verified",
+      done: verified,
+      label: "The printer can print it",
+      detail: verified
+        ? `Verified on ${env ?? "the printer"}`
+        : `Not verified on ${env ?? "the printer"} yet — it can't be sold until it is`,
+      action: { label: "Verify", run: () => onGoTo("advanced", "provider") },
+    },
+    {
+      id: "cost",
+      done: measured,
+      label: "Printing cost known",
+      detail: measured ? "Measured from the printer" : "Measure it so margins and prices are real",
+      action: { label: "Measure", run: () => onGoTo("pricing") },
+    },
+    {
+      id: "shipping",
+      done: shippingMeasured,
+      label: "Shipping rates known",
+      detail: shippingMeasured ? "Measured for this book's weight" : "Measured together with cost",
+      action: { label: "Check", run: () => onGoTo("advanced", "shipping") },
+    },
+    {
+      id: "price",
+      done: priced,
+      label: "Price set",
+      detail: priced ? "Prices are in place" : "Set a price for each page range",
+      action: { label: "Set prices", run: () => onGoTo("pricing") },
+    },
+    ...(product.status === "retired"
+      ? []
+      : [
+          {
+            id: "live",
+            done: product.status === "active",
+            label: "Switched on",
+            detail: product.status === "active" ? "Offered to customers once everything above is done" : "Hidden from customers (draft)",
+            action: {
+              label: "Switch on",
+              run: () => update((d) => ({ ...d, status: "active" as const })),
+            },
+          },
+        ]),
+  ];
+  const remaining = steps.filter((s) => !s.done);
+
+  if (remaining.length === 0) {
+    return (
+      <p className="flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800 ring-1 ring-inset ring-emerald-100">
+        <Check className="size-4 shrink-0" />
+        Ready to sell — verified, costed, priced and switched on.
+      </p>
+    );
+  }
+
+  return (
+    <Section
+      title="Get this book ready"
+      hint={`${steps.length - remaining.length} of ${steps.length} steps done`}
+    >
+      <ul className="divide-y divide-ink-100/70">
+        {steps.map((s) => (
+          <li key={s.id} className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+            <span
+              className={cn(
+                "flex size-5 shrink-0 items-center justify-center rounded-full",
+                s.done ? "bg-emerald-100 text-emerald-700" : "bg-ink-100 text-ink-300",
+              )}
+            >
+              {s.done ? <Check className="size-3" /> : <Circle className="size-2" />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className={cn("block text-sm", s.done ? "text-ink-500" : "font-medium text-ink-900")}>
+                {s.label}
+              </span>
+              <span className="block text-xs text-ink-400">{s.detail}</span>
+            </span>
+            {!s.done && (
+              <Button variant="secondary" size="sm" onClick={s.action.run}>
+                {s.action.label}
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+/**
+ * The first thing you see for a book: how it's doing, how it reads in the
+ * storefront, and whether it's on. Everything rarely touched is folded away
+ * (display order, badges) or lives on another tab.
+ */
+function OverviewSection({
+  product,
+  update,
+  onGoTo,
+}: {
+  product: ProductDefinition;
+  update: Update;
+  onGoTo: GoTo;
+}) {
+  const openCatalog = useAdminTab((s) => s.openCatalog);
   const p = product.presentation;
   const setP = (patch: Partial<ProductDefinition["presentation"]>) =>
     update((d) => ({ ...d, presentation: { ...d.presentation, ...patch } }));
   return (
-    <div className="space-y-3">
-      <Section title="Presentation" hint="What customers see in the storefront.">
+    <div className="space-y-4">
+      <ReadinessChecklist product={product} update={update} onGoTo={onGoTo} />
+
+      <Section title="Storefront" hint="What customers read about this book.">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1 space-y-3">
             <TextField label="Name" value={p.name} onChange={(v) => setP({ name: v })} />
             <TextField label="Tagline" value={p.tagline ?? ""} placeholder="Optional one-liner" onChange={(v) => setP({ tagline: v })} />
           </div>
-          {/* Pictures live in the catalog-wide store, not on this record — this is
-              a shortcut into the same manager as the Photos tab. */}
           <div className="space-y-1">
-            <p className="text-[11px] font-medium text-ink-500">Pictures</p>
-            <PictureButton mediaKey={bookMediaKey(product.id)} label={p.name || "this book"} />
+            <p className="text-[11px] font-medium text-ink-500">Picture</p>
+            <PictureThumb mediaKey={bookMediaKey(product.id)} label={p.name || "this book"} className="size-16" />
           </div>
         </div>
         <Field label="Description">
           <Textarea rows={4} value={p.description} placeholder="Markdown supported" onChange={(e) => setP({ description: e.target.value })} />
         </Field>
+        <p className="text-[11px] text-ink-400">
+          Pictures are shared by every print book.{" "}
+          <button
+            type="button"
+            className="underline underline-offset-2 hover:text-ink-700"
+            onClick={() => openCatalog("options")}
+          >
+            Manage them under Print options
+          </button>
+          .
+        </p>
       </Section>
-      <Section title="Status & ordering" hint="Only active + valid products are offered to customers.">
+
+      <Section title="Availability" hint="Only active, verified books with prices are offered to customers.">
+        <Field label="Status" className="w-full sm:w-72">
+          <Select
+            value={product.status}
+            options={[
+              { value: "draft", label: "Draft (hidden)" },
+              { value: "active", label: "Active (offered)" },
+              { value: "retired", label: "Retired" },
+            ]}
+            onChange={(e) => update((d) => ({ ...d, status: e.target.value as ProductDefinition["status"] }))}
+          />
+        </Field>
+        <p className="text-xs text-ink-500">
+          {specSummary(product)} · {product.conditions.pages.min}–{product.conditions.pages.max} pages.{" "}
+          <button
+            type="button"
+            className="underline underline-offset-2 hover:text-ink-700"
+            onClick={() => onGoTo("advanced")}
+          >
+            Format details
+          </button>
+        </p>
+      </Section>
+
+      <Disclosure label="More (display order, badges)">
         <Grid cols={2}>
-          <Field label="Status">
-            <Select
-              value={product.status}
-              options={[
-                { value: "draft", label: "Draft (hidden)" },
-                { value: "active", label: "Active (offered)" },
-                { value: "retired", label: "Retired" },
-              ]}
-              onChange={(e) => update((d) => ({ ...d, status: e.target.value as ProductDefinition["status"] }))}
-            />
-          </Field>
           <NumberField label="Display order" value={product.sortOrder} onChange={(n) => update((d) => ({ ...d, sortOrder: n }))} />
+          <TextField
+            label="Badges (comma-separated)"
+            value={p.badges.join(", ")}
+            placeholder="Bestseller, Premium"
+            onChange={(v) => setP({ badges: v.split(",").map((b) => b.trim()).filter(Boolean) })}
+          />
         </Grid>
-      </Section>
-      <Disclosure>
-        <TextField
-          label="Badges (comma-separated)"
-          value={p.badges.join(", ")}
-          placeholder="Bestseller, Premium"
-          onChange={(v) => setP({ badges: v.split(",").map((b) => b.trim()).filter(Boolean) })}
-        />
       </Disclosure>
     </div>
   );
 }
 
-function FormatSection({
+/**
+ * Everything technical about a book, folded away. A seeded book is already right
+ * here — the SKU, trim, binding, limits and shipping all come from the printer's
+ * catalog — so this tab is for corrections, not routine work.
+ */
+function AdvancedSection({
   product,
   update,
   dirty,
   onVerified,
+  focus,
 }: {
   product: ProductDefinition;
   update: Update;
   dirty: boolean;
   onVerified: (config: ProductsConfig) => void;
+  focus?: AdvancedFocus;
 }) {
   return (
     <div className="space-y-3">
-      <ProviderFields product={product} update={update} dirty={dirty} onVerified={onVerified} />
+      <p className="text-xs text-ink-500">
+        Technical settings. A book seeded from the print catalog is already correct here — open a
+        group only to fix something.
+      </p>
+      <ProviderFields
+        product={product}
+        update={update}
+        dirty={dirty}
+        onVerified={onVerified}
+        defaultOpen={focus === "provider"}
+      />
       <SpecFields product={product} update={update} />
       <ConditionsFields product={product} update={update} />
+      <ShippingSection product={product} update={update} defaultOpen={focus === "shipping"} />
+      <OwnPicturesSection product={product} />
     </div>
+  );
+}
+
+/**
+ * The optional exception to shared pictures: a book that needs shots of its
+ * own. Folded by default because almost none do — without these, the book
+ * uses the default set from Print options.
+ */
+function OwnPicturesSection({ product }: { product: ProductDefinition }) {
+  const media = useAppConfigStore((s) => s.catalogMedia);
+  const key = bookMediaKey(product.id);
+  const own = activePhotosFor(media, key).length;
+  return (
+    <Section
+      title="Pictures for this book only"
+      hint="Optional. Leave empty to use the shared default pictures from Print options. Uploads take effect immediately — no Save needed."
+      collapsible
+      defaultOpen={false}
+      summary={own > 0 ? `${own} picture${own === 1 ? "" : "s"} of its own` : "Using the shared default pictures"}
+    >
+      <PictureRow mediaKey={key} label={product.presentation.name || "this book"} hint={specSummary(product)} />
+    </Section>
   );
 }
 
@@ -894,7 +1071,7 @@ function TrimPicker({ code, onChange }: { code: string; onChange: (code: string)
           </Field>
         </div>
         {/* Size is the hardest option to picture, so a size-guide shot earns its place. */}
-        {preset && <PictureButton mediaKey={preset.mediaKey} label={preset.label} className="mb-1" />}
+        {preset?.mediaKey && <PictureThumb mediaKey={preset.mediaKey} label={preset.label} className="mb-1" />}
       </div>
       <Grid cols={2}>
         <NumberField
@@ -918,9 +1095,8 @@ function TrimPicker({ code, onChange }: { code: string; onChange: (code: string)
 
 /**
  * One axis as a list of selectable cards, each explaining what it actually is
- * and showing a photo of it. The photo button is a sibling of the radio rather
- * than a child, so "choose this option" and "manage its photos" stay distinct
- * controls; the card reserves the space it sits in.
+ * and showing the shared photo of it (read-only here — pictures are managed once
+ * under Print options). The card reserves the space the thumbnail sits in.
  */
 function OptionCards({
   axis,
@@ -958,12 +1134,13 @@ function OptionCards({
                 </span>
                 {o.hint && <span className="mt-0.5 block text-[11px] leading-snug text-ink-500">{o.hint}</span>}
               </button>
-              <PictureButton
-                mediaKey={o.mediaKey}
-                label={o.label}
-                hint={o.hint}
-                className="absolute left-2.5 top-2"
-              />
+              {o.mediaKey && (
+                <PictureThumb
+                  mediaKey={o.mediaKey}
+                  label={o.label}
+                  className="pointer-events-none absolute left-2.5 top-2"
+                />
+              )}
             </div>
           );
         })}
@@ -1434,17 +1611,25 @@ function ProviderFields({
   update,
   dirty,
   onVerified,
+  defaultOpen = false,
 }: {
   product: ProductDefinition;
   update: Update;
   dirty: boolean;
   onVerified: (config: ProductsConfig) => void;
+  defaultOpen?: boolean;
 }) {
   const pr = product.provider;
   const setPr = (patch: Partial<ProductDefinition["provider"]>) =>
     update((d) => ({ ...d, provider: { ...d.provider, ...patch } }));
   return (
-    <Section title="Print provider" hint="Which provider prints and ships this book. Their API handles quotes and orders.">
+    <Section
+      title="Print provider & SKU"
+      hint="Which provider prints and ships this book. Their API handles quotes and orders."
+      collapsible
+      defaultOpen={defaultOpen}
+      summary={`${PROVIDER_LABELS[pr.id]} · ${pr.sku || "no SKU yet"}`}
+    >
       <Field label="Provider" className="w-full sm:w-72">
         <Select
           value={pr.id}
@@ -1476,26 +1661,20 @@ function SpecFields({ product, update }: { product: ProductDefinition; update: U
   const setCover = (patch: Partial<ProductDefinition["spec"]["cover"]>) =>
     update((d) => ({ ...d, spec: { ...d.spec, cover: { ...d.spec.cover, ...patch } } }));
   return (
-    <Section title="Size & binding" hint="Binding and finish drive print specs and page-count rules.">
+    <Section
+      title="Size & binding"
+      hint="Binding and finish drive print specs and page-count rules. Normally these follow the SKU — change them only to correct a mismatch."
+      collapsible
+      defaultOpen={false}
+      summary={specSummary(product)}
+    >
       <Grid cols={3}>
-        {/* The spec's binding/finish values ARE the media keys, so the photo of
-            the thing being described sits right next to the choice. */}
-        <div className="flex items-end gap-2">
-          <div className="min-w-0 flex-1">
-            <Field label="Binding">
-              <Select value={s.binding} options={BINDINGS.map((b) => ({ value: b, label: b }))} onChange={(e) => setS({ binding: e.target.value as ProductDefinition["spec"]["binding"] })} />
-            </Field>
-          </div>
-          <PictureButton mediaKey={optionMediaKey("binding", s.binding)} label={s.binding} className="mb-1" />
-        </div>
-        <div className="flex items-end gap-2">
-          <div className="min-w-0 flex-1">
-            <Field label="Finish">
-              <Select value={s.finish} options={FINISHES.map((f) => ({ value: f, label: f }))} onChange={(e) => setS({ finish: e.target.value as ProductDefinition["spec"]["finish"] })} />
-            </Field>
-          </div>
-          <PictureButton mediaKey={optionMediaKey("finish", s.finish)} label={s.finish} className="mb-1" />
-        </div>
+        <Field label="Binding">
+          <Select value={s.binding} options={BINDINGS.map((b) => ({ value: b, label: b }))} onChange={(e) => setS({ binding: e.target.value as ProductDefinition["spec"]["binding"] })} />
+        </Field>
+        <Field label="Finish">
+          <Select value={s.finish} options={FINISHES.map((f) => ({ value: f, label: f }))} onChange={(e) => setS({ finish: e.target.value as ProductDefinition["spec"]["finish"] })} />
+        </Field>
         <Field label="Orientation">
           <Select value={s.orientation} options={ORIENTATIONS.map((o) => ({ value: o, label: o }))} onChange={(e) => setS({ orientation: e.target.value as ProductDefinition["spec"]["orientation"] })} />
         </Field>
@@ -1558,7 +1737,13 @@ function ConditionsFields({ product, update }: { product: ProductDefinition; upd
     update((d) => ({ ...d, conditions: { ...d.conditions, access: { ...productAccessOf(d.conditions), ...patch } } }));
   return (
     <div className="space-y-3">
-    <Section title="Page & copy limits" hint="Allowed interior page range (step = the multiple the count must align to, e.g. 4 for saddle-stitch) and order quantity.">
+    <Section
+      title="Page & copy limits"
+      hint="Allowed interior page range (step = the multiple the count must align to, e.g. 4 for saddle-stitch) and order quantity."
+      collapsible
+      defaultOpen={false}
+      summary={`${c.pages.min}–${c.pages.max} pages · ${c.copies.min}–${c.copies.max} copies`}
+    >
       <Grid cols={3}>
         <NumberField label="Min pages" value={c.pages.min} onChange={(n) => setC({ pages: { ...c.pages, min: n } })} />
         <NumberField label="Max pages" value={c.pages.max} onChange={(n) => setC({ pages: { ...c.pages, max: n } })} />
@@ -1617,7 +1802,19 @@ function ConditionsFields({ product, update }: { product: ProductDefinition; upd
       </Disclosure>
     </Section>
 
-      <Section title="Subscription access" hint="Restrict who can order this product based on their subscription.">
+      <Section
+        title="Subscription access"
+        hint="Restrict who can order this product based on their subscription."
+        collapsible
+        defaultOpen={false}
+        summary={
+          access.mode === "public"
+            ? "Anyone can order"
+            : access.mode === "subscribersOnly"
+              ? "Subscribers only"
+              : `${access.planIds.length} plan${access.planIds.length === 1 ? "" : "s"}`
+        }
+      >
         <Field label="Who can order" className="w-full sm:w-72">
           <Select
             value={access.mode}
@@ -1679,7 +1876,15 @@ function ConditionsFields({ product, update }: { product: ProductDefinition; upd
  * What's left is what genuinely belongs to this book — the rates the printer
  * quoted for its weight, and the rare "this format can't go there".
  */
-function ShippingSection({ product, update }: { product: ProductDefinition; update: Update }) {
+function ShippingSection({
+  product,
+  update,
+  defaultOpen = false,
+}: {
+  product: ProductDefinition;
+  update: Update;
+  defaultOpen?: boolean;
+}) {
   const sh = product.shipping;
   const shippingSettings = useAppConfigStore((s) => s.shippingSettings);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
@@ -1695,54 +1900,42 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
         ? "nothing (free shipping)"
         : "a flat rate per speed";
 
-  return (
-    <div className="space-y-3">
-      <TabIntro
-        elsewhere={
-          <>
-            Which speeds you sell, your markup and any handling fee are set once for the whole
-            catalog under <span className="font-medium">Configuration → Markets</span>.
-          </>
-        }
-      >
-        This tab shows what the printer quoted <span className="font-medium">for this book</span> —
-        shipping is priced by weight, so a thin paperback and a thick casewrap to the same address
-        are different numbers. Which countries a speed reaches is discovered, not chosen: the
-        printer decides, and we sell whatever it will carry.
-      </TabIntro>
+  const measuredCountries = new Set(rows.filter((r) => r.available).map((r) => r.country)).size;
 
-      <Section
-        title="Speeds on sale"
-        hint="Set for the whole catalog. A speed only appears at checkout where the printer was found to run it."
-      >
-        {offered.length === 0 ? (
-          <p className="text-[11px] text-red-600">
-            No shipping speeds are on sale — nothing in the catalog can be ordered anywhere.
-          </p>
-        ) : (
-          <div className="flex flex-wrap gap-1.5">
-            {offered.map((method) => (
-              <span
-                key={method}
-                className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] text-ink-700"
-              >
-                {methodLabel(shippingSettings, method)}
-              </span>
-            ))}
-          </div>
-        )}
-        <p className="text-[10px] text-ink-400">
-          Customers pay {modeLabel}.{" "}
-          <button
-            type="button"
-            className="underline underline-offset-2 hover:text-ink-600"
-            onClick={() => setConfigTab("markets")}
-          >
-            Change under Configuration → Markets
-          </button>
-          .
+  return (
+    <Section
+      title="Shipping"
+      hint="What the printer quoted for this book. Speeds, markup and handling are catalog-wide and set once under Markets & shipping — not here."
+      collapsible
+      defaultOpen={defaultOpen}
+      summary={
+        offered.length === 0
+          ? "No shipping speeds are on sale"
+          : `${offered.map((m) => methodLabel(shippingSettings, m)).join(", ")} · customers pay ${modeLabel} · ${
+              measuredCountries === 0
+                ? "not measured yet"
+                : `${measuredCountries} countr${measuredCountries === 1 ? "y" : "ies"} measured`
+            }`
+      }
+    >
+      {offered.length === 0 && (
+        <p className="text-[11px] text-red-600">
+          No shipping speeds are on sale — nothing in the catalog can be ordered anywhere.
         </p>
-      </Section>
+      )}
+      <p className="text-[11px] text-ink-500">
+        Shipping is priced by weight, so a thin paperback and a thick casewrap to the same address
+        are different numbers. Which countries a speed reaches is discovered, not chosen: the printer
+        decides, and we sell whatever it will carry.{" "}
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-ink-700"
+          onClick={() => setConfigTab("markets")}
+        >
+          Change speeds and markup in Markets &amp; shipping
+        </button>
+        .
+      </p>
 
       <ShippingRatesTable product={product} />
 
@@ -1751,7 +1944,7 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
         rows={rows}
         onChange={(destinationsOverride) => setSh({ destinationsOverride })}
       />
-    </div>
+    </Section>
   );
 }
 

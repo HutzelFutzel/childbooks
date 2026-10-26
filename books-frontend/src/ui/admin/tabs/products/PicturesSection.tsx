@@ -23,18 +23,19 @@ import { SKU_AXES } from "../../../../core/fulfillment/lulu/skuAxes";
 import { useAppConfigStore } from "../../../../state/appConfigStore";
 import { cn } from "../../../lib/cn";
 import { PictureRow } from "./Pictures";
-import { Disclosure, Section } from "./parts";
+import { Section } from "./parts";
 
 /**
- * The **Product pictures** section, one per catalog segment. This is the place to
- * sit down and photograph a whole catalog: the print options, every book, the
- * digital edition, every Spark pack — plus the default sets that stand in for
- * anything not yet shot.
+ * Where catalog pictures are managed.
  *
- * It exists because none of this belongs to a product record (see
- * `catalogMedia.ts`), and a picture of a coil binding uploaded while editing one
- * book was never going to be a property of that book. The thumbnails in the
- * product form remain as shortcuts into the same store.
+ * None of these belong to a product record (see `catalogMedia.ts`): a photo of
+ * a coil binding is true of every coil-bound book, so it is set once, here, in
+ * the shared **Print options** page — not repeated inside each book. The print
+ * book editor only *shows* these (read-only thumbnails) and links back here.
+ *
+ * What stays per item: the digital edition and each Spark pack, which are
+ * single products with their own artwork, and the optional own-pictures row
+ * under a book's Advanced settings.
  */
 
 /** `linen-wrap` → `Linen wrap`, for domain values no provider option describes. */
@@ -49,7 +50,7 @@ interface OptionEntry {
   hint?: string;
 }
 
-const FEATURE_LABELS: Record<PrintOptionFeature, string> = {
+export const FEATURE_LABELS: Record<PrintOptionFeature, string> = {
   trim: "Trim size",
   binding: "Binding",
   print: "Interior printing",
@@ -66,7 +67,7 @@ const VARIANT_FEATURES: VariantAxisId[] = ["print", "paper", "finish", "linen", 
  * come from the SKU builder; customer-facing variant axes come from the shared
  * vocabulary in `variants.ts` (four print tiers, not separate ink/quality).
  */
-function optionEntries(feature: PrintOptionFeature): OptionEntry[] {
+export function optionEntries(feature: PrintOptionFeature): OptionEntry[] {
   if (VARIANT_FEATURES.includes(feature as VariantAxisId)) {
     const axis = feature as VariantAxisId;
     return variantOptionsFor(axis)
@@ -100,25 +101,8 @@ function optionEntries(feature: PrintOptionFeature): OptionEntry[] {
   return entries;
 }
 
-function StatusChip({ status }: { status: ProductDefinition["status"] }) {
-  return (
-    <span
-      className={cn(
-        "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-        status === "active"
-          ? "bg-emerald-50 text-emerald-700"
-          : status === "draft"
-            ? "bg-amber-50 text-amber-700"
-            : "bg-ink-100 text-ink-500",
-      )}
-    >
-      {status}
-    </span>
-  );
-}
-
 /** `8.5 × 8.5" · casewrap · matte` — enough to tell two formats apart. */
-function specSummary(product: ProductDefinition): string {
+export function specSummary(product: ProductDefinition): string {
   const { pageTrim, binding, finish } = product.spec;
   const size = `${pageTrim.width} × ${pageTrim.height}${pageTrim.unit === "in" ? '"' : "mm"}`;
   return [size, binding, finish].join(" · ");
@@ -126,81 +110,63 @@ function specSummary(product: ProductDefinition): string {
 
 const DEFAULT_HINT = "Stands in wherever nothing more specific has been uploaded.";
 
-/** Photos tab for one print book: this product first, then shared defaults and options. */
-export function ProductPhotosPanel({
-  product,
-  products,
-}: {
-  product: ProductDefinition;
-  products: ProductDefinition[];
-}) {
-  const others = products
-    .filter((p) => p.id !== product.id)
-    .sort((a, b) => a.sortOrder - b.sortOrder);
+/**
+ * The shared picture library for print books: one default set, then every
+ * option a customer can choose, grouped by feature. Groups that are complete
+ * fold away so the screen opens on what still needs a photo.
+ */
+export function PrintOptionsPanel() {
+  const media = useAppConfigStore((s) => s.catalogMedia);
+  const groups = PRINT_OPTION_FEATURES.map((feature) => {
+    const entries = optionEntries(feature);
+    const missing = entries.filter((o) => activePhotosFor(media, o.key).length === 0);
+    return { feature, entries, missing };
+  });
+  const total = groups.reduce((n, g) => n + g.entries.length, 0);
+  const missingCount = groups.reduce((n, g) => n + g.missing.length, 0);
+
   return (
-    <div className="space-y-5">
-      <p className="text-sm text-ink-500">
-        Photographs shown to customers. Uploads take effect immediately — no Save needed.
+    <div className="space-y-4">
+      <p
+        className={cn(
+          "rounded-lg px-3 py-2 text-xs",
+          missingCount === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800",
+        )}
+      >
+        {missingCount === 0
+          ? `Every print option has a picture (${total} of ${total}).`
+          : `${total - missingCount} of ${total} options have a picture. Groups still missing some are open below.`}
       </p>
-      <PictureRow
-        mediaKey={bookMediaKey(product.id)}
-        label={product.presentation.name || "(unnamed product)"}
-        hint={specSummary(product)}
-        badge={<StatusChip status={product.status} />}
-      />
-      <Disclosure label="Default pictures">
+
+      <Section
+        title="Default pictures"
+        hint="Shown for any book that has no pictures of its own — which is most of them."
+      >
         <PictureRow
           mediaKey={bookMediaKey(FALLBACK_ID)}
           label="Default pictures"
           hint={DEFAULT_HINT}
         />
-      </Disclosure>
-      {others.length > 0 && (
-        <Disclosure label={`Other books (${others.length})`}>
+      </Section>
+
+      {groups.map(({ feature, entries, missing }) => (
+        <Section
+          key={feature}
+          title={FEATURE_LABELS[feature]}
+          collapsible
+          defaultOpen={missing.length > 0}
+          summary={
+            missing.length === 0
+              ? `All ${entries.length} have a picture`
+              : `${entries.length - missing.length} of ${entries.length} have a picture`
+          }
+        >
           <div className="space-y-1.5">
-            {others.map((p) => (
-              <PictureRow
-                key={p.id}
-                mediaKey={bookMediaKey(p.id)}
-                label={p.presentation.name || "(unnamed product)"}
-                hint={specSummary(p)}
-                badge={<StatusChip status={p.status} />}
-              />
+            {entries.map((o) => (
+              <PictureRow key={o.key} mediaKey={o.key} label={o.label} hint={o.hint} />
             ))}
           </div>
-        </Disclosure>
-      )}
-      <Disclosure label="Print options">
-        <PrintOptionPictures />
-      </Disclosure>
-    </div>
-  );
-}
-
-function PrintOptionPictures() {
-  const media = useAppConfigStore((s) => s.catalogMedia);
-  const missing = PRINT_OPTION_FEATURES.flatMap((feature) =>
-    optionEntries(feature).filter((o) => activePhotosFor(media, o.key).length === 0),
-  );
-  return (
-    <div className="space-y-3">
-      <p
-        className={cn(
-          "rounded-md px-3 py-2 text-[12px]",
-          missing.length === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800",
-        )}
-      >
-        {missing.length === 0
-          ? "Every print option has a photo."
-          : `Still without a photo (${missing.length}): ${missing.map((o) => o.label).join(", ")}.`}
-      </p>
-      {PRINT_OPTION_FEATURES.map((feature) => (
-        <div key={feature} className="space-y-1.5">
-          <p className="text-xs font-medium text-ink-400">{FEATURE_LABELS[feature]}</p>
-          {optionEntries(feature).map((o) => (
-            <PictureRow key={o.key} mediaKey={o.key} label={o.label} hint={o.hint} />
-          ))}
-        </div>
+        </Section>
       ))}
     </div>
   );

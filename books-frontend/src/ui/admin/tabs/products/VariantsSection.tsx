@@ -36,7 +36,8 @@ import type { Binding } from "../../../../core/fulfillment/types";
 import { useAppConfigStore } from "../../../../state/appConfigStore";
 import { Field } from "../../../components/Input";
 import { cn } from "../../../lib/cn";
-import { PictureButton } from "./Pictures";
+import { useAdminTab } from "../../adminTabStore";
+import { PictureThumb } from "./Pictures";
 import { Section, TabIntro } from "./parts";
 
 type Update = (fn: (d: ProductDefinition) => ProductDefinition) => void;
@@ -49,6 +50,7 @@ type Update = (fn: (d: ProductDefinition) => ProductDefinition) => void;
  */
 export function VariantsSection({ product, update }: { product: ProductDefinition; update: Update }) {
   const settings = useAppConfigStore((s) => s.pricingSettings);
+  const openCatalog = useAdminTab((s) => s.openCatalog);
   const currencies = settings.currencies;
   const base = variantFromSku(product.provider.sku);
   const binding = bindingOfSku(product.provider.sku);
@@ -96,7 +98,7 @@ export function VariantsSection({ product, update }: { product: ProductDefinitio
 
   return (
     <>
-      <TabIntro>
+      <TabIntro links={[{ label: "Change option pictures in Print options", onClick: () => openCatalog("options") }]}>
         Variants are choices about the <span className="font-medium">same book</span> — print quality,
         paper, cover finish. Each one composes a different SKU at the printer, so you don&apos;t need a
         separate product for each. The <span className="font-medium">base</span> variant is the one this
@@ -109,7 +111,7 @@ export function VariantsSection({ product, update }: { product: ProductDefinitio
       <SuggestDeltas product={product} settings={settings} setPolicy={setPolicy} />
 
       <Section
-        title="Variants"
+        title="Options this book offers"
         hint="Turn on the options you want to sell, then price each one against the base. An option you enable must be one the printer actually offers for this format — measuring costs will tell you if it isn't."
       >
         {base ? (
@@ -204,7 +206,7 @@ function SuggestDeltas({
           disabled={measured === 0}
           title={
             measured === 0
-              ? "Measure costs on the Costs tab first — there's nothing to derive prices from."
+              ? "Measure costs on the Pricing tab first — there's nothing to derive prices from."
               : "Fill in every option's per-page price from what it was measured to cost"
           }
           onClick={apply}
@@ -231,7 +233,7 @@ function SuggestDeltas({
       {measured === 0 ? (
         <p className="text-[11px] text-amber-700">
           No variant costs measured yet. Run <span className="font-medium">Measure cost from the provider</span>{" "}
-          on the Costs tab, then come back.
+          on the Pricing tab, then come back.
         </p>
       ) : (
         <p className="text-[11px] text-ink-500">
@@ -298,10 +300,9 @@ function AxisEditor({
               )}
             >
               {opt.value !== NO_OPTION && (
-                <PictureButton
+                <PictureThumb
                   mediaKey={variantMediaKey(axis, opt.value)}
                   label={opt.label}
-                  hint={opt.hint}
                   className="mt-0.5"
                 />
               )}

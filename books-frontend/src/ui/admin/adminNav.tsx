@@ -66,6 +66,7 @@ import {
 import {
   adminHref,
   canonicalAdminPath,
+  parseCatalogSegment,
   type AnalysisTabId,
   type CatalogSegment,
   type CommunicationTabId,
@@ -175,6 +176,11 @@ export const CATALOG_SEGMENT_META: Record<CatalogSegment, TabMeta> = {
     label: "Print books",
     icon: <BookOpen className="size-4" />,
     description: "Physical hardcover and softcover books offered at checkout.",
+  },
+  options: {
+    label: "Print options",
+    icon: <ImageIcon className="size-4" />,
+    description: "Pictures for every choice on a print book — shared by all books, set once.",
   },
   ebook: {
     label: "Digital edition",
@@ -503,6 +509,7 @@ export const NAV_TREE: NavNode[] = [
         label: "Catalog & Pricing",
         children: [
           catalogLeaf("print"),
+          catalogLeaf("options"),
           catalogLeaf("ebook"),
           catalogLeaf("packs"),
           configLeaf("memberships"),
@@ -886,8 +893,7 @@ export function hrefIsActive(
   const canonical = canonicalAdminPath(pathname);
   if (path !== canonical) return false;
   if (canonical === adminHref("configuration", "catalog")) {
-    const wanted =
-      (new URLSearchParams(query ?? "").get("segment") as CatalogSegment | null) ?? "print";
+    const wanted = parseCatalogSegment(new URLSearchParams(query ?? "").get("segment"));
     return wanted === catalogSegment;
   }
   return true;

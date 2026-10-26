@@ -30,7 +30,7 @@ import {
   type CatalogSegment,
   type ConfigTabId,
 } from "./adminTabStore";
-import { NAV_INDEX, NAV_TREE, resolveAdminPage, type NavLeaf } from "./adminNav";
+import { NAV_INDEX, NAV_TREE, hrefIsActive, resolveAdminPage, type NavLeaf } from "./adminNav";
 import { AdminSidebarNav } from "./AdminSidebarNav";
 import { AdminPageHeader } from "./AdminPageHeader";
 import { CommandPalette } from "./CommandPalette";
@@ -328,16 +328,16 @@ export default function AdminApp() {
 
   useEffect(() => {
     if (!isAdmin || !accessLoaded) return;
-    const current = NAV_INDEX.find((entry) => {
-      const [path] = entry.href.split("?");
-      return path === canonicalAdminPath(pathname) && !entry.id.includes(":catalog:");
-    });
-    const currentIsReachable = current && canReachEntry(current);
-    if (currentIsReachable) return;
+    // Match the page the sidebar would highlight, including which catalog
+    // segment is open. Print books, the digital edition and Spark packs share
+    // one path, so a path-only match that skipped those entries treated every
+    // catalog visit as unreachable and sent the admin back to Control Center.
+    const current = NAV_INDEX.find((entry) => hrefIsActive(entry.href, pathname, catalogSegment));
+    if (current && canReachEntry(current)) return;
 
     const fallback = NAV_INDEX.find(canReachEntry);
     if (fallback && fallback.href.split("?")[0] !== pathname) router.replace(fallback.href.split("?")[0]!);
-  }, [accessLoaded, canRead, isAdmin, isOwnerAccess, me, pathname, router, viewAsUid]);
+  }, [accessLoaded, canRead, catalogSegment, isAdmin, isOwnerAccess, me, pathname, router, viewAsUid]);
 
   const page = resolveAdminPage(pathname, catalogSegment);
 

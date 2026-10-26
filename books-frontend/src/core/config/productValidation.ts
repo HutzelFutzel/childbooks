@@ -136,7 +136,7 @@ export function validateProduct(
   // Presentation
   if (!p.presentation.name.trim()) err("presentation.name", "Product needs a name.");
   if (opts.media && resolvedPhotosFor(opts.media, bookMediaKey(p.id)).length === 0) {
-    warn("pictures", "No pictures — add some on the Photos tab, or upload a default set.");
+    warn("pictures", "No pictures — upload a default set under Print options, or pictures for this book under Advanced.");
   }
   if (!p.presentation.description.trim()) warn("presentation.description", "No description set.");
 

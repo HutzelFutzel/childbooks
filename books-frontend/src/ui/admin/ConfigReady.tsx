@@ -27,7 +27,7 @@ export function useConfigDocsStatus(ids: readonly string[]): { ready: boolean; f
  * isn't listed doesn't wait for config (it loads its own data, or none).
  */
 const PAGE_DOCS: Record<string, readonly string[]> = {
-  "configuration/catalog": ["products", "pricingSettings"],
+  "configuration/catalog": ["products", "pricingSettings", "catalogMedia"],
   "configuration/markets": ["markets", "marketCapability", "pricingSettings"],
   "configuration/memberships": ["plans", "pricingSettings"],
   "configuration/sparks": ["sparks", "pricingSettings"],

@@ -27,29 +27,65 @@ export function Section({
   hint,
   help,
   action,
+  collapsible = false,
+  defaultOpen = true,
+  summary,
   children,
 }: {
   title: string;
   hint?: string;
   help?: ReactNode;
   action?: ReactNode;
+  /**
+   * Fold the body away behind its header. For settings that are right the
+   * vast majority of the time: the header stays as a one-line status, so
+   * nothing is hidden from view, only out of the way.
+   */
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  /** Shown under the title while folded — the current value, so the bar still answers "what is it set to?". */
+  summary?: ReactNode;
   children: ReactNode;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const expanded = !collapsible || open;
+  const heading = (
+    <div className="min-w-0 space-y-0.5">
+      <div className="flex items-center gap-1.5">
+        <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
+        {help && !collapsible ? <InfoHint title={title}>{help}</InfoHint> : null}
+      </div>
+      {expanded
+        ? hint && <p className="text-xs leading-relaxed text-ink-500">{hint}</p>
+        : summary && <p className="truncate text-xs leading-relaxed text-ink-500">{summary}</p>}
+    </div>
+  );
   return (
     <section className="space-y-3.5 rounded-2xl border border-ink-100 bg-white p-5 shadow-2xs in-[section]:rounded-xl in-[section]:border-ink-100/80 in-[section]:bg-ink-50/40 in-[section]:p-4 in-[section]:shadow-none">
-      <div className="flex items-start justify-between gap-2 border-b border-ink-100/70 pb-2.5 in-[section]:border-0 in-[section]:pb-0">
-        <div className="space-y-0.5">
-          <div className="flex items-center gap-1.5">
-            <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
-            {help ? (
-              <InfoHint title={title}>{help}</InfoHint>
-            ) : null}
-          </div>
-          {hint && <p className="text-xs leading-relaxed text-ink-500">{hint}</p>}
-        </div>
+      <div
+        className={cn(
+          "flex items-start justify-between gap-2 in-[section]:border-0 in-[section]:pb-0",
+          expanded && "border-b border-ink-100/70 pb-2.5",
+        )}
+      >
+        {collapsible ? (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setOpen((o) => !o)}
+            className="flex min-w-0 flex-1 items-start gap-2 text-left"
+          >
+            <ChevronRight
+              className={cn("mt-0.5 size-4 shrink-0 text-ink-400 transition-transform", expanded && "rotate-90")}
+            />
+            {heading}
+          </button>
+        ) : (
+          heading
+        )}
         {action}
       </div>
-      {children}
+      {expanded && children}
     </section>
   );
 }

@@ -6,7 +6,7 @@ import { BarChart3, ChevronRight, LayoutDashboard, Settings2 } from "lucide-reac
 import { Button } from "../components/Button";
 import { cn } from "../lib/cn";
 import { CATALOG_SEGMENT_META, catalogHref, type PairedView } from "./adminNav";
-import { adminHref, type CatalogSegment } from "./adminTabStore";
+import { CATALOG_SEGMENTS, adminHref, type CatalogSegment } from "./adminTabStore";
 import type { PermissionKey } from "../../core/config/permissions";
 
 export function AdminPageHeader({
@@ -113,7 +113,7 @@ export function AdminPageHeader({
       {/* Inline Catalog product switcher when on any Catalog segment */}
       {isCatalog && catalogSegment && (
         <div className="flex flex-wrap items-center gap-1.5 pt-1">
-          {(["print", "ebook", "packs"] as const).map((seg) => {
+          {CATALOG_SEGMENTS.map((seg) => {
             const meta = CATALOG_SEGMENT_META[seg];
             const active = catalogSegment === seg;
             return (

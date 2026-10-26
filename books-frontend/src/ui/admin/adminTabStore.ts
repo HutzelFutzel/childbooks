@@ -47,7 +47,15 @@ export type ConfigTabId =
   | "system";
 
 /** Segments within the combined Catalog tab (things sold once). */
-export type CatalogSegment = "print" | "ebook" | "packs";
+export type CatalogSegment = "print" | "options" | "ebook" | "packs";
+
+/** Every segment, in the order they're listed in the header and sidebar. */
+export const CATALOG_SEGMENTS: readonly CatalogSegment[] = ["print", "options", "ebook", "packs"];
+
+/** The segment named by `?segment=`; anything unknown (or absent) is the print books. */
+export function parseCatalogSegment(raw: string | null | undefined): CatalogSegment {
+  return CATALOG_SEGMENTS.find((s) => s === raw) ?? "print";
+}
 
 /** Analysis section groups (second-level nav, mirroring Configuration). */
 export type AnalysisGroupId = "people" | "money" | "growth";
@@ -382,8 +390,7 @@ export function useAdminTab<T>(selector: (state: AdminNavState) => T): T {
   const state = useMemo<AdminNavState>(() => {
     const route = routeState(pathname);
     const rawSegment = searchParams.get("segment");
-    const catalogSegment: CatalogSegment =
-      rawSegment === "ebook" || rawSegment === "packs" ? rawSegment : "print";
+    const catalogSegment: CatalogSegment = parseCatalogSegment(rawSegment);
     const push = (href: string) => router.push(href);
 
     return {
