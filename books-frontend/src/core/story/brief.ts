@@ -46,6 +46,7 @@ const storyCastMemberSchema = z.object({
     })
     .optional(),
   note: z.string().max(500).optional(),
+  aliases: z.array(z.string().max(60)).max(8).optional(),
   lookFromArt: z.string().max(500).optional(),
   appearance: z.string().max(600).optional(),
   appearanceFromStory: z.boolean().optional(),
@@ -85,6 +86,7 @@ export const storyBriefSchema = z.object({
   where: z.string().max(500).optional(),
   mustInclude: z.string().max(1000).optional(),
   details: storyDetailsSchema.optional(),
+  sourceText: z.string().max(4000).optional(),
   generatedAt: z.number().optional(),
   generatedSignature: z.string().max(4000).optional(),
   generatedForAge: z.string().max(40).optional(),
@@ -170,6 +172,9 @@ export function hasCharacterAge(
   return member.age !== undefined || member.ageMonths !== undefined;
 }
 
+/** From this age a person is a grown-up, not who the book is for. */
+export const ADULT_AGE_MONTHS = 18 * 12;
+
 /** Months for audience matching: explicit months, otherwise years × 12. */
 export function characterAgeMonths(
   member: Pick<StoryCastMember, "age" | "ageMonths">,
@@ -187,7 +192,12 @@ export function characterAgeMonths(
 export function audienceSourceCharacter(
   cast: StoryCastMember[] | undefined,
 ): StoryCastMember | undefined {
-  const first = (cast ?? []).find((member) => member.name.trim().length > 0 && isPerson(member));
+  const people = (cast ?? []).filter((member) => member.name.trim().length > 0 && isPerson(member));
+  // A grown-up listed first (a parent, a grandparent) is not who the book is
+  // for: the first child is, whoever was named before them.
+  const first =
+    people.find((member) => !(hasCharacterAge(member) && (characterAgeMonths(member) ?? 0) >= ADULT_AGE_MONTHS)) ??
+    people[0];
   if (!first || !hasCharacterAge(first)) return undefined;
   return first;
 }

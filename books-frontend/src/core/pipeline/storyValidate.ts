@@ -9,6 +9,7 @@
 import type { StoryBrief } from "../types";
 import type { StoryStructureRules } from "../config/storyCraftCatalog";
 import { namedCast, namedHeroes, wordCount } from "../story/brief";
+import { likelyPeople } from "../guide/mentions";
 
 export interface DraftIssues {
   /** Sentence handed to the retry prompt; empty when the draft is acceptable. */
@@ -16,6 +17,11 @@ export interface DraftIssues {
   /** How far outside the word bounds the draft is (0 when inside). */
   wordMiss: number;
   missingNames: string[];
+  /**
+   * Names the parent gave for others in the story (a friend, a pet) that the draft never says.
+   * Weighed below a missing hero: leaving out a friend is a miss, not a ruined book.
+   */
+  missingMentioned: string[];
   /**
    * Sentences over the band's ceiling. The ceiling was already in the prompt
    * and never verified, which for the youngest bands is the difference between
@@ -52,6 +58,20 @@ const SENTENCE_MISS_SHARE = 0.2;
  * move a story from 340 to 320 words, which no reader would notice.
  */
 const WORD_TOLERANCE = 0.15;
+
+/**
+ * Names the parent gave for people and pets who are not in the cast: "their friends
+ * Luca and Nile", "our dog Rex". Found only in a naming phrase, so a place or an
+ * ordinary capitalised word is never demanded.
+ */
+export function mentionedNames(brief: StoryBrief): string[] {
+  const inCast = new Set(
+    namedCast(brief).flatMap((member) => [member.name, ...(member.aliases ?? [])].map((n) => n.trim().toLowerCase())),
+  );
+  const text = [brief.details?.include?.text, brief.mustInclude, brief.sourceText].filter(Boolean).join("\n");
+  if (!text.trim()) return [];
+  return likelyPeople(text, { kin: false, mentioned: true, known: [...inCast] }).slice(0, 6);
+}
 
 function namePresent(story: string, name: string, locale?: string): boolean {
   const normalizedName = name.normalize("NFC").toLocaleLowerCase(locale);
@@ -190,6 +210,8 @@ export function inspectDraft(
     brief.mode === "co-write" ? namedCast(brief).map((c) => c.name.trim()) : namedHeroes(brief);
   const missingNames = required.filter((n) => !namePresent(story, n, locale));
 
+  const missingMentioned = mentionedNames(brief).filter((n) => !namePresent(story, n, locale));
+
   const sentences = splitSentences(story);
   const limit = structure.maxSentenceWords;
   const overLimit = limit > 0 ? Math.round(limit * SENTENCE_TOLERANCE) : 0;
@@ -213,6 +235,11 @@ export function inspectDraft(
       `it left out ${missingNames.join(", ")}, who must appear by name and spelled exactly that way`,
     );
   }
+  if (missingMentioned.length > 0) {
+    problems.push(
+      `it left out ${missingMentioned.join(", ")}, whom the parent asked to have in the story, by name and spelled exactly that way`,
+    );
+  }
   if (tooManyLong) {
     problems.push(
       `${longSentences} of its ${sentences.length} sentences run well past the ${limit}-word limit for this age (the longest is ${longestSentenceWords} words) — break them into shorter ones`,
@@ -223,6 +250,7 @@ export function inspectDraft(
     repairInstruction: problems.length > 0 ? `${problems.join(", and ")}.` : "",
     wordMiss,
     missingNames,
+    missingMentioned,
     longSentences: tooManyLong ? longSentences : 0,
     longestSentenceWords,
   };
@@ -236,5 +264,5 @@ export function inspectDraft(
  * word-count miss they'd otherwise be invisible next to.
  */
 export function issueScore(issues: DraftIssues): number {
-  return issues.wordMiss + issues.longSentences * 25 + issues.missingNames.length * 1000;
+  return issues.wordMiss + issues.longSentences * 25 + issues.missingNames.length * 1000 + issues.missingMentioned.length * 300;
 }

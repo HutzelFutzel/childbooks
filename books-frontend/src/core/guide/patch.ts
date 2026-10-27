@@ -44,6 +44,7 @@ import { styleIsFromArtwork } from "./artworkStyle";
 import { properName } from "./nameText";
 import { noteStyleChange } from "./portrait";
 import { authoringOf, withAuthoring } from "./projectState";
+import { joinLook } from "./lookNotes";
 import { copySharedAges, linkSameAge } from "./sameAge";
 import { applyAgeFields, settleStatedAge, turningOf } from "./turning";
 import { GUIDE_SLOT_IDS, GUIDE_SLOTS, type GuideSlotId } from "./slots";
@@ -237,6 +238,8 @@ const castMemberSchema = personSchema.extend({
   role: z.string().trim().max(200).optional(),
   kind: z.enum(CAST_KINDS).optional(),
   species: z.string().trim().min(1).max(80).optional(),
+  /** A trait or habit of this person, in the parent's words: "loves dinosaurs". How they look is not a note. */
+  note: z.string().trim().max(300).optional(),
 });
 
 /**
@@ -436,7 +439,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
    * re-stating the list never silently drops the ages already given.
    */
   heroes: writer(
-    '["Maya", "Leo"] or [{"name": "Maya", "age": 5, "role": "big sister"}] — the COMPLETE list of who the book is about, not an addition. An age is the years COMPLETED: a child who is nearly 3 is {"age": 2, "turning": 3}',
+    '["Maya", "Leo"] or [{"name": "Maya", "age": 5, "role": "big sister"}] — the COMPLETE list of who the book is about, not an addition. An age is the years COMPLETED: a child who is nearly 3 is {"age": 2, "turning": 3}. Add "note" for a trait or habit of that one person, in the parent\'s words ("loves dinosaurs"); never how they look',
     /**
      * Names, or names with their ages attached.
      *
@@ -475,6 +478,9 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         // than an instruction to forget, so it also leaves the role alone.
         const role = typeof person === "string" ? undefined : person.role?.trim();
         if (role) member.role = role;
+        // A trait said about this one person stays on this person; a restatement adds nothing.
+        const trait = typeof person === "string" ? undefined : person.note?.trim();
+        if (trait) member.note = joinLook(member.note, trait, 500, [member.name, ...(member.aliases ?? [])]);
         if (typeof person !== "string") withKind(member, person);
         cast.push(member);
       }
@@ -516,12 +522,22 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         note: "Include a relationship only when it was actually said. Never guess one from names or ages.",
       },
       {
+        said: "Maya is 6 and loves dinosaurs",
+        value: [{ name: "Maya", age: 6, note: "loves dinosaurs" }],
+        note: "A trait or habit of one person goes in their note, in the parent's words. Never how they look.",
+      },
+      {
         said: "it's for Maya, 5, and her dog Bello",
         value: [
           { name: "Maya", age: 5 },
           { name: "Bello", role: "Maya's dog", kind: "animal", species: "dog" },
         ],
         note: "Everyone in the story, not only children. A pet, toy or creature gets its kind; a person needs none.",
+      },
+      {
+        said: "the twins Aren and Amira, and papa and anne. last day at daycare, saying goodbye to their friends Luca and Nile",
+        value: [{ name: "Aren" }, { name: "Amira" }, { name: "Papa" }, { name: "Anne" }],
+        note: "Family who are in the story are in the list, children first. Friends only named in passing (Luca, Nile) are not in this list: they are reported under \"people\" so the guide adds them to the book, and their part goes in the story idea in the parent's words.",
       },
     ],
   ),
@@ -640,6 +656,14 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         note: "The same in any language: the age completed, and the age she is about to reach.",
       },
       { said: "she is two and a half", value: [{ name: "Maya", age: 2 }], note: "Not nearly 3: no `turning`." },
+      {
+        said: "papa and anne are adults",
+        value: [
+          { name: "Papa", age: 35 },
+          { name: "Anne", age: 35 },
+        ],
+        note: 'A grown-up the parent calls "adult" or "grown-up" without a number is 35. The evidence quotes their words; an age they did state is used as stated.',
+      },
     ],
   ),
 
@@ -804,7 +828,12 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       {
         said: "Myla and Shilo are twins",
         value: [{ names: ["Myla", "Shilo"], type: "twins" }],
-        note: "Only lookAlike when they said whether the twins look the same.",
+        note: "Only lookAlike when they said, or plainly meant, whether the twins look the same.",
+      },
+      {
+        said: "my twins, a boy and a girl, Aren and Amira",
+        value: [{ names: ["Aren", "Amira"], type: "twins", lookAlike: "different" }],
+        note: "Twins who are a boy and a girl, \"fraternal\" or \"not identical\" are not identical: say so with lookAlike \"different\" and do not leave it for a question. Never guess it from the names.",
       },
       {
         said: "they're identical twins",
@@ -1314,7 +1343,9 @@ function sameCast(a: StoryCastMember[], b: StoryCastMember[]): boolean {
       // says the book already knew it.
       (member.role?.trim() ?? "") === (other.role?.trim() ?? "") &&
       member.kind === other.kind &&
-      (member.species?.trim() ?? "") === (other.species?.trim() ?? "")
+      (member.species?.trim() ?? "") === (other.species?.trim() ?? "") &&
+      // Same reason: a turn whose only news is a trait ("Maya loves dinosaurs") is a write.
+      (member.note?.trim() ?? "") === (other.note?.trim() ?? "")
     );
   });
 }

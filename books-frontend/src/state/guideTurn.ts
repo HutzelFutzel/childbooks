@@ -28,6 +28,8 @@ import { useAppConfigStore } from "./appConfigStore";
 import { useProjectsStore } from "./projectsStore";
 import type { CommandCall } from "../core/guide/agent/types";
 import { authoringOf } from "../core/guide/projectState";
+import type { GuideFailure } from "../core/guide/failure";
+import type { MentionedPerson } from "../core/guide/people";
 export interface GuideTurnOutcome {
   intent: GuideTurnIntent;
   /** Suggested entry for a book that has not chosen how its story is written. */
@@ -69,6 +71,10 @@ export interface GuideTurnOutcome {
   /** The message's language, when detected. */
   language: string | null;
   languageConfidence: number;
+  /** People the message names, with the words that name them. Whether they are added is decided by the caller. */
+  mentioned: MentionedPerson[];
+  /** Set when the interpreter could not read the message at all, and why. */
+  failure?: GuideFailure;
 }
 
 /**
@@ -133,6 +139,8 @@ export async function sendGuideTurn(
     overflowCommands: result.overflowCommands ?? [],
     language: result.language ?? null,
     languageConfidence: result.languageConfidence ?? 0,
+    mentioned: result.mentioned ?? [],
+    ...(result.failure ? { failure: result.failure } : {}),
   });
 }
 
@@ -152,6 +160,8 @@ async function applyTurnPatch(
     overflowCommands: CommandCall[];
     language: string | null;
     languageConfidence: number;
+    mentioned: MentionedPerson[];
+    failure?: GuideFailure;
   },
 ): Promise<GuideTurnOutcome> {
   let applied: GuideSlotId[] = [];
@@ -193,5 +203,7 @@ async function applyTurnPatch(
     overflowCommands: meta.overflowCommands,
     language: meta.language,
     languageConfidence: meta.languageConfidence,
+    mentioned: meta.mentioned,
+    ...(meta.failure ? { failure: meta.failure } : {}),
   };
 }

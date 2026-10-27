@@ -15,6 +15,7 @@ import type {
   GuideEntry,
   HardcoverDecision,
   LookSource,
+  PendingLook,
   Project,
   RetiredArtwork,
   SourceArtRef,
@@ -36,6 +37,13 @@ function time(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function storyOwes(value: unknown): { ids: string[]; current: boolean } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as { ids?: unknown; current?: unknown };
+  const ids = strings(raw.ids)?.slice(0, 12);
+  return ids ? { ids, current: raw.current === true } : undefined;
+}
+
 function sameAgeGroups(value: unknown): string[][] | undefined {
   if (!Array.isArray(value)) return undefined;
   const groups = value
@@ -43,6 +51,27 @@ function sameAgeGroups(value: unknown): string[][] | undefined {
     .filter((group): group is string[] => Boolean(group && group.length >= 2))
     .slice(0, 6);
   return groups.length > 0 ? groups : undefined;
+}
+
+function pendingLooks(value: unknown): PendingLook[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = value
+    .filter(
+      (item): item is PendingLook =>
+        Boolean(item) &&
+        typeof item === "object" &&
+        typeof item.words === "string" &&
+        Boolean(item.words.trim()) &&
+        typeof item.look === "string" &&
+        Boolean(item.look.trim()),
+    )
+    .map((item) => ({
+      words: item.words.trim().slice(0, 60),
+      look: item.look.trim().slice(0, 400),
+      ...(item.asked === true ? { asked: true } : {}),
+    }))
+    .slice(-12);
+  return out.length > 0 ? out : undefined;
 }
 
 function sourceArtRefs(value: unknown): SourceArtRef[] | undefined {
@@ -242,6 +271,8 @@ export function normalizeStudioAuthoringState(input: unknown): StudioAuthoringSt
     briefOpen: typeof raw.briefOpen === "string" && raw.briefOpen ? raw.briefOpen.slice(0, 40) : undefined,
     briefStartAt: time(raw.briefStartAt),
     personAsks: strings(raw.personAsks)?.slice(-200),
+    storyOwes: storyOwes(raw.storyOwes),
+    pendingLooks: pendingLooks(raw.pendingLooks),
     looksDecided: strings(raw.looksDecided)?.slice(-100),
     lookFocus: typeof raw.lookFocus === "string" && raw.lookFocus ? raw.lookFocus.slice(0, 120) : undefined,
     styleBefore: artStyleSelection(raw.styleBefore),

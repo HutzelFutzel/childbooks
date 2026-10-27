@@ -16,7 +16,10 @@ import { briefOf, namedCast } from "../../core/story/brief";
 import type { Project } from "../../core/types";
 import { ownWordsStatus, withAnalysisCharacters } from "../../core/guide/ownWords";
 import { continueDrawBook } from "../../state/chatGeneration";
-import { advanceStoryPipeline, ensurePlan, needsExtraction } from "../../state/chatPipeline";
+import { advanceStoryPipeline, ensurePlan, needsAnalysis, needsExtraction } from "../../state/chatPipeline";
+import { withCastCharacters } from "../../core/guide/castCharacters";
+import { joinGuideNames } from "../../core/guide/copy";
+import { pagesStarted } from "../../core/guide/journey";
 import { useChatStudio } from "../../state/chatStudio";
 import { useJobsStore } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
@@ -45,6 +48,53 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
     if (!current) return;
     void useProjectsStore.getState().patchCurrent((live) => withAnalysisCharacters(live, live.anchors ?? []));
   }, [loaded, projectId, anchorKey]);
+
+  // A book that was left while the story waited for an age picks it up again, and one whose age came
+  // by a card or a tap goes on without another message.
+  const owedKey = (project.authoringState?.storyOwes?.ids ?? []).join("|");
+  const ageKey = namedCast(briefOf(project.config))
+    .map((member) => `${member.id}:${member.age ?? ""}:${member.ageMonths ?? ""}`)
+    .join("|");
+  useEffect(() => {
+    if (!loaded || !owedKey) return;
+    void useChatStudio.getState().settleStory();
+  }, [loaded, owedKey, ageKey]);
+
+  // Everyone the story names has a character to be drawn from. A person who joined after the story was
+  // read has none, so nothing would prepare them and no page would list them. Only what is missing is
+  // added, and only for people the story names; in a book already being drawn the new sheets are the
+  // update card's price to accept, never drawn on their own.
+  const charactersKey = [
+    namedCast(briefOf(project.config))
+      .map((member) => `${member.id}:${member.name}`)
+      .join("|"),
+    (project.anchors ?? []).map((anchor) => `${anchor.id}:${anchor.include}:${anchor.castId ?? ""}`).join("|"),
+    project.analysis?.generatedAt ?? 0,
+    storyText.length,
+  ].join("#");
+  useEffect(() => {
+    if (!loaded) return;
+    const current = liveProject(projectId);
+    if (!current?.analysis) return;
+    const authoring = authoringOf(current);
+    if (
+      useChatStudio.getState().analysisRunning ||
+      needsAnalysis(current) ||
+      authoring.storyOwes ||
+      authoring.storyRun?.status === "running"
+    ) {
+      return;
+    }
+    const found = withCastCharacters(current);
+    if (found.added.length > 0) {
+      void useProjectsStore.getState().patchCurrent((live) => (live.id === projectId ? withCastCharacters(live).project : live));
+    }
+    if (found.unnamed.length > 0 && pagesStarted(current)) {
+      const mark = `notOnPages:${[...found.unnamed].sort().join("|")}`;
+      if (!said(mark)) say([{ key: "peopleNotOnPages", priority: "result", vars: { names: joinGuideNames(found.unnamed) } }], { unprompted: true, marks: [mark] });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, projectId, charactersKey]);
 
   const stagedStyleSource = project.authoringState?.styleSourceArt?.[0]?.blobId ?? "";
   const castKey = namedCast(briefOf(project.config))

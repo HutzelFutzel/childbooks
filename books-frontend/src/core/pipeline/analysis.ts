@@ -445,7 +445,7 @@ function applyArtworkLooksToAnchors(
  * the screenplay never puts them on a page. The model is asked to include them;
  * this is the belt-and-suspenders copy if it still omits someone.
  */
-function injectNamedCastAnchors(anchors: Anchor[], config: BookConfig, previous?: Anchor[]): Anchor[] {
+export function injectNamedCastAnchors(anchors: Anchor[], config: BookConfig, previous?: Anchor[]): Anchor[] {
   const people = namedCast(briefOf(config));
   if (people.length === 0) return anchors;
   const characters = anchors.filter((anchor) => anchor.type === "character");

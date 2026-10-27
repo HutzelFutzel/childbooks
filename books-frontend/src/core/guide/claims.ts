@@ -27,6 +27,7 @@
  */
 import { z } from "zod";
 import { captureGuideFacts, isGuidePatchableSlot } from "./patch";
+import { isBareGoAhead } from "./goAhead";
 import { GUIDE_SLOTS, type GuideSlotId } from "./slots";
 import { STORY_DETAILS, isStoryDetailId, withStoryDetail, type DetailPatch } from "./storyDetails";
 import { briefOf } from "../story/brief";
@@ -149,6 +150,26 @@ export function claimEvidenceHolds(message: string, evidence: string): boolean {
   return foldForEvidence(message).includes(quoted);
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Two claims for the story idea as one: every detail either gave, and for a
+ * detail both gave, the more confident claim's value. Null when either value is
+ * not a set of details, which leaves the ordinary "keep the more confident".
+ */
+function joinStoryIdeaClaims(first: GuideClaim, second: GuideClaim): GuideClaim | null {
+  if (!isPlainObject(first.value) || !isPlainObject(second.value)) return null;
+  const [better, other] = first.confidence >= second.confidence ? [first, second] : [second, first];
+  return {
+    slot: first.slot,
+    value: { ...(other.value as Record<string, unknown>), ...(better.value as Record<string, unknown>) },
+    evidence: `${first.evidence} … ${second.evidence}`.slice(0, 600),
+    confidence: Math.min(first.confidence, second.confidence),
+  };
+}
+
 export interface ScreenedGuideClaims {
   /** Claims that survived, best-confidence-first within each slot. */
   kept: GuideClaim[];
@@ -231,6 +252,12 @@ export function screenGuideClaims(args: {
       );
       continue;
     }
+    // "Write the story" says nothing about the story. Filed as its idea it would
+    // replace the plot the reader gave.
+    if (claim.slot === "storyIdea" && (isBareGoAhead(args.message) || isBareGoAhead(claim.evidence))) {
+      refuse(claim, "not-a-statement", "a go-ahead is not what the story is about");
+      continue;
+    }
     if (claim.confidence < floor) {
       refuse(claim, "low-confidence", `confidence ${claim.confidence.toFixed(2)} is below ${floor}`);
       continue;
@@ -239,6 +266,14 @@ export function screenGuideClaims(args: {
     const held = bySlot.get(claim.slot);
     if (!held) {
       bySlot.set(claim.slot, claim);
+      continue;
+    }
+    // The story idea is many small details. Two claims for it hold different
+    // details more often than they disagree, so they are joined rather than
+    // having one of them thrown away.
+    const joined = claim.slot === "storyIdea" ? joinStoryIdeaClaims(held, claim) : null;
+    if (joined) {
+      bySlot.set(claim.slot, joined);
       continue;
     }
     const [winner, loser] = held.confidence >= claim.confidence ? [held, claim] : [claim, held];

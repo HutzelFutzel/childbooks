@@ -98,7 +98,7 @@ export async function startStoryRevision(
   project: Project,
   instruction: string,
   selection?: StoryRevisionSelection,
-  options: { eager?: boolean } = {},
+  options: { eager?: boolean; quiet?: boolean } = {},
 ): Promise<string> {
   const key = revisionKey(project.id, instruction, selection);
   const existing = inflight.get(key);
@@ -106,7 +106,7 @@ export async function startStoryRevision(
     if (!options.eager) adoptEager();
     return existing;
   }
-  const run = requestStoryRevision(project, instruction, selection, key).then((id) => {
+  const run = requestStoryRevision(project, instruction, selection, key, options.quiet === true).then((id) => {
     if (!options.eager) adoptEager();
     return id;
   });
@@ -122,6 +122,7 @@ async function requestStoryRevision(
   instruction: string,
   selection: StoryRevisionSelection | undefined,
   key: string,
+  quiet = false,
 ): Promise<string> {
   const joined = recent.get(project.id);
   if (joined && joined.key === key && Date.now() - joined.at < 60_000) return joined.id;
@@ -150,7 +151,8 @@ async function requestStoryRevision(
       const same = recent.get(project.id);
       if (same && Date.now() - same.at < 60_000) return same.id;
     }
-    if (res.status === 402 && body.error?.code === "insufficient_sparks") {
+    // A step the guide takes on its own never opens a dialog over the chat: the caller says what happened.
+    if (!quiet && res.status === 402 && body.error?.code === "insufficient_sparks") {
       const balance = body.error.balance ?? 0;
       const needed = body.error.needed ?? 0;
       if (useAuthStore.getState().accessLevel === "full") {

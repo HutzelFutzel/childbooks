@@ -90,6 +90,8 @@ export interface AgentPending {
   /** For the interpreter: "setPersonAge for Christopher". */
   expects: string;
   person?: { id: string; fields: string[] };
+  /** People the guide offered as the book's cast ("Is the book about Aren and Amira?"); a plain yes saves them. */
+  people?: string[];
 }
 
 export interface AgentTurn {

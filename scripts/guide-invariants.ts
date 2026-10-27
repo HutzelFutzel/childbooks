@@ -32,6 +32,9 @@ import { checkGuideJourney } from "./guide-journey-invariants";
 import { checkGuideAgent } from "./guide-agent-invariants";
 import { checkGuideMark } from "./guide-mark-invariants";
 import { checkGuideStory } from "./guide-story-invariants";
+import { checkGuidePeople } from "./guide-people-invariants";
+import { checkGuideFailure } from "./guide-failure-invariants";
+import { checkGuideMentions } from "./guide-mentions-invariants";
 import { checkGuideConversation } from "./guide-conversation-invariants";
 import { checkGuideCover } from "./guide-cover-invariants";
 import { checkGuideOwnWords } from "./guide-own-words-invariants";
@@ -236,6 +239,21 @@ const story = checkGuideStory();
 failures.push(...story.failures);
 notes.push(...story.notes);
 cases += story.cases;
+
+const people = checkGuidePeople();
+failures.push(...people.failures);
+notes.push(...people.notes);
+cases += people.cases;
+
+const mentionChecks = checkGuideMentions();
+failures.push(...mentionChecks.failures);
+notes.push(...mentionChecks.notes);
+cases += mentionChecks.cases;
+
+const failureChecks = checkGuideFailure();
+failures.push(...failureChecks.failures);
+notes.push(...failureChecks.notes);
+cases += failureChecks.cases;
 
 const conversation = checkGuideConversation();
 failures.push(...conversation.failures);

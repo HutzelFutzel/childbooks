@@ -179,6 +179,16 @@ export interface LikenessPhotoRef {
 export type CastKind = "person" | "animal" | "toy" | "creature";
 
 /** One named person or creature the story is about (co-write mode). */
+/** A look held until its person can be found. See `StudioAuthoringState.pendingLooks`. */
+export interface PendingLook {
+  /** What the reader called the person: "papa", "the dog". */
+  words: string;
+  /** The look, in their words. */
+  look: string;
+  /** The chat has already asked who this is. */
+  asked?: boolean;
+}
+
 export interface StoryCastMember {
   id: string;
   name: string;
@@ -212,6 +222,11 @@ export interface StoryCastMember {
   };
   /** Anything else worth knowing: "loves dinosaurs", "always loses a shoe". */
   note?: string;
+  /**
+   * Other words the family uses for this person ("Dad" for Papa). Only for finding
+   * them again: a name is what is written in the story, an alias never is.
+   */
+  aliases?: string[];
   /** Optional one-use photo for carrying this person's likeness into Cast. */
   likenessPhoto?: LikenessPhotoRef;
   /**
@@ -362,6 +377,18 @@ export interface StudioAuthoringState {
    * as `<personId>:<field>` (`p1:role`, `p1:role:skipped`). Asked once, never again.
    */
   personAsks?: string[];
+  /**
+   * People who joined the book while the written story does not speak of them, and the story is to be
+   * rewritten for them once what it needs of them (an age) is known. `current` is whether the draft was
+   * up to date before they came, so it can be called up to date again once it speaks of them.
+   */
+  storyOwes?: { ids: string[]; current: boolean };
+  /**
+   * Looks the reader described for somebody who is not in the book (yet): the words
+   * they used for the person and the look. Attached by `reconcilePendingLooks` the
+   * moment exactly one person answers to those words; never dropped silently.
+   */
+  pendingLooks?: PendingLook[];
   /**
    * Chat studio: people (cast ids) whose look source the reader settled in the
    * chat, including "let the story decide". Asked once per person.
@@ -532,6 +559,15 @@ export interface StoryBrief {
    * leave out, …), by detail id. See `core/guide/storyDetails.ts`.
    */
   details?: Record<string, StoryDetailValue>;
+  /**
+   * What the reader wrote about the story before it was drafted, in their own
+   * words, oldest first (see `core/story/sourceText.ts`). The draft reads it as
+   * a source of facts next to the structured fields, so a person, place or
+   * event the interpreter did not file anywhere still reaches the writer.
+   * Deliberately not part of `storyBriefSignature`: adding a sentence must not
+   * make a written draft look stale.
+   */
+  sourceText?: string;
   /** When the current `storyText` was generated from this brief. */
   generatedAt?: number;
   /**

@@ -470,15 +470,17 @@ export function deriveJourney(
     : null;
   // The next look is asked while earlier portraits draw: choosing it starts
   // that person's portrait too.
+  // Nobody is drawn for a story that is still being worked around them: it decides who is on the pages.
+  const storyOwes = Boolean(authoringOf(project).storyOwes);
   const looksWell: WellItem | null =
-    undecided.length > 0
+    undecided.length > 0 && !storyOwes
       ? { kind: "castLooks", castId: undecided[0]!.id, name: undecided[0]!.name.trim(), remaining: undecided.length }
       : null;
   // The fallback when a choice didn't start them (price, balance, age, an
   // unpriced or typed choice): only the people not already drawing.
   const idle = missingPortraits.filter((m) => !active.has(m.id));
   const portraitAction: WellItem | null =
-    idle.length > 0
+    idle.length > 0 && !storyOwes
       ? {
           kind: "portraits",
           castIds: idle.map((m) => m.id),

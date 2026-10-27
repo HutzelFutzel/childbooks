@@ -30,6 +30,7 @@ import type {
 import { anchorSignature } from "../pipeline/provenance";
 import { getCursor, updateNodeContent, type VersionTree } from "../versioning";
 import { foldName } from "./agent/resolve";
+import { withAliasWord } from "./aliases";
 import { countNameMentions, properName, renameInText } from "./nameText";
 import { manuscriptHash } from "./ownWords";
 import { portraitInputs, portraitStatus, portraitSubjects } from "./portrait";
@@ -90,6 +91,7 @@ const BRIEF_TEXT_FIELDS = [
   "where",
   "mustInclude",
   "pictureNotes",
+  "sourceText",
 ] as const;
 
 function swapBrief(brief: StoryBrief, from: string, to: string, swap: (text: string) => string): StoryBrief {
@@ -298,6 +300,11 @@ function restampAnchorSignatures(before: Anchor[] | undefined, project: Project)
  * Rename one cast member throughout the book. Refuses an empty name, one
  * someone else already has, and a name that is no change.
  */
+function aliasesAfterRename(aliases: readonly string[] | undefined, from: string, to: string): { aliases?: string[] } {
+  const next = from ? withAliasWord(aliases, from, to) : aliases ? [...aliases] : undefined;
+  return next && next.length > 0 ? { aliases: next } : {};
+}
+
 export function renamePersonEverywhere(
   project: Project,
   memberId: string,
@@ -325,7 +332,11 @@ export function renamePersonEverywhere(
   const extractionWasCurrent = authoringOf(project).extraction?.storyHash === manuscriptHash(storyText);
 
   const cast: StoryCastMember[] = (brief.cast ?? []).map((candidate) => {
-    const renamed = candidate.id === memberId ? { ...candidate, name: to } : candidate;
+    // The name it had stays findable: "papa's cap" still means him after he is renamed Dad.
+    const renamed =
+      candidate.id === memberId
+        ? { ...candidate, name: to, ...aliasesAfterRename(candidate.aliases, from, to) }
+        : candidate;
     return from ? swapFields(renamed, CAST_TEXT_FIELDS, swap) : renamed;
   });
   let storyBrief: StoryBrief = { ...(from ? swapBrief(brief, from, to, swap) : brief), cast };

@@ -504,6 +504,19 @@ export interface BookDesign {
   /** Role-aware typography used by existing boxes and anything seeded later. */
   sharedTextStyles?: Partial<Record<SharedTextStyleKey, SharedTextStyle>>;
   /**
+   * Book-wide fit of the story text. The age-based size is a ceiling; the
+   * studio shrinks every story box to one shared size, the largest at which the
+   * wordiest page still fits its text area, so the type stays uniform across
+   * the book and nothing is clipped.
+   *
+   * `seedPct` is that ceiling, `appliedPct` the size written to the boxes, and
+   * `sig` a fingerprint of everything the fit depends on (text, boxes, slots)
+   * so it is only recomputed when one of those changes. Skipped once the reader
+   * sets a story size themselves (a shared "story-body" style, or boxes that no
+   * longer share the fitted size).
+   */
+  bodyFit?: { seedPct: number; appliedPct: number; sig: string };
+  /**
    * Last paint applied to a geometric shape vs a speech bubble. Fill/stroke stay
    * per family so a green star does not become a green bubble. Inner type is
    * shared (`text`) so the last font follows the next shape of either kind.

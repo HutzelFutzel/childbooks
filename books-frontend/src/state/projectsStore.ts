@@ -51,6 +51,7 @@ import { reconcileCoverLettering } from "../ui/design/designInit";
 import { ProjectConflictError } from "../core/storage/repositories";
 import { resolveBookConflict } from "../core/guide/merge";
 import { likenessPhotosOf } from "../core/guide/portrait";
+import { reconcilePendingLooks } from "../core/guide/pending";
 import { getRepos } from "./repos";
 import { touchProjectRemote } from "../platform/aiClient";
 import { copyBlob, removeBlob } from "./blobs";
@@ -937,7 +938,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   async patchCurrent(mutator) {
-    await mutateCurrent(get, set, mutator);
+    // Looks held for somebody who was not in the book yet are attached the moment they are:
+    // after every change to the book, so no caller has to remember to.
+    await mutateCurrent(get, set, (p) => reconcilePendingLooks(mutator(p)));
   },
 
   async gcUnreferencedBlobs(ids) {

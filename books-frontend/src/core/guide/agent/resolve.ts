@@ -8,6 +8,7 @@
  * redraws the wrong child.
  */
 import { briefOf, namedCast } from "../../story/brief";
+import { kinRole } from "../kinship";
 import type { Anchor, Project, StoryCastMember } from "../../types";
 
 export type Resolution<T> =
@@ -62,8 +63,21 @@ export function castOf(project: Project): StoryCastMember[] {
   return namedCast(briefOf(project.config)).filter((member) => member.name.trim());
 }
 
+/**
+ * The one person a name means. A name or an alias wins; failing that, a family word
+ * ("dad", "Vater", "my father") finds the one person who is that, by name or by alias.
+ * Two fathers are "many", so the chat asks which, exactly as it does for two Sams.
+ */
 export function resolvePerson(project: Project, name: string): Resolution<StoryCastMember> {
-  return matchByName(name, castOf(project), (member) => [member.name]);
+  const cast = castOf(project);
+  const named = matchByName(name, cast, (member) => [member.name, ...(member.aliases ?? [])]);
+  if (named.kind !== "none") return named;
+  const role = kinRole(name);
+  if (!role) return named;
+  const kin = cast.filter((member) => [member.name, ...(member.aliases ?? [])].some((label) => kinRole(label) === role));
+  if (kin.length === 1) return { kind: "one", value: kin[0]! };
+  if (kin.length > 1) return { kind: "many", values: kin };
+  return named;
 }
 
 export function resolveAnchor(project: Project, name: string): Resolution<Anchor> {

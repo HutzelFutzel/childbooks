@@ -34,6 +34,23 @@ export const GUIDE_LINE_KEYS = [
   "missingNames",
   "missingAges",
   "missingAgesMany",
+  "missingAgesWhy",
+  "missingAgesWhyMany",
+  "heardStory",
+  "turnUnread",
+  "turnUnreadKept",
+  "peopleAdded",
+  "peopleAddedStory",
+  "peopleAddedAge",
+  "storyAddingPeople",
+  "peopleNotOnPages",
+  "storyHasPeople",
+  "storyPeopleFailed",
+  "storyPeopleMissing",
+  "confirmPeople",
+  "lookPending",
+  "lookPlaced",
+  "lookPendingAsk",
   "missingKind",
   "kindSet",
   "relationSet",
@@ -241,10 +258,28 @@ export const DEFAULT_GUIDE_COPY: Record<GuideCopyKey, string> = {
   missingNames: "Who should be in the story?",
   missingAges: "How old is {names}?",
   missingAgesMany: "How old are {names}?",
+  missingAgesWhy: "How old is {names}? Ages help me draw them right and pick the reading level.",
+  missingAgesWhyMany:
+    "How old are {names}? Ages help me draw everyone right and pick the reading level. For grown-ups, \"adult\" is fine.",
+  heardStory: "Got it, I've noted your story.",
+  turnUnread: "Sorry, I couldn't read that just now. Could you say it again?",
+  turnUnreadKept: "I couldn't read all of that just now, but I've kept your words.",
+  peopleAdded: "I've added {names} to your book.",
+  peopleAddedStory: "I've added {names} to your book and I'm working them into the story.",
+  peopleAddedAge: "I've added {names} to your book. Once I know how old they are, I'll work them into the story.",
+  storyAddingPeople: "I'm working {names} into the story.",
+  peopleNotOnPages: "{names} are in your book, but the story doesn't mention them, so they won't be on any page.",
+  storyHasPeople: "Your story now includes {names}.",
+  storyPeopleFailed: "I couldn't work {names} into the story just now. Tell me when you'd like me to try again.",
+  storyPeopleMissing: "{names} still aren't in the story. Tell me where they should come in.",
+  confirmPeople: "Is the book about {names}? Say yes, or tell me who it's about.",
+  lookPending: "Noted: {what}. I'll add it as soon as I know who it is.",
+  lookPlaced: "Added to {names}: {what}.",
+  lookPendingAsk: "You mentioned {what}. Who is that? Just tell me their name.",
   missingKind: "What kind of {what} is {names}?",
   kindSet: "Got it—{names} is {what}.",
   relationSet: "Got it—{what}",
-  askLookAlike: "Do {names} look alike?",
+  askLookAlike: "Are {names} identical twins? Identical twins are drawn with the same face.",
   hardcoverSpread: "I'll spread it over {count} pages, so a hardcover is possible.",
   hardcoverShort:
     "The story fills {count} pages, and a hardcover needs at least {min}. Should I spread it over {min} pages for a hardcover, or keep {count} pages as a softcover?",
@@ -432,8 +467,8 @@ export const DEFAULT_GUIDE_COPY: Record<GuideCopyKey, string> = {
   showMe: "Show me",
   tryThis: "Try this",
   writeStory: "Write the story",
-  lookAlikeYes: "They look alike",
-  lookAlikeNo: "They look different",
+  lookAlikeYes: "Yes, identical",
+  lookAlikeNo: "No, not identical",
   coverLooksGood: "Looks good",
   storyIsReady: "My story is ready",
   keepPictureNotes: "Keep for the pictures",
@@ -496,7 +531,7 @@ export const GUIDE_COPY_HELP: Partial<Record<GuideCopyKey, string>> = {
   missingKind: "Asked when an animal, toy or creature has no kind yet. {what} is animal, toy or creature; {names} the character.",
   kindSet: "Said after the parent says what a character is. {what} is what they are, like \"a golden retriever\".",
   relationSet: "Said after the parent says how characters belong together. {what} is the sentence the app wrote, like \"Myla and Shilo are twins.\"",
-  askLookAlike: "Asked with two buttons (alike, different) when twins are in the book. {names} are the twins.",
+  askLookAlike: "Asked with two buttons (identical, not identical) when twins are in the book and nothing said whether they are. Identical twins are drawn from the same face, so it is asked before their portraits. {names} are the twins.",
   lookNoted: "Said when a look change is saved before any portrait exists.",
   languageTranslating: "Said when the story is being translated into another language after it was written. The people, plot and tone do not change.",
   languageTranslated: "Said when the translated story is in place. The reader can take it back with Undo.",
@@ -529,6 +564,40 @@ export const GUIDE_COPY_HELP: Partial<Record<GuideCopyKey, string>> = {
   askPictureNotes:
     "Said once after the guide read a story the reader wrote, right before an optional note for the pictures (with Skip). Season, place and toys — not how someone looks; that is the character card.",
   agesSet: "Said after the reader confirms ages the story never stated. {names} are those people.",
+  missingAgesWhy:
+    "The first time the guide asks for one person's age before the story, with the reason: ages shape the pictures and the reading level. Later asks use the plain question. {names} is that person.",
+  missingAgesWhyMany:
+    "The same first ask for several people. It also tells the parent that a grown-up can simply be \"adult\". {names} are those people.",
+  heardStory:
+    "Said once, before the next question, when the parent told the story in their own words and the guide kept them. Short on purpose: the receipt carries the detail.",
+  turnUnread:
+    "Said when the guide could not read a message at all (a technical problem, not unclear words) and kept nothing from it.",
+  peopleAdded:
+    "Said when the parent named somebody (a friend, a pet) who was not in the book and the guide added them without being asked in so many words. The story already speaks of them, or there is no story yet. {names} are the people added.",
+  peopleAddedStory:
+    "The same, when the story is already written and does not speak of them: it is being rewritten to include them. {names} are the people added.",
+  peopleAddedAge:
+    "The same, when the story is already written and does not speak of them, and the story waits for how old they are: the next question asks it. {names} are the people added.",
+  peopleNotOnPages:
+    "Said once, when the book is already being drawn and somebody in the cast is not in the story: they have no character, so no page is drawn with them. {names} are those people.",
+  storyAddingPeople:
+    "Said when somebody joined the book by a road other than the guide adding them (a fact, a skill) and the written story does not speak of them: it is being rewritten to include them. {names} are those people.",
+  storyHasPeople:
+    "Said when the story has been rewritten to include people who were just added. {names} are those people.",
+  storyPeopleFailed:
+    "Said when the story could not be rewritten to include people who were just added (a technical problem, or too few Sparks). They are in the book; the story is unchanged. {names} are those people.",
+  storyPeopleMissing:
+    "Said when the story was rewritten for people who were just added and still does not mention some of them. {names} are those people.",
+  turnUnreadKept:
+    "Said instead of the usual 'noted' line when the guide could not read a message at all but the parent's own words were kept for the story. Never claims anything was understood.",
+  confirmPeople:
+    "Asked instead of the plain \"who is in the story?\" when the parent clearly named people but none could be saved. {names} are the people the guide thinks they named; a yes saves them.",
+  lookPending:
+    "Said when a parent describes how someone looks before that person is in the book. The look is kept and attached when they are added. {what} is the look, in their words.",
+  lookPlaced:
+    "Said when a look the parent gave earlier, before the person was in the book, is attached now that they are. {names} is the person, {what} the look.",
+  lookPendingAsk:
+    "Asked when a described look still has no person, so it is never lost and never given to the wrong one. {what} is the look, in the parent's words.",
   castAgesAsk: "Asked before any portrait when nobody has given or estimated one person's age. {names} is that person.",
   castAgesAskMany: "The same question for several people. {names} are those people.",
   pictureNotesSaved: "Said after the reader gave notes for the pictures. The notes steer the page plan and are never printed.",

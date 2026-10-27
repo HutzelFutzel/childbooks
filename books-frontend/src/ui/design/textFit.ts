@@ -86,6 +86,41 @@ export function fitFontSizePct(box: TextBox, pageAspect: number): number {
 }
 
 /**
+ * Largest font size (fraction of page height, at most `maxPct`) at which the
+ * box's text, wrapped to the box's own width, needs no more height than
+ * `box.rect.h` — and no single word is wider than a line.
+ *
+ * Unlike {@link fitFontSizePct} this is measured the way a hugged box sizes
+ * itself ({@link fitBoxHeightPct}: padding plus half a line of ink room), so a
+ * size that fits here still fits once the box is hugged to its text. Pass the
+ * slot rectangle the box must live in as `box.rect`. Never goes below
+ * {@link MIN_FONT_PCT}; text that still does not fit there is left to the
+ * editor's overflow indicator.
+ */
+export function fitFontSizePctToBoxHeight(box: TextBox, pageAspect: number, maxPct: number): number {
+  if (maxPct <= MIN_FONT_PCT) return maxPct;
+  const inner = innerFor(box, pageAspect, 1e6);
+  const available = box.rect.h * VH;
+  const fits = (pct: number) => {
+    const base = pct * VH;
+    const m = measure(box, base, inner);
+    const needed = m.height + 2 * inner.pad + base * box.lineHeight * 0.5;
+    return needed <= available + WIDTH_EPS && m.width <= inner.w + WIDTH_EPS;
+  };
+  if (fits(maxPct)) return maxPct;
+  if (!fits(MIN_FONT_PCT)) return MIN_FONT_PCT;
+  let lo = MIN_FONT_PCT;
+  let hi = maxPct;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) lo = mid;
+    else hi = mid;
+  }
+  // Round down: rounding up could land just past the size that fits.
+  return Math.floor(lo * 1e4) / 1e4;
+}
+
+/**
  * Effective font size for a box as a fraction of page height, honoring
  * auto-fit — this is the size that's *actually rendered*, as opposed to
  * `box.fontSizePct`, which is just the size the author last asked for (the

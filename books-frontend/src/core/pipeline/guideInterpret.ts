@@ -62,6 +62,10 @@ import type { CommandCall } from "../guide/agent/types";
 import { castOf } from "../guide/agent/resolve";
 import { turningOf } from "../guide/turning";
 import { portraitStatus } from "../guide/portrait";
+import { likelyPeople } from "../guide/mentions";
+import { mentionedPersonSchema, sanitizeMentioned, type MentionedPerson } from "../guide/people";
+import { answerAgainReminder, classifyGuideFailure, worthAskingAgain, type GuideFailure } from "../guide/failure";
+import { briefOf, namedCast, wordCount } from "../story/brief";
 
 /**
  * What kind of turn this was. The distinction that earns its keep is `revise`
@@ -126,6 +130,16 @@ export interface GuideTurnResult {
   /** The language the message is written in (BCP-47 primary tag), when detected. */
   language: string | null;
   languageConfidence: number;
+  /**
+   * People the message names, with the words that name them, whatever the message was about. Whether they
+   * are added to the book is decided by `peopleToAdd`, from the saved book: this only says who was named.
+   */
+  mentioned?: MentionedPerson[];
+  /**
+   * Set when the model could not be read at all, and why. Everything else on a turn
+   * like this is empty, which on its own is indistinguishable from a greeting.
+   */
+  failure?: GuideFailure;
 }
 
 /** What the interpreter may do with skills this turn. Absent: skills are off. */
@@ -209,6 +223,7 @@ const turnSchema = z.object({
     )
     .max(12)
     .optional(),
+  people: z.array(mentionedPersonSchema).max(12).optional(),
   language: z.string().max(16).optional(),
   languageConfidence: z.number().min(0).max(1).optional(),
 });
@@ -360,6 +375,41 @@ export function describeClaimProblems(refused: readonly RefusedGuideClaim[]): st
 }
 
 /**
+ * A reading that named nobody, from a message that did.
+ *
+ * The commonest silent failure is not a refused claim but a missing one: the model
+ * writes a reply that says it has the family and files no `heroes` at all, so
+ * nothing is refused and the repair never runs. Told what the message and its own
+ * reply say, it can file them. Returns "" when nothing is wrong: the book already
+ * has people, `heroes` was claimed (even if refused, which is described already),
+ * the book is the parent's own words, or no person is named.
+ */
+export function describeMissingPeople(
+  result: {
+    claims: readonly Pick<GuideClaim, "slot">[];
+    refused: readonly Pick<RefusedGuideClaim, "slot">[];
+    intent: GuideTurnIntent;
+    reply: string;
+  },
+  options: Pick<SanitizeGuideTurnOptions, "project" | "message">,
+): string {
+  const { project, message } = options;
+  const brief = briefOf(project.config);
+  if (brief.mode === "own" || project.config.storyText.trim()) return "";
+  if (namedCast(brief).length > 0 || result.intent === "question") return "";
+  if (result.claims.some((claim) => claim.slot === "heroes")) return "";
+  if (result.refused.some((claim) => claim.slot === "heroes")) return "";
+  if (wordCount(message) < 4) return "";
+  const heard = likelyPeople(message, { reply: result.reply });
+  if (heard.length === 0) return "";
+  return (
+    `- heroes: you claimed no people, but the parent's message and your own reply name ${heard.join(", ")}. ` +
+    `If they are in the story, claim "heroes" with the complete list (children first, then family; friends only mentioned in passing are reported under people, not here), ` +
+    `quoting their words. If they are not, return nothing.`
+  );
+}
+
+/**
  * Keep only what the live flow can act on.
  *
  * Skips are filtered twice over: the id has to name a real component, and that
@@ -394,6 +444,8 @@ export function sanitizeGuideTurn(
 
   const proposed = (raw.claims ?? []) as GuideClaim[];
   const refused: RefusedGuideClaim[] = [];
+  // Who the message names does not depend on what kind of turn it was: a question can name a friend too.
+  const mentioned = sanitizeMentioned(raw.people, options.message);
 
   /**
    * A question or an aside can still carry a fact. "How long does printing
@@ -430,6 +482,7 @@ export function sanitizeGuideTurn(
       skip,
       reply: raw.reply.trim(),
       confidence: raw.confidence,
+      mentioned,
       ...agent,
     };
   }
@@ -492,6 +545,7 @@ export function sanitizeGuideTurn(
         skip,
         reply: raw.reply.trim(),
         confidence: raw.confidence,
+        mentioned,
         ...agent,
       };
     }
@@ -596,6 +650,7 @@ export function sanitizeGuideTurn(
     skip,
     reply: raw.reply.trim(),
     confidence: raw.confidence,
+    mentioned,
     ...turnAgent,
   };
 }
@@ -646,27 +701,47 @@ export async function interpretGuideTurn(
     skills: input.skills,
   };
 
-  let raw: z.infer<typeof turnSchema>;
+  const ask = (reminder?: string) =>
+    provider.generateStructured(input.creds, {
+      model: input.model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: reminder ? `${user}\n\n${reminder}` : user },
+      ],
+      schema: turnSchema,
+      temperature: input.temperature ?? 0,
+      signal: input.signal,
+    });
+
+  let raw: z.infer<typeof turnSchema> | undefined;
+  let failure: GuideFailure | undefined;
   try {
-    raw = await withRetry(
-      () =>
-        provider.generateStructured(input.creds, {
-          model: input.model,
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: user },
-          ],
-          schema: turnSchema,
-          temperature: input.temperature ?? 0,
-          signal: input.signal,
-        }),
-      { signal: input.signal, retries: 1 },
-    );
-  } catch {
-    // Deliberately not rethrown: a failed interpretation is a turn the reader can
-    // simply repeat, whereas an error surfaced here would look like the book
-    // breaking. The route still records the turn, so the failure is visible to us.
-    return emptyTurn("Sorry — I didn't catch that. Could you say it another way?");
+    // Transient provider trouble (rate limit, 5xx) is retried by `withRetry`.
+    raw = await withRetry(() => ask(), { signal: input.signal, retries: 1 });
+  } catch (error) {
+    failure = classifyGuideFailure(error, input.signal);
+  }
+  // A model that answered in an unusable shape gets one more try that says so. Nothing else is
+  // asked twice: a refused setting fails the same way again, and a deadline that passed has no time left.
+  if (!raw && failure && worthAskingAgain(failure) && !input.signal?.aborted) {
+    try {
+      raw = await ask(answerAgainReminder(failure));
+      failure = undefined;
+    } catch (error) {
+      failure = classifyGuideFailure(error, input.signal);
+    }
+  }
+  if (!raw) {
+    // Deliberately not rethrown: a failed interpretation is a turn the reader can simply repeat,
+    // whereas an error surfaced here would look like the book breaking. But never silent either:
+    // the cause is logged here and recorded with the turn, and the reader's words are still kept
+    // by the caller, which owns what is saved.
+    const why = failure ?? { kind: "unknown" as const, detail: "no answer" };
+    if (why.kind !== "stopped") console.warn(`[guide] could not read a turn (${why.kind}): ${why.detail}`);
+    return {
+      ...emptyTurn("Sorry — I couldn't read that just now. Could you say it again?"),
+      failure: why,
+    };
   }
 
   let result = sanitizeGuideTurn(raw, options);
@@ -687,7 +762,9 @@ export async function interpretGuideTurn(
    */
   const budget = input.repairAttempts ?? 1;
   for (let attempt = 0; attempt < budget; attempt += 1) {
-    const problems = describeClaimProblems(result.refused);
+    const problems = [describeClaimProblems(result.refused), describeMissingPeople(result, options)]
+      .filter(Boolean)
+      .join("\n");
     if (!problems) break;
 
     let repaired: z.infer<typeof repairSchema>;

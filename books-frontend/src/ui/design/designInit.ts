@@ -39,7 +39,7 @@ import {
 } from "../../core/config/typography";
 import { defaultFontForAge, getFont } from "../typography/fonts";
 import { getPreset } from "./presets";
-import { fitBoxHeightPct } from "./textFit";
+import { fitBoxHeightPct, fitFontSizePctToBoxHeight } from "./textFit";
 
 export interface DesignPage {
   id: string;
@@ -505,7 +505,7 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
           rect: slot.pageRect,
           text,
           family: design.defaultFontFamily,
-          sizePct: design.defaultFontSizePct,
+          sizePct: bodySizePct(design),
           presetId: slot.presetId ?? "plain",
           z: i + 1,
           slotId: slot.id,
@@ -590,7 +590,7 @@ export function relayoutPageDesign(
       rect: slot.pageRect,
       text,
       family: design.defaultFontFamily,
-      sizePct: design.defaultFontSizePct,
+      sizePct: bodySizePct(design),
       presetId: slot.presetId ?? "plain",
       z,
       slotId: slot.id,
@@ -786,6 +786,167 @@ export function migrateGeneratedTextBoxHeights(
     return { ...fitted, rect: { ...fitted.rect, y } };
   });
   return changed ? { ...pageDesign, textBoxes } : pageDesign;
+}
+
+/**
+ * Size a new story box starts at: the book's fitted size once it has one, else
+ * the age-based default. A shared "story-body" style, when the reader has set
+ * one, is applied on top of this by the caller.
+ */
+export function bodySizePct(design: BookDesign): number {
+  return design.bodyFit?.appliedPct ?? design.defaultFontSizePct;
+}
+
+interface BodyTarget {
+  pageId: string;
+  aspect: number;
+  box: TextBox;
+  /** The slot this box was seeded from, while it still hugs its text. */
+  slot?: ResolvedSlot;
+  /**
+   * The rectangle the box's text must fit: the slot's height at the box's
+   * width, or the box itself once the reader fixed its height. Absent for
+   * hidden boxes and free-floating story boxes, which take the shared size
+   * without deciding it.
+   */
+  fitRect?: NormRect;
+}
+
+/** Story text boxes the book-wide fit manages. Locked boxes are left alone. */
+function bodyTargets(design: BookDesign, pages: DesignPage[]): BodyTarget[] {
+  const out: BodyTarget[] = [];
+  for (const page of pages) {
+    if (page.isCover) continue;
+    const pageDesign = design.pages[page.id];
+    if (!pageDesign) continue;
+    const slots = new Map(
+      page.plan.slots.filter((s) => s.role === "text").map((s) => [s.id, s] as const),
+    );
+    for (const box of pageDesign.textBoxes) {
+      if (box.role !== "story-body" || box.locked) continue;
+      const fixedHeight = box.autoHeight === false;
+      const slot = !fixedHeight && box.slotId ? slots.get(box.slotId) : undefined;
+      const fitRect = box.hidden
+        ? undefined
+        : fixedHeight
+          ? box.rect
+          : slot
+            ? { x: box.rect.x, y: slot.pageRect.y, w: box.rect.w, h: slot.pageRect.h }
+            : undefined;
+      out.push({ pageId: page.id, aspect: page.aspect, box, ...(slot ? { slot } : {}), ...(fitRect ? { fitRect } : {}) });
+    }
+  }
+  return out;
+}
+
+function hashText(text: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+/** Only size matters to the fit; where a box sits (so, dragging it) does not. */
+const rectKey = (r: NormRect) => [r.w, r.h].map((n) => n.toFixed(5)).join(",");
+
+/**
+ * Fingerprint of everything the fitted size depends on. It deliberately leaves
+ * out what the fit itself writes (font size, a hugged box's height), so
+ * applying a fit never invalidates it.
+ */
+function bodyFitSignature(targets: BodyTarget[], seedPct: number): string {
+  const parts: string[] = [seedPct.toFixed(5)];
+  for (const t of targets) {
+    const b = t.box;
+    parts.push(
+      [
+        t.pageId,
+        b.id,
+        t.aspect.toFixed(4),
+        t.fitRect ? rectKey(t.fitRect) : "-",
+        b.fontFamily,
+        b.lineHeight,
+        b.padding ?? "",
+        b.presetId,
+        b.align,
+        b.vAlign,
+        b.autoHeight === false ? "fixed" : `hug${b.minHeightPct ?? ""}`,
+        hashText(JSON.stringify(b.paragraphs)),
+      ].join("|"),
+    );
+  }
+  return hashText(parts.join("\n"));
+}
+
+/**
+ * One story-text size for the whole book, with every box sized to its words.
+ *
+ * Story text keeps a single reading size across pages (see
+ * {@link effectiveFontSizePct}), so a page whose words outgrow its text area
+ * would simply be clipped, in the editor and in the export alike. Instead the
+ * wordiest page decides: every story box takes the largest size at which all of
+ * them fit, never above the age-based size the book was seeded with.
+ *
+ * Returns `design` itself when nothing needs doing, which is the case when:
+ * - the reader chose a story size (a shared "story-body" style, or boxes whose
+ *   sizes no longer match), since that choice is theirs;
+ * - nothing the fit depends on changed since it last ran.
+ *
+ * Needs a browser (text is measured on a canvas) and the book font loaded.
+ */
+export function fitBookBodyText(design: BookDesign, pages: DesignPage[]): BookDesign {
+  if (design.sharedTextStyles?.["story-body"]) return design;
+  const targets = bodyTargets(design, pages);
+  if (targets.length === 0) return design;
+
+  const seedPct = design.bodyFit?.seedPct ?? design.defaultFontSizePct;
+  const sig = bodyFitSignature(targets, seedPct);
+  if (design.bodyFit?.sig === sig) return design;
+
+  const current = design.bodyFit?.appliedPct ?? design.defaultFontSizePct;
+  if (targets.some((t) => Math.abs(t.box.fontSizePct - current) > 1e-6)) return design;
+
+  let applied = seedPct;
+  for (const t of targets) {
+    if (!t.fitRect) continue;
+    const probe: TextBox = { ...t.box, fontSizePct: seedPct, rect: t.fitRect };
+    applied = Math.min(applied, fitFontSizePctToBoxHeight(probe, t.aspect, seedPct));
+  }
+
+  const byBox = new Map(targets.map((t) => [t.box.id, t] as const));
+  const nextPages: Record<string, PageDesign> = { ...design.pages };
+  for (const pageId of new Set(targets.map((t) => t.pageId))) {
+    const pageDesign = design.pages[pageId]!;
+    nextPages[pageId] = {
+      ...pageDesign,
+      textBoxes: pageDesign.textBoxes.map((box) => {
+        const t = byBox.get(box.id);
+        if (!t || t.pageId !== pageId) return box;
+        const sized: TextBox = { ...box, fontSizePct: applied };
+        // A fixed-height box keeps the height the reader gave it.
+        if (box.autoHeight === false) return sized;
+        if (t.slot) {
+          const container = {
+            x: box.rect.x,
+            y: t.slot.pageRect.y,
+            w: box.rect.w,
+            h: t.slot.pageRect.h,
+          };
+          const hugged = hugTextInRect({ ...sized, rect: container }, container, t.aspect);
+          // A box the reader moved keeps its spot and only follows the text's height.
+          return box.placedByReader
+            ? { ...hugged, rect: { ...box.rect, h: hugged.rect.h } }
+            : hugged;
+        }
+        const h = Math.max(fitBoxHeightPct(sized, t.aspect), box.minHeightPct ?? 0);
+        return { ...sized, rect: { ...box.rect, h, y: Math.max(0, Math.min(1 - h, box.rect.y)) } };
+      }),
+    };
+  }
+
+  return { ...design, pages: nextPages, bodyFit: { seedPct, appliedPct: applied, sig } };
 }
 
 function insideRect(rect: NormRect, area: NormRect): boolean {

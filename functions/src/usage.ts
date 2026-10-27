@@ -27,7 +27,13 @@ import {
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
 import type { ImageTier, TextCallParams } from "../../books-frontend/src/core/config/modelConfig";
-import { applyTextParams } from "../../books-frontend/src/core/providers/textParams";
+import {
+  applyTextParams,
+  clampReasoning,
+  geminiModelFromUrl,
+  isReasoningRejection,
+  noteReasoningRejected,
+} from "../../books-frontend/src/core/providers/textParams";
 import {
   NON_BILLABLE_GENERATION_STEPS,
   splitBillableUsage,
@@ -494,6 +500,7 @@ export async function meteredFetch(url: string, init?: RequestInit): Promise<Res
   // Start the timeout clock only once the request actually goes out (time
   // spent queued in the semaphore must not eat into the request budget).
   const params = provider && !imageGeneration ? paramsStorage.getStore() : undefined;
+  const unparamedBody = typeof init?.body === "string" ? init.body : undefined;
   if (provider && params && typeof init?.body === "string") {
     init = { ...init, body: applyTextParams(provider, url, init.body, params) };
   }
@@ -555,7 +562,28 @@ export async function meteredFetch(url: string, init?: RequestInit): Promise<Res
   const durationMs = Date.now() - startedAt;
   if (!res.ok) {
     const body = await res.clone().text().catch(() => "");
-    failed(`${res.status} ${providerMessage(body)}`.trim(), res.status);
+    const message = providerMessage(body);
+    failed(`${res.status} ${message}`.trim(), res.status);
+    // The model refused the reasoning level the admin chose. Remember the refusal and ask once more
+    // one level up: a setting that fits is a better answer than a failed turn, and the failure above
+    // is still logged so the configuration can be corrected.
+    if (provider === "google" && params?.reasoning && unparamedBody !== undefined && isReasoningRejection(res.status, message)) {
+      const model = geminiModelFromUrl(url);
+      if (noteReasoningRejected(model, clampReasoning(model, params.reasoning))) {
+        const retried = { ...init, body: applyTextParams(provider, url, unparamedBody, params) };
+        if (collector) collector.stats.calls += 1;
+        try {
+          res = await fetch(url, { ...retried, signal });
+        } catch (err) {
+          failed(err instanceof Error ? err.message : String(err));
+          throw err;
+        }
+        if (!res.ok) {
+          const again = await res.clone().text().catch(() => "");
+          failed(`${res.status} ${providerMessage(again)}`.trim(), res.status);
+        }
+      }
+    }
   }
   try {
     if (provider && collector) {

@@ -12,6 +12,7 @@ import { ageBandLabel } from "../config/storyCraftCatalog";
 import { optionGuidance, optionsGuidance, resolveStoryCraft, type StoryCraftConfig } from "../config/storyCraft";
 import { getBookLanguage } from "../config/bookLanguages";
 import { castHasDetails, castPromptLines, heroesLine } from "../story/brief";
+import { sourceTextForPrompt } from "../story/sourceText";
 import { detailPromptLines, type StoryDetailId } from "../guide/storyDetails";
 import {
   resolveAudienceProfile,
@@ -127,6 +128,7 @@ export function buildStoryDraftPrompt(
 
   const key = brief.mode === "co-write" ? "storyDraft/coWrite" : "storyDraft/guided";
   const briefDetails = detailPromptLines(brief, craft, TEMPLATE_DETAILS[key] ?? []);
+  const sourceText = sourceTextForPrompt(brief);
   const { system, user } = renderTextPrompt(resolvePromptsConfig(ctx), key, {
     vars: {
       age: ageBandLabel(config.ageRangeId),
@@ -138,6 +140,7 @@ export function buildStoryDraftPrompt(
       when: brief.when?.trim() ?? "",
       where: brief.where?.trim() ?? "",
       mustInclude: brief.mustInclude?.trim() ?? "",
+      sourceText,
       themeGuidance,
       deviceGuidance,
       settingGuidance,
@@ -163,6 +166,7 @@ export function buildStoryDraftPrompt(
       hasWhen: Boolean(brief.when?.trim()),
       hasWhere: Boolean(brief.where?.trim()),
       hasMustInclude: Boolean(brief.mustInclude?.trim()),
+      hasSourceText: Boolean(sourceText),
       isRepair: Boolean(repairInstruction),
       plotRequired: profile.structure.plotRequired,
     },

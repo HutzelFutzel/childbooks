@@ -49,7 +49,9 @@ import { getCursor } from "../../core/versioning";
 import {
   buildDesignPages,
   defaultDesign,
+  bodySizePct,
   defaultIllustrationFocus,
+  fitBookBodyText,
   LEGACY_DEFAULT_FONTS,
   migrateDesignToCurrentVersion,
   newImageId,
@@ -771,7 +773,8 @@ export function StudioProvider({
       const missing = pages.filter((p) => !design.pages[p.id]);
       const stale = pagesNeedingRelayout(design, pages);
       const unsafe = pagesWithUnsafeText(design, pages);
-      if (missing.length === 0 && stale.length === 0 && unsafe.length === 0) return;
+      const needsBodyFit = fitBookBodyText(design, pages) !== design;
+      if (missing.length === 0 && stale.length === 0 && unsafe.length === 0 && !needsBodyFit) return;
     }
 
     // Recompute from the live design. A snapshot from this render would
@@ -790,7 +793,10 @@ export function StudioProvider({
       const missing = pages.filter((p) => !current.pages[p.id]);
       const stale = pagesNeedingRelayout(current, pages);
       const unsafe = pagesWithUnsafeText(current, pages);
-      if (missing.length === 0 && stale.length === 0 && unsafe.length === 0) return live;
+      if (missing.length === 0 && stale.length === 0 && unsafe.length === 0) {
+        const fitted = fitBookBodyText(current, pages);
+        return fitted === current ? live : { ...live, design: fitted };
+      }
       const nextPages = { ...current.pages };
       for (const p of missing) nextPages[p.id] = seedPageDesign(current, p);
       for (const p of stale) {
@@ -801,7 +807,9 @@ export function StudioProvider({
         const page = nextPages[p.id];
         if (page) nextPages[p.id] = insetPageText(p, page);
       }
-      return { ...live, design: { ...current, version: DESIGN_VERSION, pages: nextPages } };
+      // Fit once the new pages exist, so the shared story size accounts for them.
+      const seeded = { ...current, version: DESIGN_VERSION, pages: nextPages };
+      return { ...live, design: fitBookBodyText(seeded, pages) };
     });
   }, [bookLanguages, design, measureFontFamily, pages, project, typography]);
 
@@ -1352,7 +1360,8 @@ export function StudioProvider({
         z: topZ(design.pages[pageId]) + 1,
         presetId: "card",
         fontFamily: design.defaultFontFamily,
-        fontSizePct: design.defaultFontSizePct,
+        // Story text joins the book's fitted size; other new text uses the default.
+        fontSizePct: role === "story-body" ? bodySizePct(design) : design.defaultFontSizePct,
         color: preset.defaults.text,
         align: "center",
         vAlign: "center",

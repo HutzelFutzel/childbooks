@@ -140,6 +140,21 @@ export async function recordGuideTurn(args: RecordGuideTurnArgs): Promise<string
         confidence: claim.confidence,
       })),
       repairs: args.result.repairs,
+      // Why nothing was read, when nothing was. Absent on every turn the model answered.
+      ...(args.result.failure
+        ? { failure: { kind: args.result.failure.kind, detail: args.result.failure.detail.slice(0, 400) } }
+        : {}),
+      // Who the message named, so a person the guide failed to add can be found from the log.
+      ...((args.result.mentioned ?? []).length > 0
+        ? {
+            mentioned: (args.result.mentioned ?? []).slice(0, 8).map((person) => ({
+              name: person.name,
+              role: person.role,
+              source: person.source,
+              evidence: person.evidence.slice(0, 200),
+            })),
+          }
+        : {}),
       skipped: args.result.skip,
       /** Chat skills the turn asked for, and the ones screening refused with why. */
       commands: (args.result.commands ?? []).slice(0, 12).map((call) => ({
@@ -159,6 +174,27 @@ export async function recordGuideTurn(args: RecordGuideTurnArgs): Promise<string
       model: { provider: args.model.provider, id: args.model.id },
       latencyMs: args.latencyMs,
     });
+
+  // A turn nobody could read is an incident, not a quiet row: a setting the model refuses fails every
+  // turn the same way, and this is the line that makes the first one visible.
+  if (args.result.failure && args.result.failure.kind !== "stopped") {
+    void log.error({
+      source: "backend",
+      domain: "studio",
+      event: "guide.turn.unread",
+      message: `Guide interpreter could not read a turn (${args.result.failure.kind}): ${args.result.failure.detail.slice(0, 200)}`,
+      uid: args.uid,
+      projectId: args.projectId,
+      context: {
+        turnId,
+        componentId: args.componentId,
+        failure: args.result.failure.kind,
+        detail: args.result.failure.detail,
+        model: `${args.model.provider}:${args.model.id}`,
+        latencyMs: args.latencyMs,
+      },
+    });
+  }
 
   if (args.result.refused.length > 0 || (args.result.refusedCommands?.length ?? 0) > 0 || args.result.repairs > 0) {
     void log.warn({

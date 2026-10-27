@@ -85,6 +85,29 @@ import {
 import { currentPortrait } from "../core/guide/portrait";
 import { statedAgeCalls } from "../core/guide/statedAges";
 import { CAST_KIND_SPECS, castKindOf, missingDetails } from "../core/story/castKinds";
+import { isStoryTelling, withSourceText } from "../core/story/sourceText";
+import { isBareGoAhead } from "../core/guide/goAhead";
+import { claimsUnsavedPeople, likelyPeople } from "../core/guide/mentions";
+import {
+  joinedPeople,
+  keepDraftCurrent,
+  missingFromStory,
+  peopleToAdd,
+  roleOfMember,
+  stampDraftCurrent,
+  storyOwedStatus,
+  storyRewritable,
+  wasDraftCurrent,
+  withAnchorsLinked,
+  withoutStoryOwed,
+  withStoryOwed,
+  wordsMentioned,
+  type MentionedPerson,
+} from "../core/guide/people";
+import { addMentionedPeople } from "../core/guide/peopleAdd";
+import { foldName } from "../core/guide/agent/resolve";
+import { reviseStoryForPeople } from "./storyAutoRevision";
+import { placedLooks, unaskedPendingLooks, withPendingLooksAsked } from "../core/guide/pending";
 import {
   briefOf,
   PICTURE_NOTES_MAX,
@@ -93,6 +116,7 @@ import {
   storyBriefSignature,
   withGuidedBriefIfMissing,
   createDefaultStoryBrief,
+  wordCount,
 } from "../core/story/brief";
 import type { GuideEntry, Project } from "../core/types";
 import {
@@ -259,6 +283,8 @@ interface ChatStudioState {
   clearError: () => void;
   setPrintIssue: (issue: ChatStudioState["printIssue"]) => void;
   setAnalysisRunning: (running: boolean) => void;
+  /** Work the story into the book for whoever it still owes a place, when what it needs of them is known. */
+  settleStory: () => Promise<void>;
   setExtractionRunning: (running: boolean) => void;
   setExtractionError: (error: string | null) => void;
   retryExtraction: () => Promise<void>;
@@ -392,8 +418,7 @@ function patchContext() {
 }
 
 /** A bare go-ahead typed while the story card is open. Anything longer goes to the interpreter. */
-const TYPED_START =
-  /^(?:(?:ok(?:ay)?|yes|sure|great|perfect|fine)[,!. ]*)?(?:just |please )?(?:go(?: ahead)?|write it|start|surprise (?:me|us)|let'?s go|do it|los(?: geht'?s)?|schreib(?: sie| es)?(?: los)?|fang an|leg los)[.! ]*(?:please|bitte)?[.! ]*$/i;
+const TYPED_START = { test: (text: string): boolean => isBareGoAhead(text) };
 
 function live(): Project | null {
   return useProjectsStore.getState().current();
@@ -653,6 +678,19 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     if (held) setTimeout(() => reveal(message.id), REVEAL_BUDGET_MS);
   };
 
+  // The reader just told the story in words the guide kept. The next question
+  // says so first (and, for ages, why it asks), once.
+  let heardStory = false;
+  /** The parent's own words were saved with the book this turn (whether or not they were read). */
+  let keptWords = false;
+  // People the reader named that nothing saved: the next line offers them instead of asking "who?".
+  let peopleToConfirm: string[] | null = null;
+  // People the guide already said the story is being rewritten for, so it does not say it twice.
+  let announcedStory = new Set<string>();
+  let settling = false;
+  // Looks given earlier that found their person this turn.
+  let placedNow: { name: string; look: string }[] = [];
+
   // Lines nobody asked for wait while a turn is running, then follow its reply.
   const queued: (() => void)[] = [];
   const enterFloor = (): void => set((state) => ({ floor: state.floor + 1 }));
@@ -660,6 +698,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     set((state) => ({ floor: Math.max(0, state.floor - 1) }));
     if (get().floor > 0) return;
     for (const run of queued.splice(0)) run();
+    void settleStoryOwed().catch(() => undefined);
   };
   const withFloor = async <T>(run: () => Promise<T>): Promise<T> => {
     enterFloor();
@@ -761,7 +800,17 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     } else if (journeyEntry(project) === "guided" && !project.config.storyText.trim()) {
       const missing = missingGuideFacts(project, p);
       const askedBroad = get().said("broadQuestion");
-      if (!askedBroad) {
+      if (peopleToConfirm && missing.includes("names")) {
+        // They did name people. Say what was heard and let them confirm, never a blank "who?".
+        lines.push({ key: "confirmPeople", priority: "question", vars: { names: joinGuideNames(peopleToConfirm) } });
+        set({
+          agentPending: {
+            expects: `a yes or no to "is the book about ${peopleToConfirm.join(", ")}?" (a yes: write them under heroes; otherwise the people they name instead)`,
+            people: peopleToConfirm,
+          },
+        });
+        await patchBook((b) => withFactMarks(b, "askedFacts", [...broadFacts(p), "names"]));
+      } else if (!askedBroad) {
         lines.push({ key: "broadQuestion", priority: "question" });
         await patchBook((b) => withFactMarks(b, "askedFacts", broadFacts(p)));
       } else if (missing.includes("names")) {
@@ -771,8 +820,11 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         const names = ageQuestionNames(project);
         const kind = kindQuestion(project);
         if (names.length > 0) {
+          // The first time, say why: ages draw people right and set the reading age.
+          const explained = get().said("missingAgesWhy") || get().said("missingAgesWhyMany");
+          const many = names.length > 1;
           lines.push({
-            key: names.length > 1 ? "missingAgesMany" : "missingAges",
+            key: explained ? (many ? "missingAgesMany" : "missingAges") : many ? "missingAgesWhyMany" : "missingAgesWhy",
             priority: "question",
             vars: { names },
           });
@@ -797,17 +849,56 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     ) {
       lines.push({ key: "ownWordsOpen", priority: "question" });
     }
+    // A look given before its person was in the book has found them: say who has it now.
+    if (placedNow.length > 0) {
+      lines.push({
+        key: "lookPlaced",
+        priority: "result",
+        vars: { names: joinGuideNames(placedNow.map((item) => item.name)), what: placedNow.map((item) => item.look).join("; ") },
+      });
+    }
+    placedNow = [];
+    // A described look still has no person: ask once, rather than keep it quietly or guess.
+    const heldLooks = unaskedPendingLooks(project);
+    if (
+      heldLooks.length > 0 &&
+      castNames(project).length > 0 &&
+      !lines.some((line) => line.priority === "question" || line.key === "storyStarting")
+    ) {
+      lines.push({ key: "lookPendingAsk", priority: "question", vars: { what: heldLooks.map((item) => item.look).join("; ") } });
+      set({
+        agentPending: {
+          expects: `describePerson with the look "${heldLooks[0]!.look}" for the person they name`,
+        },
+      });
+      await patchBook((b) => withPendingLooksAsked(b));
+    }
+    // The reader told the story and a question follows: a short "noted" comes first, once.
+    // (Not when the story starts right away: that line already says everything is known.)
+    const heardNow = heardStory;
+    if (
+      heardStory &&
+      !get().said("heardStory") &&
+      lines.some((line) => line.priority === "question") &&
+      !lines.some((line) => line.key === "storyStarting")
+    ) {
+      lines.push({ key: "heardStory", priority: "result" });
+    }
+    heardStory = false;
+    peopleToConfirm = null;
     const followUp = lines.some(
       (line) =>
         line.key === "missingNames" ||
         line.key === "missingAges" ||
         line.key === "missingAgesMany" ||
+        line.key === "missingAgesWhy" ||
+        line.key === "missingAgesWhyMany" ||
         line.key === "missingKind",
     );
     const transcript = guideTranscriptWindow(get().session, 8)
       .map((turn) => `${turn.role === "reader" ? "Reader" : "Guide"}: ${turn.text}`)
       .join("\n");
-    const learned = receipt?.parts.map((part) => part.value).join(" · ") ?? "";
+    const learned = [...(receipt?.parts.map((part) => part.value) ?? []), ...(heardNow ? ["their story, kept in their own words"] : [])].join(" · ");
     let messageId: string | undefined;
     if (lines.length > 0 || receipt) messageId = get().say(lines, { marks, refine: followUp, ...(receipt ? { receipt } : {}) });
     if (messageId && followUp) refineNextLine(messageId, project, transcript, learned);
@@ -1003,6 +1094,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       set({ printIssue: issue });
     },
     setAnalysisRunning: (running) => set({ analysisRunning: running }),
+    settleStory: () => settleStoryOwed(),
     setExtractionRunning: (running) => set({ extractionRunning: running }),
     setExtractionError: (error) => set({ extractionError: error }),
     retryExtraction: async () => {
@@ -1711,13 +1803,161 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     dismissAway: () => set({ away: null }),
   };
 
+  /**
+   * Put the people the parent named into the book, once the turn's own facts are saved.
+   *
+   * Who was named comes from the interpreter and from the one pattern that cannot be mistaken; what is done
+   * about it never depends on the wording (`core/guide/people.ts`). The turn keeps one undo snapshot that
+   * covers the people and the story together, so Undo takes them back as one.
+   */
+  async function addNamedPeople(message: string, outcome: Awaited<ReturnType<typeof sendGuideTurn>>, project: Project): Promise<boolean> {
+    if (journeyEntry(project) !== "guided") return false;
+    const found = peopleToAdd(
+      project,
+      [...outcome.mentioned, ...wordsMentioned([message, briefOf(project.config).sourceText ?? ""])],
+      {
+        removing: [...outcome.commands, ...outcome.overflowCommands]
+          .filter((call) => call.id === "removePerson")
+          .map((call) => call.args.person ?? ""),
+      },
+    );
+    if (found.length === 0) return false;
+    const before = live();
+    if (!before) return false;
+    let names: string[] = [];
+    await patchBook((book) => {
+      const result = addMentionedPeople(book, found, { now: Date.now(), guest: false, styles: [], languages: [] }, message);
+      names = result.names;
+      if (names.length === 0) return book;
+      // A story that already speaks of them is still the story for the brief that now holds them.
+      return missingFromStory(result.project, names).length === 0 ? keepDraftCurrent(book, result.project) : result.project;
+    });
+    if (names.length === 0) return false;
+    const after = live();
+    if (after) attachRestore(snapshot(before, after));
+    // Said at once, not with the turn's other lines: whichever way the turn goes on, the parent hears it.
+    // What the story will do is decided by the same rule that later does it (`storyOwedStatus`).
+    const owed = after ? withStoryOwed(after, joinedPeople(before, after), wasDraftCurrent(before)) : null;
+    const status = owed ? storyOwedStatus(owed) : { state: "none" as const };
+    if (status.state === "ready") announcedStory = new Set(status.members.map((member) => member.id));
+    get().say([
+      {
+        key: status.state === "ready" ? "peopleAddedStory" : status.state === "waiting" ? "peopleAddedAge" : "peopleAdded",
+        priority: "result",
+        vars: { names: joinGuideNames(names) },
+      },
+    ]);
+    return true;
+  }
+
+  /**
+   * Whoever joined the book this turn, by any road (a fact, a skill, or the parent's own words), and the
+   * written story does not speak of them: write it down as owed. Settled by `settleStoryOwed` once the
+   * turn is over and what the story needs of them is known. The one place that decides it, so no way of
+   * adding a person leaves the story behind.
+   */
+  async function noteStoryOwed(before: Project): Promise<void> {
+    const first = live();
+    if (!first || first.id !== before.id) return;
+    const joined = joinedPeople(before, first);
+    if (joined.length === 0) return;
+    // Whoever the story reading already knows is that person from now on, not only after the next reading.
+    await patchBook((book) => withAnchorsLinked(book, joined));
+    const after = live();
+    if (!after || !storyRewritable(after)) return;
+    const lacking = missingFromStory(
+      after,
+      joined.map((member) => member.name.trim()),
+    );
+    if (lacking.length === 0) {
+      // The story already speaks of them: it is still the story for the brief that now holds them.
+      await patchBook((book) => keepDraftCurrent(before, book));
+      return;
+    }
+    const current = wasDraftCurrent(before);
+    await patchBook((book) =>
+      withStoryOwed(
+        book,
+        joined.filter((member) => lacking.includes(member.name.trim())),
+        current,
+      ),
+    );
+  }
+
+  /**
+   * Rewrite the story for the people it owes a place, as soon as it knows what it needs of them. Run when
+   * a turn is over, whatever that turn was: the answer to an age question comes by the chat, the card or a
+   * tap, and all of them end here. Runs on its own: the rewrite takes a while and the parent can go on.
+   */
+  async function settleStoryOwed(): Promise<void> {
+    if (settling) return;
+    settling = true;
+    try {
+      const project = live();
+      if (!project) return;
+      const status = storyOwedStatus(project);
+      if (status.state === "none" || status.state === "busy" || status.state === "waiting") return;
+      if (status.state === "settled") {
+        await patchBook((book) => {
+          const cleared = withoutStoryOwed(book);
+          return status.covered && status.current ? stampDraftCurrent(cleared) : cleared;
+        });
+        return;
+      }
+      // Cleared first: a rewrite that fails is told to the parent, never retried behind their back.
+      await patchBook(withoutStoryOwed);
+      const fresh = new Set(announcedStory);
+      announcedStory = new Set();
+      if (status.members.some((member) => !fresh.has(member.id))) {
+        get().say([{ key: "storyAddingPeople", priority: "result", vars: { names: joinGuideNames(status.names) } }]);
+      }
+      await rewriteStoryFor(project.id, status.current, status.members.map(roleOfMember), status.names);
+    } finally {
+      settling = false;
+    }
+  }
+
+  /** Work new people into the written story in the background, and say how it went. */
+  async function rewriteStoryFor(projectId: string, wasCurrent: boolean, added: MentionedPerson[], names: string[]): Promise<void> {
+    const result = await reviseStoryForPeople(projectId, wasCurrent, added, names).catch(
+      () => ({ status: "failed", reason: "the story could not be revised" }) as const,
+    );
+    const who = joinGuideNames(names);
+    const line: GuideLineCandidate | null =
+      result.status === "applied"
+        ? result.stillMissing.length > 0
+          ? { key: "storyPeopleMissing", priority: "result", vars: { names: joinGuideNames(result.stillMissing) } }
+          : { key: "storyHasPeople", priority: "result", vars: { names: who } }
+        : result.status === "failed"
+          ? { key: "storyPeopleFailed", priority: "result", vars: { names: who } }
+          : null;
+    if (line) whenFloorFree(() => get().say([line]));
+  }
+
   async function interpretMessage(
     message: string,
     history: ReturnType<typeof guideTranscriptWindow>,
     project: Project,
     options: { forceBrief?: boolean; cast?: TargetPerson[]; mark?: StoryMark | null } = {},
   ): Promise<void> {
+    try {
+      await interpretMessageInner(message, history, project, options);
+    } finally {
+      // Whatever road the turn took, a person who joined the book is owed a place in the story.
+      await noteStoryOwed(project).catch(() => undefined);
+    }
+  }
+
+  async function interpretMessageInner(
+    message: string,
+    history: ReturnType<typeof guideTranscriptWindow>,
+    project: Project,
+    options: { forceBrief?: boolean; cast?: TargetPerson[]; mark?: StoryMark | null } = {},
+  ): Promise<void> {
     const cast = options.cast ?? namedCast(briefOf(project.config)).map((m) => ({ id: m.id, name: m.name.trim() }));
+    heardStory = false;
+    keptWords = false;
+    peopleToConfirm = null;
     const firstTurn = !journeyEntry(project);
     let inferredEntry: GuideEntry | null = null;
     const pendingBefore = get().agentPending;
@@ -1730,6 +1970,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       describeSelectedPerson(get().chip),
     );
     set({ agentPending: null });
+    placedNow = placedLooks(project, live() ?? project);
     const agent = agentConfig();
     if (agent.enabled) {
       const locale = nextChatLocale({
@@ -1768,6 +2009,31 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           { entry, chatLocale: authoringOf(book).chatLocale ?? book.config.contentLocale },
         );
       });
+      after = live() ?? after;
+    }
+    // What the reader told about the story is kept in their own words too, before
+    // the first draft: a fact the interpreter filed nowhere still reaches the writer.
+    if (
+      journeyEntry(after) === "guided" &&
+      !after.config.storyText.trim() &&
+      !authoringOf(after).lockedAt &&
+      withSourceText(briefOf(after.config), message) !== briefOf(after.config)
+    ) {
+      await patchBook((book) => {
+        if (!book.config.storyBrief) return book;
+        const kept: Project = {
+          ...book,
+          config: { ...book.config, storyBrief: withSourceText(book.config.storyBrief, message) },
+        };
+        // A draft already being written has not heard these words, and they are in no signature:
+        // marking the run as written from other facts has the existing check start it again.
+        const run = authoringOf(kept).storyRun;
+        return run?.status === "running" && !run.translating
+          ? withAuthoring(kept, { storyRun: { ...run, signature: `${run.signature}+words` } })
+          : kept;
+      });
+      heardStory = isStoryTelling(message) && !outcome.failure;
+      keptWords = true;
       after = live() ?? after;
     }
     // "shiloh, 2" is one child aged 2. The interpreter often reads the number as
@@ -1809,6 +2075,36 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         after = live() ?? after;
       }
     }
+    // Nobody is in the book, yet the reader clearly named people. Never answer that with a blank
+    // "who?": a plain yes to what was offered saves them, and otherwise the guide offers what it heard.
+    if (
+      journeyEntry(after) === "guided" &&
+      !after.config.storyText.trim() &&
+      !authoringOf(after).lockedAt &&
+      namedCast(briefOf(after.config)).length === 0 &&
+      !outcome.applied.includes("heroes")
+    ) {
+      const offered = pendingBefore?.people;
+      if (offered?.length && AGREES.test(message)) {
+        let wrote = false;
+        await patchBook((book) => {
+          const result = applyGuidePatch(book, { heroes: offered.map((name) => ({ name })) }, patchContext());
+          wrote = result.applied.includes("heroes");
+          return wrote ? result.project : book;
+        });
+        if (wrote) {
+          outcome.applied = [...outcome.applied, "heroes"];
+          outcome.rejected = outcome.rejected.filter((item) => item.key !== "heroes");
+          after = live() ?? after;
+        }
+      } else if (wordCount(message) >= 4 && outcome.intent !== "question") {
+        const heard = likelyPeople(message, { reply: outcome.reply });
+        if (heard.length > 0) peopleToConfirm = heard;
+      }
+    }
+    // Everyone the parent named belongs in the book, in whatever words they said it.
+    const addedPeople = await addNamedPeople(message, outcome, live() ?? after);
+    if (addedPeople) after = live() ?? after;
     const answered = factsOf([...outcome.applied, ...outcome.unchanged]);
     const openOptional = openAskedFacts(after);
     const skipped = outcome.skip.map((id) => SKIP_FACT[id]).filter((f): f is GuideFactId => Boolean(f));
@@ -1847,14 +2143,26 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       });
     }
 
+    // The reader told the story and no idea was filed from it: not a refusal, but
+    // the turn log should show it, because the draft then leans on the kept words alone.
+    const unfiledIdea =
+      isStoryTelling(message) &&
+      !after.config.storyText.trim() &&
+      !outcome.applied.includes("storyIdea") &&
+      !outcome.unchanged.includes("storyIdea");
+    const unfiledPeople = peopleToConfirm !== null;
     const report = (applied: string[]) => {
       if (!outcome.turnId) return;
       reportGuideTurnOutcomeRemote({
         turnId: outcome.turnId,
         applied,
         unchanged: outcome.unchanged,
-        rejected: outcome.rejected.map((r) => ({ key: r.key, reason: r.reason })),
-        admittedFailure: landedNothing(outcome.intent, applied, outcome.unchanged),
+        rejected: [
+          ...outcome.rejected.map((r) => ({ key: r.key, reason: r.reason })),
+          ...(unfiledIdea ? [{ key: "storyIdea", reason: "told the story; no idea was filed from it" }] : []),
+          ...(unfiledPeople ? [{ key: "heroes", reason: "named people; none were filed, so the guide asked to confirm" }] : []),
+        ],
+        admittedFailure: landedNothing(outcome.intent, addedPeople ? [...applied, "people"] : applied, outcome.unchanged),
       });
     };
 
@@ -1916,6 +2224,8 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     }
     if (
       outcome.applied.length === 0 &&
+      // A message nobody could read is not a request to redraw anything.
+      !outcome.failure &&
       (selected
         ? outcome.intent === "revise" ||
           // A selected page and a sentence about how the people on it relate is a picture change, whatever the interpreter called it.
@@ -1973,9 +2283,20 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       outcome.intent === "other" ||
       (outcome.applied.length === 0 && outcome.unchanged.length === 0);
     const reply = outcome.reply.trim();
-    const answer: GuideLineCandidate | null = outcome.confirm
+    // The model's own sentence is never shown as if it were status: one that says it has people the
+    // book does not hold would sit next to a question asking who is in the story.
+    const savedNames = namedCast(briefOf((live() ?? after).config)).map((member) => member.name.trim());
+    const claimsUnsaved = Boolean(reply) && claimsUnsavedPeople(reply, message, savedNames);
+    // A message the interpreter could not read is said so, once, in words that claim nothing was understood.
+    // What the parent wrote is still safe (the kept words, and the people the safety net heard), and the
+    // lines that follow ask about the rest.
+    const answer: GuideLineCandidate | null = addedPeople
+      ? null
+      : outcome.failure
+      ? { key: keptWords ? "turnUnreadKept" : "turnUnread", priority: "answer" }
+      : outcome.confirm
       ? { key: "reply", priority: "blocking", text: outcome.confirm }
-      : needsAnswer && reply && !assumesAnotherChild(reply)
+      : needsAnswer && reply && !assumesAnotherChild(reply) && !claimsUnsaved
         ? { key: "reply", priority: "answer", text: reply }
         : null;
     if (ideaLost) {
@@ -1994,8 +2315,11 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         turnId: outcome.turnId,
         applied: outcome.applied,
         unchanged: outcome.unchanged,
-        rejected: outcome.rejected.map((r) => ({ key: r.key, reason: r.reason })),
-        admittedFailure: landedNothing(outcome.intent, outcome.applied, outcome.unchanged),
+        rejected: [
+          ...outcome.rejected.map((r) => ({ key: r.key, reason: r.reason })),
+          ...(unfiledPeople ? [{ key: "heroes", reason: "named people; none were filed, so the guide asked to confirm" }] : []),
+        ],
+        admittedFailure: landedNothing(outcome.intent, addedPeople ? [...outcome.applied, "people"] : outcome.applied, outcome.unchanged),
       });
     }
   }

@@ -26,6 +26,8 @@ import {
 } from "../../portrait";
 import { hasEarlier, pictureSubject } from "../../history";
 import { asksForNewPicture, visualChange } from "../../redrawMode";
+import { attachLook, joinLook } from "../../lookNotes";
+import { withPendingLook, withoutPendingLook } from "../../pending";
 import { authoringOf, withAuthoring } from "../../projectState";
 import type { GuideTarget } from "../../target";
 import { peopleWithoutPortrait } from "../requirements";
@@ -81,18 +83,9 @@ function withExtractionNames(project: Project): Project {
   });
 }
 
-function joinNote(previous: string | undefined, next: string, max = 400): string {
-  return [previous?.trim(), next.trim()].filter(Boolean).join("; ").slice(0, max);
-}
-
 /** A look change before any portrait exists: it shapes the first drawing. */
 function withLookNote(project: Project, member: StoryCastMember, look: string): Project {
-  const source = lookSourceOf(member);
-  const changes: Partial<StoryCastMember> =
-    source === "photo" || source === "drawing"
-      ? { portraitNote: joinNote(member.portraitNote, look) }
-      : { appearance: joinNote(member.appearance, look, 600), lookSource: "describe" as const, appearanceFromStory: false };
-  return withPersonAsk(withMemberChanges(project, member.id, changes), member.id, "look");
+  return attachLook(project, member, look);
 }
 
 function lookChange(project: Project, member: StoryCastMember, change: string, restart = false): CommandResult {
@@ -113,7 +106,7 @@ function lookChange(project: Project, member: StoryCastMember, change: string, r
   }
   const next = withPersonAsk(
     noted
-      ? withMemberChanges(project, member.id, { portraitNote: joinNote(member.portraitNote, noted) })
+      ? withMemberChanges(project, member.id, { portraitNote: joinLook(member.portraitNote, noted, 400, [member.name, ...(member.aliases ?? [])]) })
       : project,
     member.id,
     "look",
@@ -554,6 +547,17 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
       return found.kind === "one" ? outdates(project, found.value) : { level: "none", effects: [] };
     },
     run: (project, args) => {
+      const wanted = arg(args, "person");
+      const heldLook = wanted ? visualChange(arg(args, "look").slice(0, 400)) : "";
+      // Said about somebody who is not in the book: held for them, never refused and never given to
+      // someone else. It is attached as soon as exactly one person answers to the words used.
+      if (heldLook && resolvePerson(project, wanted).kind === "none") {
+        return {
+          kind: "write",
+          project: withPendingLook(project, wanted, heldLook),
+          beat: beat("lookPending", { what: heldLook }),
+        };
+      }
       const picked = personFrom(project, args);
       if ("result" in picked) return picked.result;
       const look = arg(args, "look").slice(0, 400);
@@ -565,7 +569,8 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
           beat: beat("lookChoose", { names: name }, { mustSay: [name] }),
         };
       }
-      return lookChange(project, picked.member, look);
+      const changed = lookChange(project, picked.member, look);
+      return changed.kind === "write" ? { ...changed, project: withoutPendingLook(changed.project, look) } : changed;
     },
   },
   {

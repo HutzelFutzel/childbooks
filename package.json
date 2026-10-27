@@ -37,6 +37,7 @@
     "check:book-fonts": "node scripts/check-book-fonts.mjs",
     "check:generation": "node scripts/check-generation-tuning.mjs",
     "check:custom-styles": "node scripts/check-custom-styles.mjs",
+    "check:body-fit": "node scripts/check-body-fit.mjs",
     "check:blob-variants": "node scripts/check-blob-variants.mjs",
     "check:fulfillment": "node scripts/check-fulfillment.mjs",
     "check:story-analysis": "node scripts/check-story-analysis.mjs",
