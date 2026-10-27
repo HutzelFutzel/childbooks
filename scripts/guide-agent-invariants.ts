@@ -46,7 +46,7 @@ import {
 import { guideMessage, type GuideMessage } from "../books-frontend/src/core/guide/session";
 import { storyTextHash } from "../books-frontend/src/core/story/revision";
 import { GUIDE_COMMAND_IDS } from "../books-frontend/src/core/guide/agent/ids";
-import { nextChatLocale } from "../books-frontend/src/core/guide/agent/language";
+import { defaultChatLocale, nextChatLocale } from "../books-frontend/src/core/guide/agent/language";
 import { confirmStillValid, planTurn } from "../books-frontend/src/core/guide/agent/plan";
 import { presentBeats } from "../books-frontend/src/core/guide/agent/present";
 import { commandCoverageProblems, commandPromptLines, GUIDE_COMMANDS } from "../books-frontend/src/core/guide/agent/registry";
@@ -672,6 +672,27 @@ for (const path of guideAgentSettingPaths()) {
     "A clear German message did not switch the chat to German.",
   );
   check(nextChatLocale({ ...base, detected: "de", confidence: 0.97, message: "ok" }) === null, "'ok' switched the chat language.");
+  check(
+    nextChatLocale({
+      ...base,
+      detected: "de",
+      confidence: 0.95,
+      message: "the twins Aren and Amira, and papa and anne. moving from california to germany, saying goodbye to their friends luca and nile",
+    }) === null,
+    "An English message about Germany switched the chat to German.",
+  );
+  // A reply that names no language is read from the words (the first turn of a real session).
+  const first = "the twins Aren and Amira, and papa and anne. moving from california to germany where the twins never have been before. last day in the redwood room (daycare). saying goodbye to their neighbor friends luca and nile";
+  check(nextChatLocale({ ...base, current: "de-DE", detected: null, confidence: 0, message: first }) === "en-US", "A German chat did not follow a plainly English message that came with no language.");
+  check(nextChatLocale({ ...base, detected: null, confidence: 0, message: first }) === null, "An English chat moved on an English message.");
+  check(
+    nextChatLocale({ ...base, detected: null, confidence: 0, message: "Wir ziehen von Kalifornien nach Deutschland und die Zwillinge waren noch nie dort" })?.startsWith("de") === true,
+    "An English chat did not follow a plainly German message that came with no language.",
+  );
+  check(nextChatLocale({ ...base, detected: null, confidence: 0, message: "Amanda Paris Roma Milano Luca Nile" }) === null, "Names alone moved the chat.");
+  check(defaultChatLocale({ ui: "en", bookLocale: "de-DE" }) === "en-US", "The chat started in the book's country language, not the app's.");
+  check(defaultChatLocale({ ui: "en", bookLocale: "en-GB" }) === "en-GB", "The chat did not keep the book's own English.");
+  check(defaultChatLocale({ ui: "de", bookLocale: "en-US" }).startsWith("de"), "A German app did not start a German chat.");
   check(nextChatLocale({ ...base, detected: "it", confidence: 0.6, message: "Amanda Paris Roma Milano" }) === null, "A low-confidence guess switched the language.");
   check(
     nextChatLocale({ ...base, rule: { ...rule, followMessage: false }, detected: "de", confidence: 0.99, message: "Mach sie bitte älter, danke dir" }) === null,

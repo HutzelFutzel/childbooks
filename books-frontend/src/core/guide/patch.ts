@@ -657,12 +657,12 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       },
       { said: "she is two and a half", value: [{ name: "Maya", age: 2 }], note: "Not nearly 3: no `turning`." },
       {
-        said: "papa and anne are adults",
+        said: "Papa is around 55 and Anne is in her mid-thirties",
         value: [
-          { name: "Papa", age: 35 },
+          { name: "Papa", age: 55 },
           { name: "Anne", age: 35 },
         ],
-        note: 'A grown-up the parent calls "adult" or "grown-up" without a number is 35. The evidence quotes their words; an age they did state is used as stated.',
+        note: 'A rough age is an age: the middle of what was said. A grown-up only called "adult" has no age yet, so nothing is claimed and the guide asks; only when the guide already asked and the parent still gives none is it 35, with low confidence.',
       },
     ],
   ),

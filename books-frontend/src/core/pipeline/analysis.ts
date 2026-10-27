@@ -9,7 +9,7 @@ import { z } from "zod";
 import { ageBandLabel } from "../config/storyCraftCatalog";
 import { getBookLanguage } from "../config/bookLanguages";
 import { stripNumericAgeFromDescription } from "../book/anchorDescription";
-import { defaultCharacterAge } from "../book/characterAge";
+import { defaultCharacterAge, effectiveCharacterAgeYears } from "../book/characterAge";
 import { refineAnalyzedAnchors } from "../book/anchorMerge";
 import { acceptedClaims, existingSubjectLines } from "../book/anchorIdentity";
 import { anchorNameKeys, mergeAliasNames, normalizeAnchorName } from "../book/anchorRefs";
@@ -250,9 +250,8 @@ export async function analyzeStory(
       .filter((member) => member.age !== undefined || member.ageMonths !== undefined)
       .map((member) => [
         normalizeAnchorName(member.name),
-        member.age !== undefined
-          ? member.age
-          : Math.floor((member.ageMonths ?? 0) / 12),
+        // The same reading as every other path (30 months is 2.5), so a toddler's size agrees everywhere.
+        effectiveCharacterAgeYears(member) ?? 0,
       ]),
   );
   const otherPeople = new Set(
@@ -445,11 +444,19 @@ function applyArtworkLooksToAnchors(
  * the screenplay never puts them on a page. The model is asked to include them;
  * this is the belt-and-suspenders copy if it still omits someone.
  */
-export function injectNamedCastAnchors(anchors: Anchor[], config: BookConfig, previous?: Anchor[]): Anchor[] {
+export function injectNamedCastAnchors(
+  anchors: Anchor[],
+  config: BookConfig,
+  previous?: Anchor[],
+  /** Everyone in the cast, when `config` holds only some of them. */
+  wholeCast?: readonly { name: string }[],
+): Anchor[] {
   const people = namedCast(briefOf(config));
   if (people.length === 0) return anchors;
+  const castKeys = new Set([...(wholeCast ?? people)].map((member) => normalizeAnchorName(member.name)).filter(Boolean));
   const characters = anchors.filter((anchor) => anchor.type === "character");
-  const existing = new Set(characters.flatMap((anchor) => anchorNameKeys(anchor)));
+  // A person listed as another's alias ("Luca", also known as "Nile") is not a character of their own.
+  const existing = new Set(characters.flatMap((anchor) => characterKeysFor(anchor, castKeys)));
   const linked = new Set(characters.map((anchor) => anchor.castId).filter(Boolean));
   const keysOf = castNameKeys(people, previous);
   const extra: Anchor[] = [];
@@ -477,10 +484,35 @@ export function injectNamedCastAnchors(anchors: Anchor[], config: BookConfig, pr
       include: true,
       ageYears,
       ageSource: typeof member.age === "number" ? "author" : "suggested",
+      // A pet or a bird named only in the cast must not be sized like a child.
+      ...(member.bodyPlan && member.bodyPlan !== "bipedal" ? { bodyPlan: member.bodyPlan } : {}),
     });
     existing.add(key);
   }
-  return extra.length > 0 ? [...anchors, ...extra] : anchors;
+  if (extra.length === 0) return anchors;
+  // The new character owns their name: an earlier row that carried it as an alias lets it go.
+  const added = new Set(extra.map((anchor) => normalizeAnchorName(anchor.name)));
+  const released = anchors.map((anchor) => {
+    if (anchor.type !== "character" || !anchor.aliasNames?.some((alias) => added.has(normalizeAnchorName(alias)))) return anchor;
+    const own = normalizeAnchorName(anchor.name);
+    const aliasNames = anchor.aliasNames.filter((alias) => {
+      const key = normalizeAnchorName(alias);
+      return key === own || !added.has(key);
+    });
+    return { ...anchor, aliasNames: aliasNames.length > 0 ? aliasNames : undefined };
+  });
+  return [...released, ...extra];
+}
+
+/**
+ * The names a character answers to, for deciding whether a cast member already has one.
+ * A character that is already a cast member under their own name does not also stand for another
+ * cast member through an alias; a story word for someone ("Mama" for Anne) still does.
+ */
+export function characterKeysFor(anchor: Pick<Anchor, "name" | "aliasNames">, castKeys: ReadonlySet<string>): string[] {
+  const own = normalizeAnchorName(anchor.name);
+  if (!castKeys.has(own)) return anchorNameKeys(anchor);
+  return anchorNameKeys(anchor).filter((key) => key === own || !castKeys.has(key));
 }
 
 export interface GenerateAnchorDescriptionInput {

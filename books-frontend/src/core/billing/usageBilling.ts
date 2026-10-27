@@ -5,6 +5,9 @@ export const NON_BILLABLE_GENERATION_STEPS = new Set([
   "dedupe",
   "embedded",
   "layoutRetry",
+  // A page asked for as a transparent cutout that came back with a painted
+  // backdrop is drawn once more; the second drawing is ours.
+  "cutoutRetry",
   // A cover whose painted words came back wrong is drawn again, and the vision
   // read that found the fault is part of the same check. The reader is quoted
   // one cover; the redraws and the reading are ours.

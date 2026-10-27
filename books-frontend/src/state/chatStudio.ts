@@ -158,7 +158,8 @@ import {
   type AgentWell,
 } from "./guideAgent";
 import { floorIsOpen, wellForKeys } from "../core/guide/conversation";
-import { nextChatLocale } from "../core/guide/agent/language";
+import { defaultChatLocale, nextChatLocale } from "../core/guide/agent/language";
+import { isPublished } from "../core/i18n/publish";
 import { validateComposed } from "../core/guide/agent/compose";
 import type { AskOption, Beat, CommandArgs, CommandCall } from "../core/guide/agent/types";
 import { beat } from "../core/guide/agent/commands/shared";
@@ -445,9 +446,31 @@ function patchBook(mutator: (project: Project) => Project): Promise<void> {
   return useProjectsStore.getState().patchCurrent(mutator);
 }
 
-/** The chat language: stored, else the book language the book was created with. */
+/** The language the app is shown in: the browser's, limited to published locales. */
+function uiLanguage(): string {
+  const language = typeof navigator === "undefined" ? "en" : (navigator.language?.slice(0, 2).toLowerCase() ?? "en");
+  return isPublished(language) ? language : "en";
+}
+
+/**
+ * The chat language: stored, else the language the app is shown in. Not the book language, which
+ * starts from the country and says nothing of the language the reader writes in.
+ */
 export function chatLocaleOf(project: Project): string {
-  return authoringOf(project).chatLocale ?? project.config.contentLocale ?? "en-US";
+  return authoringOf(project).chatLocale ?? defaultChatLocale({ ui: uiLanguage(), bookLocale: project.config.contentLocale });
+}
+
+/**
+ * Store the chat language the book has been using, so it stops depending on the browser. Until the
+ * story begins the book's language follows the chat, as it does when the chat changes language.
+ */
+function withPinnedChatLocale(book: Project, extra: Parameters<typeof withAuthoring>[1] = {}): Project {
+  const state = authoringOf(book);
+  const locale = chatLocaleOf(book);
+  const follow =
+    !state.chatLocale && !storyBegun(book) && !state.languageSaid && !state.lockedAt && getBookLanguage(locale).id === locale;
+  const config = follow ? { ...book.config, contentLocale: locale as typeof book.config.contentLocale } : book.config;
+  return withAuthoring({ ...book, config }, { ...extra, chatLocale: locale });
 }
 
 function languageName(id: string | undefined): string {
@@ -1110,7 +1133,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       if (!story) return;
       await patchBook((book) => {
         const brief = book.config.storyBrief ?? createDefaultStoryBrief("own");
-        return withAuthoring(
+        return withPinnedChatLocale(
           {
             ...book,
             config: {
@@ -1122,7 +1145,6 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           },
           {
             entry: "own",
-            chatLocale: authoringOf(book).chatLocale ?? book.config.contentLocale,
             // Pasted as the finished story: nothing left to wait for.
             manuscriptReadyAt: authoringOf(book).manuscriptReadyAt ?? Date.now(),
           },
@@ -1259,12 +1281,11 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           entry === "guided" && withBrief.config.storyBrief?.mode === "own"
             ? { ...withBrief, config: { ...withBrief.config, storyBrief: { ...withBrief.config.storyBrief, mode: "guided" as const } } }
             : withBrief;
-        return withAuthoring({
+        return withPinnedChatLocale({
           ...guided,
           config: { ...guided.config, styleReady: guided.config.styleReady ?? false },
         }, {
           entry,
-          chatLocale: authoringOf(b).chatLocale ?? b.config.contentLocale,
         });
       });
       set({ view: null });
@@ -1341,7 +1362,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           track("typed", { route: "ownIntent" });
           await patchBook((book) => {
             const brief = book.config.storyBrief ?? createDefaultStoryBrief("own");
-            return withAuthoring(
+            return withPinnedChatLocale(
               {
                 ...book,
                 config: {
@@ -1350,7 +1371,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
                   styleReady: book.config.styleReady ?? false,
                 },
               },
-              { entry: "own", chatLocale: authoringOf(book).chatLocale ?? book.config.contentLocale },
+              { entry: "own" },
             );
           });
           get().say([{ key: "ownWordsOpen", priority: "question" }]);
@@ -1997,7 +2018,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       inferredEntry = entry;
       await patchBook((book) => {
         const brief = book.config.storyBrief ?? createDefaultStoryBrief(entry === "own" ? "own" : "guided");
-        return withAuthoring(
+        return withPinnedChatLocale(
           {
             ...book,
             config: {
@@ -2006,7 +2027,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
               styleReady: book.config.styleReady ?? false,
             },
           },
-          { entry, chatLocale: authoringOf(book).chatLocale ?? book.config.contentLocale },
+          { entry },
         );
       });
       after = live() ?? after;

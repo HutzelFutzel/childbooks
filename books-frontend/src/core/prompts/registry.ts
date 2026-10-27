@@ -294,7 +294,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "oneSubject",
-        'ONE IDENTITY PER SUBJECT. An appositive like "Bluey the blue toy elephant" or "Pip the puppy" is one row — never a named character plus a separate object of that kind. Use the proper name as "name". Put the other story phrases in "aliasNames" (for example ["the blue toy elephant", "toy elephant"]). Named toys with actions or speech are characters; their toy-ness belongs in the description, not a second object. A name does not invent a species, clothing, or an object\'s shape. If the story itself defines the name ("Bluey the blue toy elephant"), that definition is the same subject. Role phrases for one person are also one row: "the doctor" and "the surgeon" are one character when the story treats them as the same person, and the extra phrases go in aliasNames. THE ROW IS THAT PERSON: a description describes the subject in "name", never a relative of theirs. In a story told by Arthur, Arthur\'s row describes Arthur, not "Arthur\'s twin sister"; the sister is her own row.',
+        'ONE IDENTITY PER SUBJECT. An appositive like "Bluey the blue toy elephant" or "Pip the puppy" is one row — never a named character plus a separate object of that kind. Use the proper name as "name". Put the other story phrases in "aliasNames" (for example ["the blue toy elephant", "toy elephant"]). Named toys with actions or speech are characters; their toy-ness belongs in the description, not a second object. A name does not invent a species, clothing, or an object\'s shape. If the story itself defines the name ("Bluey the blue toy elephant"), that definition is the same subject. Role phrases for one person are also one row: "the doctor" and "the surgeon" are one character when the story treats them as the same person, and the extra phrases go in aliasNames. THE ROW IS THAT PERSON: a description describes the subject in "name", never a relative of theirs. In a story told by Arthur, Arthur\'s row describes Arthur, not "Arthur\'s twin sister"; the sister is her own row. People with their own names are never merged into one row, even when they share a role or only appear together (two neighbour friends, Luca and Nile, are two rows) and one name is never another\'s alias.',
       ),
       blk(
         "kindOfBeing",
@@ -759,7 +759,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "story",
-        'The parent\'s plot is a fact too. When the message says what should happen, claim it under "storyIdea" in their own words (what happens in "about", an occasion in "moment", a place in "place"; anything else they want in the book in "include" with "add"), as ONE "storyIdea" claim that holds every detail they gave. Never claim "storyIdea" from a go-ahead such as "go", "write the story" or "surprise me". People who are in the story and named, children first and then family such as a parent or grandparent, are "heroes". People only named in passing (a friend at a goodbye, a neighbour) are not "heroes": report them under "people" (see below) and put what they do in the story idea, in the parent\'s words. A grown-up the parent calls "adult" or "grown-up" without giving a number is age 35 in "heroAges", quoting their words.',
+        'The parent\'s plot is a fact too. When the message says what should happen, claim it under "storyIdea" in their own words (what happens in "about", an occasion in "moment", a place in "place"; anything else they want in the book in "include" with "add"), as ONE "storyIdea" claim that holds every detail they gave. Never claim "storyIdea" from a go-ahead such as "go", "write the story" or "surprise me". People who are in the story and named, children first and then family such as a parent or grandparent, are "heroes". People only named in passing (a friend at a goodbye, a neighbour) are not "heroes": report them under "people" (see below) and put what they do in the story idea, in the parent\'s words. A grown-up the parent only calls "adult" or "grown-up" has no age yet: do NOT claim one, because a 35-year-old and a 55-year-old are drawn differently and the guide asks. A rough age is an age: "mid-30s" is 35, "in his fifties" or "around 55" is 55, "late twenties" is 28. Only when the guide already asked this person\'s age and the parent still gives none ("adult", "no idea", "doesn\'t matter") claim age 35 in "heroAges" with a confidence below 0.5, quoting their words.',
       ),
       blk(
         "mentionedPeople",
@@ -788,7 +788,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "language",
-        'Set "language" to the primary language code of the message ("en", "de", "es", …) and "languageConfidence" to how sure you are. Names, numbers, "ok" or a single loanword are not evidence of a language: give those a low confidence.',
+        'Set "language" to the primary language code of the message ("en", "de", "es", …) and "languageConfidence" to how sure you are. Always include both whenever the message has a few ordinary words, however long it is and however many names and places it mentions. Judge by the ordinary words (articles, verbs, small words), never by names or places: "moving from California to Germany" is English. Names, numbers, "ok" or a single loanword alone are not evidence of a language: give those a low confidence.',
       ),
       blk(
         "confidence",
@@ -1015,11 +1015,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "rules",
-        "Keep every name exactly as given — never translate, respell or decline a name. Keep numbers as digits. About 25 words. Contractions. No bullet points, no markdown, no emoji. Never mention buttons, screens, field names or Sparks. People who share an age are one question, and that sentence names every one of them.",
+        "Keep every name exactly as given — never translate, respell or decline a name. Keep numbers as digits. About 25 words. Contractions. No bullet points, no markdown, no emoji. Write it the way a native speaker of the chat language would say it, from the meaning rather than word for word from the English; no calques and no idioms that do not exist there. Never mention buttons, screens, field names or Sparks. People who share an age are one question, and that sentence names every one of them.",
       ),
       blk(
         "why",
-        "When you ask for ages, say in a few words why you ask: ages let you draw everyone to look right and pick the reading level. Do not repeat the reason if the conversation already gave it. When one of the people is a parent or another grown-up, say that \"adult\" is enough for them. When \"Just saved\" says the parent told their story, acknowledge that first in a few words, without retelling it. This line may run to about 35 words.",
+        "When you ask for ages, say in a few words why you ask: ages let you draw everyone to look right and pick the reading level. Do not repeat the reason if the conversation already gave it. When one of the people is a parent or another grown-up, say that a rough age (\"mid-30s\", \"around 55\") is fine for them, because a grown-up's age changes how they are drawn. Say the reason as a plain thought in the chat language, never word for word from English: ages help you draw everyone to look their age and write the story at the right reading level. When \"Just saved\" says the parent told their story, acknowledge that first in a few words, without retelling it. This line may run to about 35 words.",
       ),
     ],
     user: [
@@ -1389,7 +1389,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "heights",
-        "Relative sizes: {{heightsList}} Each character's own reference sheet is drawn to fill its own frame, so the sheets say NOTHING about how big these characters are next to each other — use the sizes stated here instead, and keep them exact wherever two characters share the frame, whoever is nearer the camera.",
+        "Relative sizes: {{heightsList}} Each character's own reference sheet is drawn to fill its own frame, so the sheets say NOTHING about how big these characters are next to each other — use the sizes stated here instead. These are real-world sizes: characters at the same distance from the viewer keep exactly these proportions, and apparent size changes only with distance (someone farther back may look smaller, someone nearer larger), never because of a drawing habit. Sitting, crouching or being carried changes how tall someone stands, not how big their head and body are.",
         "hasHeights",
       ),
       blk("described", "Also feature these subjects: {{describedList}}.", "hasDescribed"),
@@ -1487,6 +1487,13 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk("style", "Art style: {{artStyle}}."),
       blk("closing", "Children's picture-book illustration, cohesive composition, no watermark."),
+      // Restated last, after the scene and the art style: a long scene description pulls the
+      // picture toward a painted backdrop, and the cutout is the one thing the page layout needs.
+      blk(
+        "layoutCutoutRestate",
+        "Most important: this is a cutout. Draw the characters together with the objects and scenery features that matter to this moment (a car, a suitcase, an airplane, a door, a tree, a bench), each drawn complete with clean natural edges, as one isolated group on a fully transparent background. Do not paint a backdrop: no full ground or floor plane, sky, horizon, room walls, street or landscape filling the frame, and no colored or rectangular background. A small patch of ground or a soft contact shadow directly under the figures and objects is fine.",
+        "layoutInsetTransparent",
+      ),
       // Restated last: compositional constraints get diluted in the middle of a
       // long prompt, and this is the one the page's readability depends on.
       blk(

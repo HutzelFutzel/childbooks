@@ -166,11 +166,14 @@ function Plate({
   const status = portraitStatus(project, member.id);
   const url = useBlobUrl(portrait?.blobId);
   const name = member.name.trim();
-  const characterAnchor = (project.anchors ?? []).find(
-    (anchor) =>
-      anchor.type === "character" &&
-      normalizeAnchorName(anchor.name) === normalizeAnchorName(name),
-  );
+  const characterAnchor =
+    (project.anchors ?? []).find((anchor) => anchor.type === "character" && anchor.castId === member.id) ??
+    (project.anchors ?? []).find(
+      (anchor) =>
+        anchor.type === "character" &&
+        !anchor.castId &&
+        normalizeAnchorName(anchor.name) === normalizeAnchorName(name),
+    );
   const { working, preparing } = useUnitWorking(
     member.id,
     characterAnchor?.id,

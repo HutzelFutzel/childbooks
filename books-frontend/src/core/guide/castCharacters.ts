@@ -13,8 +13,8 @@
  *  - it only fills what is missing. Whoever has a character, however named, and whoever the parent left
  *    out of the book, is untouched, so a later reading finds the same characters by name and keeps them.
  */
-import { injectNamedCastAnchors, linkAnchorsToCast } from "../pipeline/analysis";
-import { anchorNameKeys, normalizeAnchorName } from "../book/anchorRefs";
+import { characterKeysFor, injectNamedCastAnchors, linkAnchorsToCast } from "../pipeline/analysis";
+import { normalizeAnchorName } from "../book/anchorRefs";
 import { briefOf, namedCast } from "../story/brief";
 import type { Anchor, Project, StoryCastMember } from "../types";
 import { textMentions } from "./people";
@@ -27,10 +27,12 @@ export interface CastCharacters {
   unnamed: string[];
 }
 
-function hasCharacter(member: StoryCastMember, anchors: readonly Anchor[]): boolean {
+function hasCharacter(member: StoryCastMember, anchors: readonly Anchor[], castKeys: ReadonlySet<string>): boolean {
   const key = normalizeAnchorName(member.name);
   return anchors.some(
-    (anchor) => anchor.type === "character" && (anchor.castId === member.id || (key !== "" && anchorNameKeys(anchor).includes(key))),
+    (anchor) =>
+      anchor.type === "character" &&
+      (anchor.castId === member.id || (key !== "" && characterKeysFor(anchor, castKeys).includes(key))),
   );
 }
 
@@ -39,7 +41,9 @@ export function castWithoutCharacter(project: Project): { named: StoryCastMember
   const story = project.config.storyText;
   if (!project.analysis || !story.trim()) return { named: [], unnamed: [] };
   const anchors = project.anchors ?? [];
-  const lacking = namedCast(briefOf(project.config)).filter((member) => !hasCharacter(member, anchors));
+  const cast = namedCast(briefOf(project.config));
+  const castKeys = new Set(cast.map((member) => normalizeAnchorName(member.name)).filter(Boolean));
+  const lacking = cast.filter((member) => !hasCharacter(member, anchors, castKeys));
   return {
     named: lacking.filter((member) => textMentions(story, [member.name, ...(member.aliases ?? [])])),
     unnamed: lacking.filter((member) => !textMentions(story, [member.name, ...(member.aliases ?? [])])),
@@ -53,7 +57,11 @@ export function withCastCharacters(project: Project): CastCharacters {
   const anchors = project.anchors ?? [];
   const brief = briefOf(project.config);
   const config = { ...project.config, storyBrief: { ...brief, cast: named } };
-  const next = linkAnchorsToCast(injectNamedCastAnchors(anchors, config, anchors), project.config, anchors);
+  const next = linkAnchorsToCast(
+    injectNamedCastAnchors(anchors, config, anchors, namedCast(brief)),
+    project.config,
+    anchors,
+  );
   const before = new Set(anchors.map((anchor) => anchor.id));
   const added = next.filter((anchor) => !before.has(anchor.id)).map((anchor) => anchor.name.trim());
   if (added.length === 0) return { project, added: [], unnamed: unnamedNames };

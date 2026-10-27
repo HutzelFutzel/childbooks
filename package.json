@@ -41,6 +41,7 @@
     "check:blob-variants": "node scripts/check-blob-variants.mjs",
     "check:fulfillment": "node scripts/check-fulfillment.mjs",
     "check:story-analysis": "node scripts/check-story-analysis.mjs",
+    "check:character-scale": "node scripts/check-character-scale.mjs",
     "check:guide": "node scripts/check-guide.mjs",
     "check:screenplay": "node scripts/check-screenplay.mjs",
     "check:identity": "node scripts/check-identity.mjs",

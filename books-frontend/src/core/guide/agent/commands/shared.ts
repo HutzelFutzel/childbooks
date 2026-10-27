@@ -5,10 +5,11 @@
  * store, so a skill can run on a copy of the book during planning and again on
  * the live book when it is written.
  */
+import { heightAfterAgeChange } from "../../../book/anchorScale";
 import { effectiveCharacterAgeYears } from "../../../book/characterAge";
 import { normalizeAnchorName } from "../../../book/anchorRefs";
 import { briefOf } from "../../../story/brief";
-import type { Project, StoryCastMember } from "../../../types";
+import type { Anchor, Project, StoryCastMember } from "../../../types";
 import { withCastResolved } from "../../ownWords";
 import { authoringOf, withAuthoring } from "../../projectState";
 import type { GuideLineKey } from "../../copy";
@@ -98,6 +99,15 @@ export function withCast(project: Project, map: (cast: StoryCastMember[]) => Sto
   return { ...project, config: { ...project.config, storyBrief: { ...brief, cast: map(brief.cast ?? []) } } };
 }
 
+/** The anchor without a height estimate that only restated its old age. */
+function withoutHeight(anchor: Anchor, nextAgeYears: number | undefined): Anchor {
+  if (nextAgeYears === undefined || anchor.heightCm === undefined) return anchor;
+  const keep = heightAfterAgeChange(anchor, nextAgeYears);
+  if (keep !== undefined) return anchor;
+  const { heightCm: _stale, ...rest } = anchor;
+  return rest;
+}
+
 /** `updateCastMember` from the book pane, as a pure function: ages clear estimates and reach the anchors. */
 export function withMemberChanges(project: Project, id: string, changes: Partial<StoryCastMember>): Project {
   const clearsEstimate = typeof changes.age === "number" || typeof changes.ageMonths === "number";
@@ -126,7 +136,8 @@ export function withMemberChanges(project: Project, id: string, changes: Partial
         names.has(name),
       )
         ? {
-            ...anchor,
+            // The old height estimate described the old age; drop it so the new age decides.
+            ...withoutHeight(anchor, years),
             ageYears: years,
             ageSource:
               member.age !== undefined || member.ageMonths !== undefined

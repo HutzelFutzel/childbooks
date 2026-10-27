@@ -350,7 +350,8 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   const freshPage = !isCover && !maskMode && !hasCompositionRef;
   const pageWords = freshPage ? clip(spread.text ?? "", PAGE_WORDS_MAX) : "";
   const artDirectionText = freshPage ? clip(artDirection ?? "", 400) : "";
-  const continuityNote = freshPage ? clip(spread.continuity ?? "", 200) : "";
+  // A cutout has no place, light or weather of its own to keep consistent.
+  const continuityNote = freshPage && !transparentBackground ? clip(spread.continuity ?? "", 200) : "";
   const pageAnchors = [...referencedAnchors, ...keptAnchors, ...describedAnchors];
   const wardrobeList = freshPage
     ? (spread.wardrobe ?? [])

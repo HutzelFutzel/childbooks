@@ -43,6 +43,39 @@ export async function samplePixels(
 }
 
 /**
+ * How much of a picture is see-through, measured on a small copy: the share of all pixels, and of
+ * the pixels along its four edges, with (nearly) no ink. Null when the image can't be decoded.
+ */
+export async function alphaCoverage(buf: Buffer): Promise<{ clear: number; border: number } | null> {
+  try {
+    const { data, info } = await sharp(buf)
+      .ensureAlpha()
+      .resize(128, 128, { fit: "inside" })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const { width, height, channels } = info;
+    if (channels !== 4 || width < 2 || height < 2) return null;
+    const CLEAR = 32;
+    let clear = 0;
+    let border = 0;
+    let borderTotal = 0;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const isClear = data[(y * width + x) * 4 + 3] < CLEAR;
+        if (isClear) clear += 1;
+        if (x === 0 || y === 0 || x === width - 1 || y === height - 1) {
+          borderTotal += 1;
+          if (isClear) border += 1;
+        }
+      }
+    }
+    return { clear: clear / (width * height), border: border / borderTotal };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Shrink a reference exemplar (e.g. the art-style image) that is sent on EVERY
  * generation. Resizes so the longest side is at most `maxDim` and re-encodes as
  * JPEG — a multi-megabyte lossless source otherwise inflates every request

@@ -198,6 +198,17 @@ export interface CompositeOps {
    * those checks are skipped.
    */
   samplePixels?(input: { base64: string; mimeType: string; size: number }): Promise<PixelGrid | null>;
+  /**
+   * How much of an image is see-through: the share of all pixels, and of the pixels along its
+   * four edges, that are (nearly) transparent. Optional; without it a page asked for as a
+   * cutout is taken as the model drew it.
+   */
+  alphaCoverage?(input: { base64: string; mimeType: string }): Promise<{ clear: number; border: number } | null>;
+}
+
+/** Whether a picture really is a cutout: most of its edges and a fair part of it are empty. */
+export function isCutout(coverage: { clear: number; border: number } | null): boolean {
+  return Boolean(coverage && coverage.clear >= 0.05 && coverage.border >= 0.25);
 }
 
 /** Injected capabilities the orchestration needs from its host platform. */
@@ -2251,6 +2262,37 @@ async function renderPage(
   });
   let { prompt, image: result } = lettered;
 
+  // A page asked for as a cutout has to come back as one. The model is only asked, so look: when
+  // it painted a backdrop anyway, draw it once more (ours to pay), and if that fails too, say what
+  // the picture really is, so the page is framed like any other picture instead of passing as a cutout.
+  let cutoutLost = false;
+  if (generation.applied.background === "transparent" && !maskMode && env.composite.alphaCoverage) {
+    const measure = (image: { base64: string; mimeType: string }) =>
+      env.composite.alphaCoverage!(image).catch(() => null);
+    const first = await measure(result);
+    // An unreadable picture is left as drawn; only a measured backdrop counts as lost.
+    if (first && !isCutout(first)) {
+      const fitsDeadline =
+        !options.signal?.aborted && Date.now() - startedAt + lastDrawMs * 1.2 < LETTERING_DEADLINE_MS;
+      let cutout = false;
+      if (fitsDeadline) {
+        try {
+          const retryPrompt = `${promptFor(false)}\n\nThe last attempt at this page painted a background. This time the picture is only the characters and the objects and scenery features that matter to the moment, drawn as one isolated group on an empty, fully transparent canvas with no backdrop behind them.`;
+          const again = await runStep("cutoutRetry", () => timedImage(retryPrompt, false));
+          const second = await measure(again);
+          if (isCutout(second)) {
+            prompt = retryPrompt;
+            result = again;
+            cutout = true;
+          }
+        } catch (error) {
+          if (options.signal?.aborted) throw error;
+        }
+      }
+      cutoutLost = !cutout;
+    }
+  }
+
   const sample = (image: { base64: string; mimeType: string }) =>
     env.composite.samplePixels
       ? env.composite
@@ -2333,6 +2375,16 @@ async function renderPage(
   }
   const textInk = inkSlots.length > 0 ? measureTextInk(await sample(bound), inkSlots) : undefined;
   const blobId = await env.saveImage(bound.base64, bound.mimeType);
+  // What the picture is, not what was asked for: a backdrop the model painted anyway is an opaque picture.
+  const recordedGeneration: typeof generation = cutoutLost
+    ? {
+        ...generation,
+        applied: Object.fromEntries(
+          Object.entries(generation.applied).filter(([name]) => name !== "background"),
+        ) as typeof generation.applied,
+        skipped: [...generation.skipped, "transparent-background"],
+      }
+    : generation;
   return {
     blobId,
     mimeType: bound.mimeType,
@@ -2352,14 +2404,14 @@ async function renderPage(
     // Only whole-page renders carry the stamp: the surgical paths above leave
     // most pixels in whatever style they were already drawn in.
     artStyleKey: artStyleKey(project.config.artStyle),
-    generation,
+    generation: recordedGeneration,
     inputReferenceCount: submittedReferences?.length ?? 0,
     outputSize,
     render: buildRenderRecord({
       artStyle: project.config.artStyle,
       action: env.imageAction,
       outputSize,
-      generation,
+      generation: recordedGeneration,
       inputReferences: (submittedReferences ?? []).map((reference) => ({
         role: reference.role ?? "subject",
         ...(reference.label ? { label: reference.label } : {}),

@@ -653,7 +653,10 @@ function sampleFor(id: StoryDetailId, project: Project): DetailPatch {
     /\bages?\b/i.test(DEFAULT_GUIDE_COPY.missingAgesWhy) && /draw|picture|reading/i.test(DEFAULT_GUIDE_COPY.missingAgesWhy),
     "The ages question doesn't say why it asks.",
   );
-  check(/adult/i.test(DEFAULT_GUIDE_COPY.missingAgesWhyMany), "The ages question for several people doesn't say a grown-up can be 'adult'.");
+  check(
+    /rough age|around \d+/i.test(DEFAULT_GUIDE_COPY.missingAgesWhyMany) && !/"adult"/i.test(DEFAULT_GUIDE_COPY.missingAgesWhyMany),
+    "The ages question for several people doesn't ask a grown-up for a rough age.",
+  );
   check(DEFAULT_GUIDE_COPY.heardStory.split(/\s+/).length <= 10, "The 'noted' line is not short.");
   notes.push("Story words: kept before the draft, read by both templates, never in the signature, go-aheads and joined idea claims screened");
 }

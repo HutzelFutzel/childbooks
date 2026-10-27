@@ -260,7 +260,7 @@ export const DEFAULT_GUIDE_COPY: Record<GuideCopyKey, string> = {
   missingAgesMany: "How old are {names}?",
   missingAgesWhy: "How old is {names}? Ages help me draw them right and pick the reading level.",
   missingAgesWhyMany:
-    "How old are {names}? Ages help me draw everyone right and pick the reading level. For grown-ups, \"adult\" is fine.",
+    "How old are {names}? Ages help me draw everyone right and pick the reading level. For grown-ups, a rough age like \"mid-30s\" or \"around 55\" is fine.",
   heardStory: "Got it, I've noted your story.",
   turnUnread: "Sorry, I couldn't read that just now. Could you say it again?",
   turnUnreadKept: "I couldn't read all of that just now, but I've kept your words.",
@@ -567,7 +567,7 @@ export const GUIDE_COPY_HELP: Partial<Record<GuideCopyKey, string>> = {
   missingAgesWhy:
     "The first time the guide asks for one person's age before the story, with the reason: ages shape the pictures and the reading level. Later asks use the plain question. {names} is that person.",
   missingAgesWhyMany:
-    "The same first ask for several people. It also tells the parent that a grown-up can simply be \"adult\". {names} are those people.",
+    "The same first ask for several people. It also tells the parent that a rough age is fine for a grown-up, because a 35-year-old and a 55-year-old look different. {names} are those people.",
   heardStory:
     "Said once, before the next question, when the parent told the story in their own words and the guide kept them. Short on purpose: the receipt carries the detail.",
   turnUnread:

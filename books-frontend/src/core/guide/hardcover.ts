@@ -7,11 +7,14 @@
  * products — never a fixed 24.
  *
  * - **natural**: the story already reaches a hardcover, or this shape has none.
- * - **spread**: it can reach the hardcover minimum by giving the moments it
- *   already has more room, without a page dropping under about half the words
- *   this age expects. Done without asking; one line says so.
- * - **short**: it can't. The shorter book is kept, the guide says so plainly,
- *   and spreading anyway (a thin stretch) waits for the reader to agree.
+ * - **short**: it is under the hardcover minimum. The shorter book stands until
+ *   the reader chooses, and the guide asks: spread it over the minimum, or keep
+ *   it as a softcover. The stretch is never done unasked, because more pages
+ *   cost more to draw.
+ * - **spread**: the reader agreed, and the story has the moments for it, so
+ *   each gets more room without a page dropping under about half the words this
+ *   age expects.
+ * - **thin**: the reader agreed to spread a story that has no room for it.
  */
 import { BOOK_PRODUCTS, type BookProduct } from "../fulfillment";
 import { bookProductForConfig } from "../book";
@@ -101,7 +104,10 @@ export function hardcoverCheck(
   // A moment may carry onto a second page (a repetition this age enjoys); a new
   // event never counts as room.
   const sensible = words / hardMin >= wpp / 2 && moments * 2 >= hardMin;
-  if (sensible || decision === "spread") {
+  // More pages cost more to draw, so the reader always decides: until they have, the shorter book
+  // stands and the question is asked ("short"). Agreeing to spread is a plain stretch when the
+  // story has the moments for it, a thin one when it does not.
+  if (decision === "spread" || (decision === "thin" && sensible)) {
     return { case: "spread", pages: hardMin, naturalPages, wordsPerPage: wpp, hardcoverMin: hardMin, softcoverPages: soft, printable: true };
   }
   if (decision === "thin") {

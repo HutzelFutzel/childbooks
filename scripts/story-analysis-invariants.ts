@@ -284,6 +284,13 @@ const twins = refineAnalyzedAnchors([
 assert.deepEqual(twins.map((row) => row.name).sort(), ["Amanda", "Arthur"]);
 assert.match(twins.find((row) => row.name === "Arthur")?.description ?? "", /green shirt/);
 
+// Two friends who share a generic label are still two people.
+const friends = refineAnalyzedAnchors([
+  anchor({ name: "Luca", type: "character", description: "A boy next door.", aliasNames: ["friend", "the neighbour friend"] }),
+  anchor({ name: "Nile", type: "character", description: "A girl next door.", aliasNames: ["friend", "the neighbour friend"] }),
+]);
+assert.deepEqual(friends.map((row) => row.name).sort(), ["Luca", "Nile"]);
+
 const previous = [
   anchor({
     id: "keep-bluey",

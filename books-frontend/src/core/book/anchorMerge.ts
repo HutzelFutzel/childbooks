@@ -187,6 +187,16 @@ function animalConflict(a: Anchor, b: Anchor): boolean {
   return true;
 }
 
+/** Whether `name` is the same as, or inside, one of the anchor's labels (or the other way round). */
+function nameIsLabelOf(name: string, anchor: Pick<Anchor, "name" | "aliasNames">): boolean {
+  return labels(anchor).some(
+    (label) =>
+      normalizeAnchorName(label) === normalizeAnchorName(name) ||
+      containsTokenSequence(label, name) ||
+      containsTokenSequence(name, label),
+  );
+}
+
 function nameOverlap(a: Anchor, b: Anchor): boolean {
   for (const left of labels(a)) {
     for (const right of labels(b)) {
@@ -204,17 +214,20 @@ function nameOverlap(a: Anchor, b: Anchor): boolean {
  */
 export function sameSubject(a: Anchor, b: Anchor): boolean {
   if (a.id && b.id && a.id === b.id) return true;
-  if (nameOverlap(a, b)) return true;
   // Two people with their own proper names are two people, however much one's
-  // description mentions the other ("Arthur's twin sister").
+  // description mentions the other ("Arthur's twin sister"), and however many
+  // labels they share: two friends both called "friend" are not one friend.
+  // They are one only when one's NAME is a label of the other ("Bluey" and
+  // "Bluey the blue toy elephant").
   if (
     a.type === "character" &&
     b.type === "character" &&
     isProperName(a.name) &&
     isProperName(b.name)
   ) {
-    return false;
+    return nameIsLabelOf(a.name, b) || nameIsLabelOf(b.name, a);
   }
+  if (nameOverlap(a, b)) return true;
 
   for (const label of labels(a)) {
     if (isProperName(label) && containsTokenSequence(bagOf(b), label)) return true;

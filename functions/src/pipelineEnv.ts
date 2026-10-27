@@ -6,6 +6,7 @@
  */
 import { serverConfig } from "./config";
 import {
+  alphaCoverage,
   buildCoverContinuationSeed,
   buildHoleMask,
   buildScaleChart,
@@ -190,6 +191,7 @@ export function backendPipelineEnv(
         };
       },
       samplePixels: (input) => samplePixels(b64ToBuf(input.base64), input.size),
+      alphaCoverage: (input) => alphaCoverage(b64ToBuf(input.base64)),
     },
     prompts,
   };
