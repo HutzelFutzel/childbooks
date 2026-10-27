@@ -112,7 +112,7 @@ import { useAppConfigStore } from "./appConfigStore";
 import { quoteFor } from "./chatGeneration";
 import { sendGuideTurn } from "./guideTurn";
 import { withLanguageRemembered } from "../core/guide/storyVersions";
-import { rememberThumbs } from "./messageThumbs";
+import { forgetThumbs, rememberThumbs } from "./messageThumbs";
 import { isEagerStoryEdit } from "../core/story/revision";
 import { markExcerpt, selectionForMark, type StoryMark } from "../core/story/storyMark";
 import { takeMark } from "./storyMark";
@@ -1135,6 +1135,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
 
     close: () => {
       if (saveTimer) clearTimeout(saveTimer);
+      forgetThumbs();
       set({
         projectId: null,
         session: createGuideSession(),

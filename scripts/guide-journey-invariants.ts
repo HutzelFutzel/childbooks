@@ -288,7 +288,7 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   const busy = guideActivity({ sending: true, extractionRunning: true });
   if (busy?.id !== "understanding") fail("A message in flight should say it is being understood.");
   // The message field stays beside every card that spends Sparks, and Enter never accepts one.
-  for (const kind of ["portraits", "drawBook", "order", "redraw", "bookUpdate", "formatChoice", "layoutChoice", "hardcoverChoice", "pageFix", "printFix", "account"]) {
+  for (const kind of ["portraits", "drawBook", "order", "redraw", "bookUpdate", "bookFinish", "bookPrepFix", "formatChoice", "layoutChoice", "hardcoverChoice", "pageFix", "printFix", "account"]) {
     cases += 1;
     if (!composerForChoice({ entry: "guided", wellKind: kind })) fail(`The message field is hidden beside the "${kind}" card.`);
     cases += 1;

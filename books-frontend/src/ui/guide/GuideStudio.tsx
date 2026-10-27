@@ -970,7 +970,9 @@ function BookPane({
     if (!arrivedKey) return;
     const fresh = arrivedKey.split("\0");
     const newest = fresh[fresh.length - 1];
-    if (newest) setView(newest as BookViewId);
+    // A new tab is shown, never pulled to while the reader types or reviews the
+    // story: it arrives highlighted and waits to be opened.
+    if (newest && !useChatStudio.getState().storyFocus) setView(newest as BookViewId);
     const timer = window.setTimeout(() => setArrivedKey(null), 1400);
     return () => window.clearTimeout(timer);
   }, [arrivedKey, setView]);

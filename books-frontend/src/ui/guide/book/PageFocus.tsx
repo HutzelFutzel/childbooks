@@ -166,9 +166,11 @@ export function PageFocus({
           )}
         </AnimatePresence>
       </div>
-      <div className="mx-auto w-full max-w-2xl shrink-0 px-4 pt-2 pb-4">
-        {composer}
-      </div>
+      {composer && (
+        <div className="mx-auto w-full max-w-2xl shrink-0 px-4 pt-2 pb-4">
+          {composer}
+        </div>
+      )}
     </div>
   );
 }

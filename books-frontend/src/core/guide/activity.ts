@@ -89,6 +89,7 @@ export const ENTER_NEVER_ACCEPTS: ReadonlySet<string> = new Set([
   "hardcoverChoice",
   "drawBook",
   "bookUpdate",
+  "bookFinish",
   "bookPrepFix",
   "pageFix",
   "printFix",

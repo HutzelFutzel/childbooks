@@ -13,3 +13,12 @@ export function rememberThumbs(messageId: string, urls: string[]): void {
   if (urls.length === 0) return;
   useMessageThumbs.setState((state) => ({ byMessage: { ...state.byMessage, [messageId]: urls } }));
 }
+
+/** The conversation closed: its object URLs are released and its lines read as plain text. */
+export function forgetThumbs(): void {
+  const { byMessage } = useMessageThumbs.getState();
+  const all = Object.values(byMessage).flat();
+  if (all.length === 0) return;
+  for (const url of all) URL.revokeObjectURL(url);
+  useMessageThumbs.setState({ byMessage: {} });
+}
