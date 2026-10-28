@@ -22,6 +22,7 @@ import { resolveAudienceOverlays } from "../prompts/audience";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
 import { visualDescription } from "../book/anchorDescription";
+import { namesOf, restatesLook, withoutLookAsides } from "../book/pictureLook";
 import type { Anchor, BookConfig, ScreenplaySpread } from "../types";
 import { layoutPromptFacts, type LayoutPlan } from "../book/layouts";
 import { describeSubjectInset } from "../book/subjectInset";
@@ -353,12 +354,18 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   // A cutout has no place, light or weather of its own to keep consistent.
   const continuityNote = freshPage && !transparentBackground ? clip(spread.continuity ?? "", 200) : "";
   const pageAnchors = [...referencedAnchors, ...keptAnchors, ...describedAnchors];
+  // A character whose reference is on the page looks like it; a look the brief
+  // spells out for them (a plan written before their portrait) only fights it.
+  const drawnFromReference = [...referencedAnchors, ...keptAnchors].filter((a) => a.type === "character");
+  const illustrationBrief = withoutLookAsides(spread.illustration.trim(), namesOf(drawnFromReference));
   const wardrobeList = freshPage
     ? (spread.wardrobe ?? [])
         .flatMap((entry) => {
           const who = pageAnchors.find((a) => a.id === entry.anchorId);
           const outfit = entry.outfit.trim();
-          return who && outfit ? [`${who.name} wears ${outfit}`] : [];
+          if (!who || !outfit) return [];
+          if (drawnFromReference.includes(who) && restatesLook(outfit, who.description)) return [];
+          return [`${who.name} wears ${outfit}`];
         })
         .join("; ")
     : "";
@@ -366,7 +373,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
 
   const prompt = renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/default", {
     vars: {
-      illustrationBrief: spread.illustration.trim(),
+      illustrationBrief,
       ageVisualGuidance: audience.illustration,
       charactersList: listOf(characters, false),
       settingsList: listOf(settings, false),

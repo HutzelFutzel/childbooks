@@ -22,6 +22,34 @@ const ACTIVE = new Set(["pending", "running"]);
 const seenWorking = new Set<string>();
 const announcedFailed = new Set<string>();
 
+/** Written, or written and waiting for the reader's keep-or-drop: the story is not settled yet. */
+const UNSETTLED = new Set(["pending", "running", "ready"]);
+
+/**
+ * Whether a change to the story is still open, from the moment it is asked for until the reader has
+ * finished reviewing it. Until then the book's size and drawing are not offered: they would be
+ * decided for a story that is about to change.
+ */
+export function useStoryRevisionOpen(projectId: string | undefined): boolean {
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    setOpen(false);
+    if (!projectId) return;
+    let stop: (() => void) | undefined;
+    try {
+      stop = subscribeStoryRevisions(projectId, (revisions) => {
+        setOpen(revisions.some((revision) => UNSETTLED.has(revision.status)));
+      });
+    } catch {
+      // Not signed in: there are no revisions to wait for.
+    }
+    return () => stop?.();
+  }, [projectId]);
+
+  return open;
+}
+
 export function useRevisionActivity(projectId: string | undefined): boolean {
   const [active, setActive] = useState(false);
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import {
   BookOpen,
   Calculator,
@@ -20,10 +21,20 @@ import { useOrdersStore } from "../../state/ordersStore";
 import { unseenDownloadCount, useDownloadsStore } from "../../state/downloadsStore";
 import { useConsentStore } from "../../state/consentStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
+import { useSparksStore } from "../../state/sparksStore";
+import { useSparksUiStore } from "../../state/sparksUiStore";
 import { visibleLegalLinks } from "../../core/config/legal";
 import { Button } from "../components/Button";
 import { Popover } from "../components/Popover";
-import { MenuDivider, MenuHeader, MenuItem, MenuSectionLabel, UserMenuTrigger } from "../components/UserMenu";
+import {
+  MenuDivider,
+  MenuHeader,
+  MenuItem,
+  MenuSectionLabel,
+  MenuSparksWallet,
+  UserMenuTrigger,
+} from "../components/UserMenu";
+import { useImageActionRange } from "../layout/SparkCost";
 
 /**
  * The account dropdown — the single home for user actions that used to clutter
@@ -51,6 +62,24 @@ export function AuthMenu() {
     s.orders.some((o) => o.stage === "onHold" || o.stage === "error"),
   );
   const unseenDownloads = useDownloadsStore((s) => unseenDownloadCount(s.downloads));
+  const sparksEnabled = useAppConfigStore((s) => s.sparks.enabled);
+  const balance = useSparksStore((s) => s.balance);
+  const balanceLoading = useSparksStore((s) => s.loading);
+  const watchSparks = useSparksStore((s) => s.watch);
+  const openWallet = useSparksUiStore((s) => s.openWallet);
+  const pageRange = useImageActionRange("pageIllustration");
+  const pageEstimate = pageRange?.maxSparks ?? 0;
+  const outOf = !balanceLoading && balance <= 0;
+  const runningLow = !balanceLoading && !outOf && pageEstimate > 0 && balance < pageEstimate;
+
+  const signedIn = Boolean(user) && !user?.isAnonymous;
+
+  // Ensure the balance listener is active on any shell that mounts `AuthMenu`
+  // (e.g. `/admin`, where `StudioApp` isn't mounted). `watch()` is idempotent.
+  useEffect(() => {
+    if (!ready || !signedIn || accessLevel === "loading") return;
+    watchSparks();
+  }, [ready, signedIn, accessLevel, watchSparks]);
 
   // Anything on the account button worth a nudge: an order needing attention or
   // a freshly-delivered download the user hasn't opened the list to see yet.
@@ -59,8 +88,6 @@ export function AuthMenu() {
   if (!ready) {
     return <div className="h-8 w-24 animate-pulse rounded-lg bg-ink-100" />;
   }
-
-  const signedIn = Boolean(user) && !user?.isAnonymous;
 
   if (!signedIn) {
     return (
@@ -79,6 +106,17 @@ export function AuthMenu() {
       {(close) => (
         <>
           <MenuHeader user={user} />
+
+          {sparksEnabled && accessLevel !== "loading" && (
+            <MenuSparksWallet
+              balance={balance}
+              loading={balanceLoading}
+              outOf={outOf}
+              runningLow={runningLow}
+              onTopUp={() => openWallet()}
+              onClose={close}
+            />
+          )}
 
           <div className="py-1">
             <MenuSectionLabel>Account</MenuSectionLabel>

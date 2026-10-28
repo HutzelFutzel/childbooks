@@ -138,35 +138,59 @@ export function SparksBadge({ walletOnly = false }: { /** Mount just the wallet 
         align="end"
         panelClassName="w-72 p-0 overflow-hidden"
         trigger={
+        <span
+          // Quiet by default, loud only when it matters: the balance stays a
+          // neutral, low-contrast pill until it can't cover the next render.
+          className={`inline-flex items-center gap-1.5 rounded-full py-1 pl-2.5 pr-1.5 text-sm ring-1 ring-inset transition ${
+            low
+              ? "bg-amber-50 font-semibold text-amber-700 ring-amber-200 group-hover:bg-amber-100"
+              : "bg-white/60 font-medium text-ink-500 ring-ink-200/70 group-hover:bg-white group-hover:text-ink-700"
+          }`}
+          title="Your Sparks"
+        >
+          <span className="sr-only">Sparks balance:</span>
+          <Sparkles key={glintKey} className={glintKey > 0 ? "size-4 animate-glint" : "size-4"} />
+          {balanceLoading ? (
+            <Skeleton className="h-4 w-8" rounded="full" />
+          ) : (
+            <span className="tabular-nums">{balance.toLocaleString()}</span>
+          )}
           <span
-            // Quiet by default, loud only when it matters: the balance stays a
-            // neutral, low-contrast pill until it can't cover the next render.
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm ring-1 ring-inset transition ${
+            aria-hidden
+            className={`ml-0.5 inline-flex size-4 items-center justify-center rounded-full transition ${
               low
-                ? "bg-amber-50 font-semibold text-amber-700 ring-amber-200 group-hover:bg-amber-100"
-                : "bg-white/60 font-medium text-ink-500 ring-ink-200/70 group-hover:bg-white group-hover:text-ink-700"
+                ? "bg-amber-200/80 text-amber-800 group-hover:bg-amber-300/80"
+                : "bg-ink-900/[0.06] text-ink-600 group-hover:bg-brand-600 group-hover:text-white"
             }`}
-            title="Your Sparks"
           >
-            <span className="sr-only">Sparks balance:</span>
-            <Sparkles key={glintKey} className={glintKey > 0 ? "size-4 animate-glint" : "size-4"} />
-            {balanceLoading ? (
-              <Skeleton className="h-4 w-8" rounded="full" />
-            ) : (
-              balance.toLocaleString()
-            )}
+            <Plus className="size-3" />
           </span>
+        </span>
         }
       >
         {(close) => (
           <>
             <div className="px-4 py-3.5">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Sparks balance</p>
-              <p className="mt-1 flex items-center gap-2 font-display text-2xl font-bold text-ink-900">
-                <Sparkles className="size-5 text-magic-500" />
-                {balanceLoading ? "—" : balance.toLocaleString()}
-              </p>
-              <p className="mt-1 text-xs leading-relaxed text-ink-500">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Sparks balance</p>
+                  <p className="mt-1 flex items-center gap-2 font-display text-2xl font-bold tabular-nums text-ink-900">
+                    <Sparkles className="size-5 text-magic-500" />
+                    {balanceLoading ? "—" : balance.toLocaleString()}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  leftIcon={<Plus className="size-3.5" />}
+                  onClick={() => {
+                    close();
+                    openWallet();
+                  }}
+                >
+                  Top up
+                </Button>
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-ink-500">
                 Sparks power image generation. Story and text steps stay free.
               </p>
               {outOf && <p className="mt-2 text-xs font-medium text-amber-700">Top up to keep illustrating.</p>}
@@ -177,7 +201,7 @@ export function SparksBadge({ walletOnly = false }: { /** Mount just the wallet 
               onClick={close}
               className="flex items-center justify-center gap-1.5 border-t border-ink-100 bg-ink-50/70 px-4 py-2.5 text-xs font-semibold text-brand-700 transition hover:bg-brand-50"
             >
-              Manage Sparks
+              Wallet &amp; activity
               <span aria-hidden>→</span>
             </Link>
           </>

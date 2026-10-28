@@ -183,6 +183,13 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
                   {signedIn ? (
                     <>
                       <Link
+                        href="/account/sparks"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-ink-700 transition-colors hover:bg-ink-100/70"
+                      >
+                        <Sparkles className="size-4 text-magic-500" /> Sparks wallet
+                      </Link>
+                      <Link
                         href="/account/settings"
                         onClick={() => setMenuOpen(false)}
                         className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-ink-700 transition-colors hover:bg-ink-100/70"

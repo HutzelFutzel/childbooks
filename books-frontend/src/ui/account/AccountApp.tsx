@@ -30,6 +30,7 @@ import { PurchaseConfirmation } from "../checkout/PurchaseConfirmation";
 import { DownloadsContent } from "../checkout/DownloadsDialog";
 import { OrdersContent } from "../checkout/OrdersDialog";
 import { HelpButton } from "../contact/HelpButton";
+import { SparksBadge } from "../layout/SparksBadge";
 import { TopBar } from "../layout/TopBar";
 import { InviteFriendsContent } from "../referrals/InviteFriendsDialog";
 import { SettingsContent } from "../settings/SettingsDialog";
@@ -282,6 +283,7 @@ export default function AccountApp() {
       <AuthDialog />
       {/* The order list's "contact us" links open this. */}
       <ContactDialog />
+      <SparksBadge walletOnly />
       <PurchaseConfirmation />
     </div>
   );

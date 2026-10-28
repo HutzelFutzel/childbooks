@@ -16,6 +16,8 @@ import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, BookConfig, ScreenplayDoc, ScreenplaySpread } from "../types";
 import { visualDescription } from "../book/anchorDescription";
+import { looksFromPicture, namesOf, withoutLookAsides } from "../book/pictureLook";
+import { castKindPhrase } from "../story/castKinds";
 import { anchorNameKeys, effectiveAnchorIds, normalizeAnchorName } from "../book/anchorRefs";
 import { getBookLayout } from "../book/layouts";
 import { getBookLanguage } from "../config/bookLanguages";
@@ -115,13 +117,29 @@ function describeReader(config: BookConfig, overlays: AudienceOverlays): string 
   return `Age range: ${overlays.profile.label}.${mode}`;
 }
 
-function describeAnchors(anchors: Anchor[]): string {
+/**
+ * What a character drawn from their own picture is, without a look: the kind
+ * of being (a dog is staged as a dog) and the age. Their hair, face and clothes
+ * are in the picture, so none are written here for a brief to copy.
+ */
+function pictureCharacterLine(a: Anchor, config: BookConfig): string {
+  const member = a.castId ? briefOf(config).cast?.find((m) => m.id === a.castId) : undefined;
+  const kind = member ? castKindPhrase(member) : "";
+  const body = !kind && a.bodyPlan && a.bodyPlan !== "bipedal" ? `a ${a.bodyPlan} being` : "";
+  const age = a.ageYears !== undefined ? `${a.ageYears} years old` : "";
+  const what = [kind || body, age].filter(Boolean).join(", ");
+  return `${what ? `${what}; ` : ""}drawn from their own picture.`;
+}
+
+function describeAnchors(anchors: Anchor[], config: BookConfig): string {
   if (anchors.length === 0) return "(none)";
   return anchors
     .map((a) => {
       const look = a.lookFromArt?.trim();
-      const description = visualDescription(a.name, look || a.description);
-      const fromArt = a.sourceArt?.length
+      const description = looksFromPicture(a)
+        ? pictureCharacterLine(a, config)
+        : visualDescription(a.name, look || a.description);
+      const fromArt = a.sourceArt?.length && !looksFromPicture(a)
         ? " Match the author's drawing; the name is a label only."
         : "";
       const also = (a.aliasNames ?? []).map((alias) => alias.trim()).filter(Boolean);
@@ -214,16 +232,19 @@ function planTextOf(doc: ScreenplayDoc, included: Anchor[]): string {
 /** The plan as the model reads it back in a revision or a repair. */
 function previousJsonOf(doc: ScreenplayDoc, included: Anchor[]): string {
   const nameOf = (id: string) => included.find((a) => a.id === id)?.name;
+  // A plan written before the pictures existed spelled their looks out; read back as it was, it would be copied.
+  const pictured = namesOf(included.filter(looksFromPicture));
+  const brief = (text: string) => withoutLookAsides(text, pictured);
   return JSON.stringify(
     {
       notes: doc.notes,
-      frontCover: doc.frontCover,
-      backCover: doc.backCover,
+      frontCover: doc.frontCover && { ...doc.frontCover, illustration: brief(doc.frontCover.illustration) },
+      backCover: doc.backCover && { ...doc.backCover, illustration: brief(doc.backCover.illustration) },
       spineText: doc.spine?.text ?? "",
       spreads: doc.spreads.map((s) => ({
         kind: s.kind,
         text: s.text,
-        illustration: s.illustration,
+        illustration: brief(s.illustration),
         layoutNote: s.layoutNote,
         continuity: s.continuity ?? "",
         wardrobe: (s.wardrobe ?? []).map((w) => ({ anchor: nameOf(w.anchorId) ?? "", outfit: w.outfit })),
@@ -311,7 +332,7 @@ export async function generateScreenplay(
         languageInstruction: language.promptInstruction,
         placementGuidance,
         configDescription: describeConfig(config, overlays),
-        anchorsList: describeAnchors(included),
+        anchorsList: describeAnchors(included, config),
         story,
         previousJson: isRevision ? previousJsonOf(args.previous!, included) : "",
         edit: args.edit?.trim() ?? "",
@@ -341,6 +362,7 @@ export async function generateScreenplay(
         hasSafety: Boolean(overlays.safetyList),
         allowsWordless: wordlessMax > 0,
         hasFixedPages: Boolean(args.fixedPages?.length),
+        hasPictured: included.some(looksFromPicture),
       },
     });
 
@@ -366,7 +388,7 @@ export async function generateScreenplay(
     const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "screenplayReview", {
       vars: {
         reader: describeReader(config, overlays),
-        anchorsList: describeAnchors(included),
+        anchorsList: describeAnchors(included, config),
         story,
         planText: planTextOf(doc, included),
         maxIssues: REVIEW_MAX_ISSUES,

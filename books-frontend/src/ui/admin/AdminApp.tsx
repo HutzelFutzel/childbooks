@@ -15,6 +15,7 @@ import { HelpButton } from "@/ui/contact/HelpButton";
 import { SettingsDialog } from "@/ui/settings/SettingsDialog";
 import { OrdersDialog } from "@/ui/checkout/OrdersDialog";
 import { PlansDialog } from "@/ui/billing/PlansDialog";
+import { SparksBadge } from "@/ui/layout/SparksBadge";
 import { cn } from "@/ui/lib/cn";
 import { isDev } from "@/platform/runtime";
 import { useAuthStore } from "@/state/authStore";
@@ -524,6 +525,7 @@ export default function AdminApp() {
       <ContactDialog />
       <SettingsDialog />
       <PlansDialog />
+      <SparksBadge walletOnly />
       <OrdersDialog open={ordersOpen} onClose={closeOrders} />
       {isAdmin && accessLoaded && <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />}
     </div>

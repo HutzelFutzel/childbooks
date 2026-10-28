@@ -168,6 +168,12 @@ export interface JourneySignals {
   planReady?: boolean;
   /** The story analysis (cast extraction) is running. */
   analysisRunning?: boolean;
+  /**
+   * A change to the story is being written or is waiting for the reader's keep-or-drop. The story
+   * on screen is not the one the book will be made from yet, so nothing about the book's size or
+   * drawing is offered.
+   */
+  storyRevising?: boolean;
   /** An interpreter clarification or identity assignment is still open. */
   clarificationOpen?: boolean;
   /** Guests need a durable account before Draw the book. */
@@ -423,7 +429,9 @@ export function deriveJourney(
 
   const units = locked ? illustrationUnits(project) : [];
   const pendingAnchors = locked ? anchorsToPrepare(project) : [];
-  const stale = new Set(signals.stalePages ?? []);
+  // A page being drawn right now is already on its way to matching the book: offering to update it
+  // would only flash a second card for the redraw the reader just started.
+  const stale = new Set((signals.stalePages ?? []).filter((id) => !active.has(id)));
   // A picture that exists counts as done even when it is out of date. Stale is a
   // separate mark on the page; it does not hide Order.
   const done = units.filter((u) => unitIsDone(project, u)).length;
@@ -567,7 +575,8 @@ export function deriveJourney(
     // or current (a redraw of a portrait that is already right changes nothing until the new one lands).
     const portraitsReady = missingPortraits.length === 0 && outOfDate.length === 0 && !portraitsRunning;
     const hc = signals.hardcover;
-    const bookReady = planReady && portraitsReady && !needsCastFix && (!hc || hc.printable || hc.case === "short");
+    const bookReady =
+      planReady && portraitsReady && !needsCastFix && !signals.storyRevising && (!hc || hc.printable || hc.case === "short");
     // The question stands alone: its two answers sit directly under it, and the
     // book's summary only follows once it is answered.
     const hardcoverOpen = bookReady && hc?.case === "short" && !authoringOf(project).hardcover;

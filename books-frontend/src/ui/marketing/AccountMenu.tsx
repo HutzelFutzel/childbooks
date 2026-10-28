@@ -1,10 +1,13 @@
 "use client";
 
-import { BookOpen, LogOut, Settings, Shield } from "lucide-react";
+import { useEffect } from "react";
+import { BookOpen, LogOut, Settings, Shield, Sparkles } from "lucide-react";
 import { useAuthStore } from "../../state/authStore";
+import { useAppConfigStore } from "../../state/appConfigStore";
+import { useSparksStore } from "../../state/sparksStore";
 import { Button } from "../components/Button";
 import { Popover } from "../components/Popover";
-import { MenuDivider, MenuHeader, MenuItem, UserMenuTrigger } from "../components/UserMenu";
+import { MenuDivider, MenuHeader, MenuItem, MenuSparksWallet, UserMenuTrigger } from "../components/UserMenu";
 
 /**
  * Compact account control for the marketing chrome (landing, blog, contact) —
@@ -26,14 +29,24 @@ export function AccountMenu() {
   const user = useAuthStore((s) => s.user);
   const ready = useAuthStore((s) => s.ready);
   const isAdmin = useAuthStore((s) => s.isAdmin);
+  const accessLevel = useAuthStore((s) => s.accessLevel);
   const signOutUser = useAuthStore((s) => s.signOutUser);
   const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
+  const sparksEnabled = useAppConfigStore((s) => s.sparks.enabled);
+  const balance = useSparksStore((s) => s.balance);
+  const balanceLoading = useSparksStore((s) => s.loading);
+  const watchSparks = useSparksStore((s) => s.watch);
+
+  const signedIn = Boolean(user) && !user?.isAnonymous;
+
+  useEffect(() => {
+    if (!ready || !signedIn || accessLevel === "loading") return;
+    watchSparks();
+  }, [ready, signedIn, accessLevel, watchSparks]);
 
   if (!ready) {
     return <div className="hidden h-9 w-20 animate-pulse rounded-xl bg-ink-100 sm:block" />;
   }
-
-  const signedIn = Boolean(user) && !user?.isAnonymous;
 
   if (!signedIn) {
     return (
@@ -53,8 +66,16 @@ export function AccountMenu() {
         {(close) => (
           <>
             <MenuHeader user={user} />
+            {sparksEnabled && accessLevel !== "loading" && (
+              <MenuSparksWallet
+                balance={balance}
+                loading={balanceLoading}
+                onClose={close}
+              />
+            )}
             <div className="py-1">
               <MenuItem icon={<BookOpen className="size-4" />} label="Open the Studio" href="/studio" onClick={close} />
+              <MenuItem icon={<Sparkles className="size-4" />} label="Sparks" href="/account/sparks" onClick={close} />
               <MenuItem icon={<Settings className="size-4" />} label="Account settings" href="/account/settings" onClick={close} />
             </div>
 

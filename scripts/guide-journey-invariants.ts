@@ -251,6 +251,14 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
       }
       cases += 1;
       if (!running.working) fail(`"${name}" (${entry}) is drawing a page but shows no work running.`);
+      // A page being redrawn is out of date until the new picture lands, but it is not offered an update.
+      const drawing = new Set([units[0]!.id]);
+      const redrawn = journeyOf(locked, { activeUnitIds: drawing, stalePages: [units[0]!.id] });
+      const alone = journeyOf(locked, { activeUnitIds: drawing });
+      cases += 1;
+      if (redrawn.well?.kind !== alone.well?.kind) {
+        fail(`"${name}" (${entry}) offers ${redrawn.well?.kind} because the page it is redrawing is out of date (was ${alone.well?.kind}).`);
+      }
     }
 
     // Portraits are never offered for someone already being drawn.
@@ -769,6 +777,15 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
     cases += 1;
     if (asked?.kind !== "hardcoverChoice" || asked.min !== 24 || asked.pages !== 20) {
       fail(`A short story should ask "spread it or keep it short?" on its own (got ${asked?.kind}).`);
+    }
+    // A change to the story is being written or reviewed: the book's size and drawing are not offered.
+    for (const decision of [undefined, "keep", "thin"] as const) {
+      const book = decision ? withAuthoring(setupChosen, { hardcover: decision }) : setupChosen;
+      const revising = journeyOf(book, { planReady: true, hardcover: short, storyRevising: true });
+      cases += 1;
+      if (revising.well?.kind === "hardcoverChoice" || revising.well?.kind === "drawBook") {
+        fail(`While the story is being reworked the book must not offer ${revising.well.kind}.`);
+      }
     }
     for (const decision of ["thin", "keep"] as const) {
       const decided = journeyOf(withAuthoring(setupChosen, { hardcover: decision }), { planReady: true, hardcover: short });

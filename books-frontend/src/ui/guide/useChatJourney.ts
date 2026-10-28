@@ -26,6 +26,7 @@ import type { AgentWell } from "../../state/guideAgent";
 import { useJobsStore } from "../../state/jobsStore";
 import { usePortraitStartStore } from "../../state/portraitAutoStart";
 import type { AgentWellItem } from "./chat/AgentWells";
+import { useStoryRevisionOpen } from "./useRevisionActivity";
 
 /** Everything the well can hold: the journey's item, or a change waiting on the reader. */
 export type ChatWell =
@@ -103,6 +104,7 @@ export function useChatJourney(project: Project): ChatJourney {
   const pendingManuscript = useChatStudio((s) => s.pendingManuscript);
   const starting = useChatStudio((s) => s.starting);
   const agentWell = useChatStudio((s) => s.agentWell);
+  const storyRevising = useStoryRevisionOpen(project.id);
 
   const result = useMemo(() => {
     const hardcover = hardcoverFor(project);
@@ -122,6 +124,7 @@ export function useChatJourney(project: Project): ChatJourney {
       planRunning: running,
       planReady: planIsCurrent(project),
       analysisRunning,
+      storyRevising,
       clarificationOpen: Boolean(pendingTarget),
       guest: accessLevel === "guest",
       hardcover,
@@ -221,7 +224,7 @@ export function useChatJourney(project: Project): ChatJourney {
     };
     // screenplayJob is read inside planRunning.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, policies, brief, audience, activeUnitIds, portraitsDeciding, failedUnits, screenplayJob, accessLevel, pendingTarget, redraw, printIssue, extractionRunning, analysisRunning, extractionError, pendingManuscript, starting, agentWell, held]);
+  }, [project, policies, brief, audience, activeUnitIds, portraitsDeciding, failedUnits, screenplayJob, accessLevel, pendingTarget, redraw, printIssue, extractionRunning, analysisRunning, extractionError, pendingManuscript, starting, agentWell, held, storyRevising]);
   return result;
 }
 

@@ -407,6 +407,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "anchorContract",
         "Illustration briefs must be concrete and reference the named anchors so the art stays consistent. Match each anchor's visual description — species, body, clothing, and the actual shape of objects. An anchor's NAME is a label only: do not turn an animal into a human child, or a round balloon into a star, because of its name.",
       ),
+      blk(
+        "pictured",
+        "CHARACTERS DRAWN FROM THEIR OWN PICTURE: an anchor listed as \"drawn from their own picture\" is drawn from that picture on every page, and the illustrator is given it. In an illustration brief, name them and say what they do, where they are and how they feel. Never describe their hair, face, skin, eyes, body or clothes, and never add a description in brackets after their name: anything written about their look would disagree with their picture. List them in 'wardrobe' only when the page's own words change what they wear (pyjamas at bedtime), never for the clothes they usually wear.",
+        "hasPictured",
+      ),
       // Who may appear is a rule of every plan. It used to ride only on the
       // page-count blocks below, so an ordinary book never heard it.
       blk(
@@ -1327,6 +1332,18 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "isSpread",
       ),
       blk("kindSingle", "Single-page illustration.", "!isSpread"),
+      // Before the brief: a model weighs what it reads first, and a brief that
+      // still spells out a look must not outrank the reference images.
+      blk(
+        "characters",
+        "Keep these characters looking exactly like their provided reference images — {{charactersList}}. Each one's face, hair, skin tone, eyes, age, species, body type, outfit and overall design come from their own reference image; only their pose, expression and camera angle may change to fit the scene. Wherever the words below describe a character's looks or clothes differently from their reference, follow the reference image, except for an outfit change listed for this page.",
+        "hasCharacters",
+      ),
+      blk(
+        "ownDetails",
+        "Each character's own details — their clothes, accessories, hair and anything they wear or carry — belong only to that character. Never give one character's cap, glasses or outfit to anyone else in the picture.",
+        "hasCharacters",
+      ),
       blk("brief", "{{illustrationBrief}}"),
       blk(
         "continuity",
@@ -1366,16 +1383,6 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "subjectInset",
         "Keep every face, head, hand and important subject well inside the picture: at least {{subjectInsetPercent}} of the width and of the height in from every edge, because the outer {{subjectInsetFraction}} on each side may be covered by a decorative frame or cut off in printing. Only background — sky, ground, walls, foliage — may run into that outer margin. Draw nothing there that the story needs, and do not leave it empty either: the scene simply continues to the edges.",
         "hasSubjectInset",
-      ),
-      blk(
-        "characters",
-        "Keep these characters looking exactly like their provided reference images — {{charactersList}}. Match each one's species, body type, face, hair, colors, outfit and overall design to its own reference image; only their pose, expression and camera angle may change to fit the scene. If this page's description mentions clothes, species or body type that disagree with a reference, follow the image, except for an outfit change listed for this page below.",
-        "hasCharacters",
-      ),
-      blk(
-        "ownDetails",
-        "Each character's own details — their clothes, accessories, hair and anything they wear or carry — belong only to that character. Never give one character's cap, glasses or outfit to anyone else in the picture.",
-        "hasCharacters",
       ),
       blk(
         "wardrobe",
@@ -2111,6 +2118,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           hasSafety: true,
           allowsWordless: false,
           hasFixedPages: false,
+          hasPictured: true,
         },
       },
       {

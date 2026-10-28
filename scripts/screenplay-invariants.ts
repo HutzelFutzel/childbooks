@@ -492,6 +492,48 @@ const PAGES = ["Mia woke up early.", "She looked out of the window. The garden w
   check(!kept.includes("Never write these words"), "A picture that keeps its composition is given the page's words.");
 }
 
+// --- A character drawn from their own picture ---------------------------------------------------------------
+
+{
+  const INVENTED = "A toddler girl with curly dark-brown hair in two puffy side buns, a peach t-shirt under teal overalls and navy sneakers.";
+  const AMIRA = anchor("Amira", "character", { castId: "cast-amira", description: INVENTED, ageYears: 2 });
+  const PAPA = anchor("Papa", "character", { castId: "cast-papa", description: "An adult man in an olive-green henley and tan khakis." });
+
+  // The page plan is told who they are, not a look it would copy into every brief.
+  const planned = await run({}, [reply(PAGES)], [AMIRA, PAPA, TEDDY]);
+  const planPrompt = `${planned.calls[0]!.system}\n${planned.calls[0]!.user}`;
+  check(!planPrompt.includes("side buns") && !planPrompt.includes("olive-green"), "The page plan is given an invented look for someone drawn from their picture.");
+  check(planPrompt.includes("Amira [character]: 2 years old; drawn from their own picture."), "The page plan isn't told who is drawn from their picture.");
+  check(/Never describe their hair, face, skin, eyes, body or clothes/.test(planPrompt), "The page plan isn't told to leave pictured looks out of its briefs.");
+  const plain = await run({}, [reply(PAGES)]);
+  check(!/DRAWN FROM THEIR OWN PICTURE/.test(plain.calls[0]!.system), "A book with no pictured characters is given the pictured rule.");
+
+  // A brief planned before the portraits still spells looks out; the page prompt drops them.
+  const config = { ...createDefaultConfig("en-US"), ageRangeId: "3-5" };
+  const spread = {
+    id: "p1",
+    kind: "single" as const,
+    text: "Amira waved.",
+    illustration: "Amira (curly side buns, peach shirt, teal overall romper) waves while Papa's (olive-green henley, tan khakis) hand holds a suitcase.",
+    layoutNote: "",
+    anchorIds: [AMIRA.id, PAPA.id],
+    wardrobe: [
+      { anchorId: AMIRA.id, outfit: "peach t-shirt under teal overalls, navy sneakers" },
+      { anchorId: PAPA.id, outfit: "striped pyjamas" },
+    ],
+  };
+  const prompt = buildIllustrationPrompt({ spread, config, referencedAnchors: [AMIRA, PAPA] });
+  check(prompt.includes("Amira waves while Papa's hand holds a suitcase."), "A look in brackets after a referenced character's name reaches the page prompt.");
+  check(!prompt.includes("side buns") && !prompt.includes("henley"), "A pictured character's invented look reaches the page prompt.");
+  check(!prompt.includes("Amira wears") && prompt.includes("Papa wears striped pyjamas"), "A wardrobe entry that repeats the invented outfit is kept, or a real change is lost.");
+  check(
+    prompt.indexOf("Keep these characters looking exactly like their provided reference images") < prompt.indexOf("Amira waves"),
+    "The reference images are named after the brief, so the brief's words outrank them.",
+  );
+  const described = buildIllustrationPrompt({ spread, config, referencedAnchors: [PAPA], describedAnchors: [AMIRA] });
+  check(described.includes("Amira (curly side buns"), "A character with no reference on the page lost the only look the page has for them.");
+}
+
 // --- A page without words ----------------------------------------------------------------------------------
 
 {
