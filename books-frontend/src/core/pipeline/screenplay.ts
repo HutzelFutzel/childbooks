@@ -39,7 +39,8 @@ import {
   type NameIssue,
   type ScreenplayCheck,
 } from "./screenplayCheck";
-import { splitStoryIntoPages, verseBlocks } from "./screenplayText";
+import { atomsOf, numberedAtoms, sanitizeTies, splitStoryIntoPages, TIE_SPAN_MAX, type Tie } from "./screenplayCuts";
+import { verseBlocks } from "./screenplayText";
 
 const spreadSchema = z.object({
   kind: z.enum(["single", "spread"]),
@@ -188,7 +189,22 @@ export interface GenerateScreenplayInput {
    * more model call, so it is asked for, and never on a requested revision.
    */
   review?: boolean;
+  /**
+   * Have a model mark the lines that belong together (rhymes, refrains, repeated
+   * patterns), so a page turn is kept out of them. One short call, made while
+   * the plan is being written, so it adds no waiting; skipped for a revision or
+   * when the words may be changed. Without it only the text's own structure
+   * (stanzas, a sentence over a line break) is read.
+   */
+  findTies?: boolean;
 }
+
+const tiesSchema = z.object({
+  ties: z.array(z.object({ a: z.number(), b: z.number(), kind: z.string() })),
+});
+
+/** How long the ties may take; a plan never waits longer for them. */
+const TIES_MAX_MS = 45_000;
 
 const reviewSchema = z.object({
   issues: z.array(
@@ -419,6 +435,56 @@ export async function generateScreenplay(
       .map((i) => ({ page: i.page, problem: i.problem.trim(), fix: i.fix.trim() }));
   };
 
+  /** The lines that belong together beyond what the text's own layout shows; none until read. */
+  let ties: Tie[] = [];
+  const locale = config.contentLocale;
+
+  /** One model call that names the rhymes, refrains and repeats of the story. It never fails the plan. */
+  const readTies = async (): Promise<Tie[]> => {
+    const atoms = atomsOf(story, locale);
+    if (atoms.length < 2) return [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "screenplayTies", {
+        vars: { story: numberedAtoms(atoms), maxSpan: TIE_SPAN_MAX },
+        flags: {},
+      });
+      const asked = withRetry(
+        () =>
+          provider.generateStructured<z.infer<typeof tiesSchema>>(creds, {
+            model,
+            schema: tiesSchema,
+            schemaName: "screenplayTies",
+            temperature: 0,
+            maxOutputTokens: 4_096,
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+            signal,
+          }),
+        { signal, retries: 1 },
+      );
+      const late = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), TIES_MAX_MS);
+      });
+      const result = await Promise.race([asked, late]);
+      if (!result) {
+        // Left to finish on its own; its answer is of no use any more.
+        asked.catch(() => undefined);
+        console.warn("[screenplay] the ties took too long; the text's own layout is used");
+        return [];
+      }
+      return sanitizeTies(result.ties, atoms);
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      console.warn(`[screenplay] ties skipped: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
   const baseTemperature = exact ? 0.2 : 0.6;
   const earlier = edit ? previous : undefined;
 
@@ -440,24 +506,46 @@ export async function generateScreenplay(
       wordFactor: language.wordCountFactor,
       names,
       wordlessAllowed: Math.max(wordlessMax, wordlessAllowance(doc.spreads.length, { exact, independent: config.readingModeId === "independent" })),
+      ties,
+      locale,
     });
   const hasTextProblem = (check: ScreenplayCheck) => check.problems.some((p) => p.code === "text-mismatch");
+  const hasCutProblem = (check: ScreenplayCheck) => check.problems.some((p) => p.code === "verse-split");
 
-  let current = read(await callModel({ edit, previous, temperature: baseTemperature }));
+  const wordsPerPage =
+    config.pageTarget?.wordsPerPage || Math.round(profile.density.targetWordsPerPage * language.wordCountFactor) || 40;
+  /**
+   * How many texts the pages are cut into. A double-page spread is one text on
+   * two printed pages, so a target of N printed pages is fewer than N texts.
+   */
+  const piecesFor = (doc: ScreenplayDoc): number | undefined => {
+    const pages = config.pageTarget?.pages;
+    if (!pages) return undefined;
+    return Math.max(1, pages - doc.spreads.filter((s) => s.kind === "spread" && !s.placeholder).length);
+  };
+
+  // The plan and the ties are asked for together: the ties are only needed once
+  // the plan is read, so they add no waiting.
+  const wantsTies = Boolean(input.findTies) && exact && !edit && Boolean(story.trim());
+  const [first, found] = await Promise.all([
+    callModel({ edit, previous, temperature: baseTemperature }),
+    wantsTies ? readTies() : Promise.resolve([] as Tie[]),
+  ]);
+  ties = found;
+  let current = read(first);
+  let recutDone = false;
 
   // The words are not the author's: re-cut the pages here, and have the model
   // write only the pictures for them. No amount of asking is as sure as this.
   if (hasTextProblem(current.check)) {
-    const recut = splitStoryIntoPages(story, {
-      wordsPerPage: config.pageTarget?.wordsPerPage || Math.round(profile.density.targetWordsPerPage * language.wordCountFactor) || 40,
-      pages: config.pageTarget?.pages,
-    });
+    const recut = splitStoryIntoPages(story, { wordsPerPage, pages: piecesFor(current.doc), ties, locale });
     if (Date.now() - startedAt > RECUT_MAY_START_MS || recut.length === 0) {
       throw new Error("The page plan did not keep the story's words. Nothing was changed; please try again.");
     }
     console.warn(`[screenplay] pages did not carry the story; re-cut into ${recut.length} pages: ${current.check.problems[0]?.message}`);
     const raw = await callModel({ fixedPages: recut, temperature: 0.2 });
     current = read(withFixedTexts(raw, recut));
+    recutDone = true;
     if (hasTextProblem(current.check)) {
       throw new Error("The page plan did not keep the story's words. Nothing was changed; please try again.");
     }
@@ -468,6 +556,27 @@ export async function generateScreenplay(
     );
     // Keep the better of the two; a repair that loses the words never wins.
     if (repaired.check.score <= current.check.score) current = repaired;
+  }
+
+  // A page turn still goes through lines that belong together although fewer
+  // would do: the pages are cut here, where it costs least, and the model only
+  // writes the pictures for them. The pages are as many as the plan has, or as
+  // the book's page target asks.
+  if (!recutDone && hasCutProblem(current.check) && Date.now() - startedAt < RECUT_MAY_START_MS) {
+    const texts = current.doc.spreads.filter((s) => !s.wordless && (s.text ?? "").trim()).length;
+    const recut = splitStoryIntoPages(story, { wordsPerPage, pages: piecesFor(current.doc) ?? (texts || undefined), ties, locale });
+    if (recut.length > 0) {
+      try {
+        const raw = await callModel({ fixedPages: recut, temperature: 0.2 });
+        const cutPlan = read(withFixedTexts(raw, recut));
+        // A re-cut that costs the plan anything else is not taken.
+        if (!hasTextProblem(cutPlan.check) && cutPlan.check.score <= current.check.score) current = cutPlan;
+        else console.warn("[screenplay] the re-cut for page turns made the plan worse; kept the first plan");
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        console.warn(`[screenplay] re-cut for page turns skipped: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   // A second reading, for what only a reader notices: a picture that is wrong

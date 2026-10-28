@@ -901,6 +901,7 @@ export function registerAiRoutes(app: Express): void {
           previous,
           prompts,
           signal: requestDeadline(),
+          findTies: true,
         }),
         model.params,
       );

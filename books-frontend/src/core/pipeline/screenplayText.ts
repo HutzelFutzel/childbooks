@@ -6,6 +6,8 @@
  * characters, the sentence boundaries the platform's own segmenter reports. No
  * word lists and no language rules, so it reads a rhymed German story, a
  * Japanese one and an English one the same way.
+ *
+ * Choosing where the pages end is `screenplayCuts.ts`.
  */
 import { BREAK_MARKERS } from "../story/manuscriptShape";
 import { wordCount } from "../story/brief";
@@ -25,7 +27,7 @@ export function storyParts(story: string): string[] {
 }
 
 /** Blocks of one part: paragraphs and stanzas, split at blank lines. */
-function blocksOf(part: string): string[] {
+export function blocksOf(part: string): string[] {
   return part
     .split(/\n[^\S\n]*\n/u)
     .map((block) => block.trim())
@@ -114,88 +116,55 @@ export function splitVerseBlocks(story: string, pageTexts: string[]): { block: s
 }
 
 // ---------------------------------------------------------------------------
-// Cutting the story into pages without a model
+// Reading the story's sentences and sizes (the cutting itself is in screenplayCuts.ts)
 // ---------------------------------------------------------------------------
 
-function sentencesOf(text: string): string[] {
-  const Segmenter = (Intl as unknown as { Segmenter?: new (l?: string, o?: { granularity: string }) => { segment(t: string): Iterable<{ segment: string }> } }).Segmenter;
+type SentenceSegmenter = new (
+  locale?: string,
+  options?: { granularity: string },
+) => { segment(text: string): Iterable<{ segment: string; index: number }> };
+
+const segmenterOf = (): SentenceSegmenter | undefined => (Intl as unknown as { Segmenter?: SentenceSegmenter }).Segmenter;
+
+/** Where the platform's segmenter (or, without one, the end punctuation) ends each sentence of `text`: character offsets just after the sentence's last character. */
+export function sentenceEnds(text: string, locale?: string): Set<number> {
+  const Segmenter = segmenterOf();
+  const ends = new Set<number>();
   if (Segmenter) {
-    const out = [...new Segmenter(undefined, { granularity: "sentence" }).segment(text)]
-      .map((s) => s.segment.trim())
-      .filter(Boolean);
-    if (out.length > 0) return out;
+    try {
+      for (const { segment, index } of new Segmenter(locale, { granularity: "sentence" }).segment(text)) {
+        const end = index + segment.trimEnd().length;
+        if (end > index) ends.add(end);
+      }
+      if (ends.size > 0) return ends;
+    } catch {
+      // An unknown locale falls back to the punctuation below.
+    }
   }
-  return text
-    .split(/(?<=[.!?…。！？])\s+/u)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-interface Unit {
-  text: string;
-  words: number;
-  /** Put this between the unit and the one before it when they share a page. */
-  sep: string;
-}
-
-const weigh = (text: string) => Math.max(1, wordCount(text), Math.ceil([...text].length / 8));
-
-/** How much of a page a beat must fill before the next beat begins a page of its own. */
-const BEAT_SHARE = 0.35;
-
-export interface SplitOptions {
-  /** The words a page should carry. */
-  wordsPerPage: number;
-  /** When known, aims the cut at this many pages. */
-  pages?: number;
+  for (const match of text.matchAll(/[.!?…。！？]+["'”’»)\]]*(?=\s|$)/gu)) ends.add(match.index! + match[0].length);
+  if (text.trim()) ends.add(text.trimEnd().length);
+  return ends;
 }
 
 /**
- * Cuts the story into page texts at the boundaries the author wrote: a part the
- * author marked starts a new page, a stanza is never divided, a paragraph is
- * kept whole unless it alone is larger than a page, and then it is divided at
- * sentence ends. The words and their order are the story's own.
+ * The sentences of a text, in order, trimmed, each with the whitespace that
+ * stood before it. That gap is empty in a language written without spaces, so
+ * putting sentences back together with it gives the author's text again.
  */
-export function splitStoryIntoPages(story: string, options: SplitOptions): string[] {
-  const parts = storyParts(story);
-  const unitsOf = (part: string, limit: number): Unit[] => {
-    const units: Unit[] = [];
-    for (const block of blocksOf(part)) {
-      const size = weigh(block);
-      if (isVerseBlock(block) || size <= limit) {
-        units.push({ text: block, words: size, sep: "\n\n" });
-        continue;
-      }
-      sentencesOf(block).forEach((sentence, i) =>
-        units.push({ text: sentence, words: weigh(sentence), sep: i === 0 ? "\n\n" : " " }),
-      );
-    }
-    return units;
+export function sentenceSlices(text: string, locale?: string): { text: string; gap: string }[] {
+  const ends = [...sentenceEnds(text, locale)].sort((a, b) => a - b);
+  const out: { text: string; gap: string }[] = [];
+  let from = 0;
+  const take = (end: number) => {
+    const raw = text.slice(from, end);
+    const sentence = raw.trim();
+    if (sentence) out.push({ text: sentence, gap: raw.slice(0, raw.length - raw.trimStart().length) });
+    from = end;
   };
-
-  const total = parts.reduce((sum, part) => sum + weigh(part), 0);
-  const aimed = options.pages && options.pages > 0 ? Math.ceil(total / options.pages) : 0;
-  const target = Math.max(4, aimed || options.wordsPerPage || 40);
-  const limit = Math.ceil(target * 1.3);
-
-  const pages: string[] = [];
-  for (const part of parts) {
-    let current = "";
-    let used = 0;
-    for (const unit of unitsOf(part, limit)) {
-      // A new paragraph or stanza is a new beat: it starts a page once the page
-      // has something on it, rather than being packed up to the limit. Only the
-      // sentences of one long paragraph fill a page.
-      const beat = unit.sep !== " " && used >= target * BEAT_SHARE;
-      if (current && (beat || used + unit.words > limit)) {
-        pages.push(current);
-        current = "";
-        used = 0;
-      }
-      current = current ? `${current}${unit.sep}${unit.text}` : unit.text;
-      used += unit.words;
-    }
-    if (current) pages.push(current);
-  }
-  return pages;
+  for (const end of ends) take(end);
+  take(text.length);
+  return out;
 }
+
+/** How much page a text takes: words, or for text without spaces its length. */
+export const weigh = (text: string) => Math.max(1, wordCount(text), Math.ceil([...text].length / 8));

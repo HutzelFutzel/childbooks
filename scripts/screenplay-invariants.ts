@@ -23,11 +23,19 @@ import {
 import {
   firstTextMismatch,
   isVerseBlock,
-  splitStoryIntoPages,
   splitVerseBlocks,
   squash,
   verseBlocks,
 } from "../books-frontend/src/core/pipeline/screenplayText";
+import {
+  atomsOf,
+  inspectCuts,
+  optimalCuts,
+  sanitizeTies,
+  splitStoryIntoPages,
+  structuralTies,
+  type Tie,
+} from "../books-frontend/src/core/pipeline/screenplayCuts";
 import { inspectScreenplayDensity } from "../books-frontend/src/core/pipeline/screenplayFit";
 import { openaiTextProvider } from "../books-frontend/src/core/providers/openai";
 import { resolveAudienceOverlays } from "../books-frontend/src/core/prompts/audience";
@@ -129,6 +137,130 @@ const VERSE = "Der Mond schien hell,\nder Wind ging schnell.\n\nDie Katze lief f
   check(firstTextMismatch(japanese, japaneseCut) === null, "Text without spaces loses words when it is cut.");
   check(splitStoryIntoPages(japanese, { wordsPerPage: 6, pages: 4 }).length >= 2, "A page target isn't read.");
   check(splitStoryIntoPages("", { wordsPerPage: 10 }).length === 0, "An empty story is cut into pages.");
+}
+
+// --- Where a page turn costs least ------------------------------------------------------------------------
+
+{
+  const words = (story: string, pages: string[]) => firstTextMismatch(story, pages) === null;
+
+  // Lines are atoms, and a comma at the end of a line means its sentence goes on.
+  const four = "Roses are red,\nviolets are blue.\nSugar is sweet,\nand so are you.";
+  const atoms = atomsOf(four);
+  check(atoms.length === 4 && atoms.every((a) => a.line), "The lines of a stanza are not read as lines.");
+  check(atoms[0]!.open && !atoms[1]!.open && atoms[2]!.open && !atoms[3]!.open, "A line that goes on into the next isn't told from one that ends a sentence.");
+  const structural = structuralTies(atoms);
+  check(structural.filter((t) => t.kind === "stanza").length === 3, "The lines of one stanza aren't tied.");
+  check(structural.filter((t) => t.kind === "sentence").length === 2, "A sentence over a line break isn't tied.");
+
+  // Four lines in two couplets: whole, then 2 + 2, then the cheapest of 1 + 1 + 2, then one to a page.
+  const pagesOf = (n: number) => splitStoryIntoPages(four, { wordsPerPage: 40, pages: n });
+  check(pagesOf(1).length === 1 && words(four, pagesOf(1)), "Four lines don't make one page.");
+  const two = pagesOf(2);
+  check(two.length === 2 && two[0] === "Roses are red,\nviolets are blue." && two[1] === "Sugar is sweet,\nand so are you.", `Four lines aren't cut 2 + 2: ${JSON.stringify(two)}.`);
+  const three = pagesOf(3);
+  check(three.length === 3 && words(four, three) && three.some((p) => p.includes("\n")), `Three pages from four lines don't keep a pair: ${JSON.stringify(three)}.`);
+  const fourPages = pagesOf(4);
+  check(fourPages.length === 4 && fourPages.every((p) => !p.includes("\n")) && words(four, fourPages), `Four pages from four lines aren't one line each: ${JSON.stringify(fourPages)}.`);
+  check(pagesOf(9).length === 4, "More pages than lines make an empty page.");
+  check(optimalCuts(atoms, structural, { pieces: 2, target: 10, balance: true }).ends.join() === "2,4", "The cheapest cut of two couplets isn't between them.");
+
+  // A story stretched over twice its couplets parts each pair once and loses nothing.
+  const couplets = Array.from({ length: 12 }, (_, i) => `Line one of couplet ${i + 1},\nline two of couplet ${i + 1}.`).join("\n\n");
+  const stretched = splitStoryIntoPages(couplets, { wordsPerPage: 20, pages: 24 });
+  check(stretched.length === 24 && words(couplets, stretched), `A stretch to 24 pages isn't 24 pages: ${stretched.length}.`);
+  const natural = splitStoryIntoPages(couplets, { wordsPerPage: 20 });
+  check(natural.length === 12 && natural.every((p) => p.includes("\n")), "A story with no stretch parts a couplet.");
+  const tight = splitStoryIntoPages(couplets, { wordsPerPage: 20, pages: 12 });
+  check(tight.length === 12 && tight.every((p) => p.includes("\n")), "Twelve pages for twelve couplets parts a couplet.");
+  const between = splitStoryIntoPages(couplets, { wordsPerPage: 20, pages: 18 });
+  check(between.length === 18 && between.filter((p) => !p.includes("\n")).length === 12, "Eighteen pages for twelve couplets don't part exactly six of them.");
+
+  // Rhymes in an order only a reader hears (ABAB) are cut so that the fewest are parted.
+  const abab = "The sun was warm and bright,\nthe river ran so wide,\nwe played until the night,\nwith friends along the tide.";
+  const rhymes: Tie[] = [{ a: 0, b: 2, kind: "rhyme", weight: 30 }, { a: 1, b: 3, kind: "rhyme", weight: 30 }];
+  const aban = splitStoryIntoPages(abab, { wordsPerPage: 40, pages: 2, ties: rhymes });
+  check(aban[0] === "The sun was warm and bright," || aban[1] === "with friends along the tide.", `ABAB is cut through both rhymes: ${JSON.stringify(aban)}.`);
+  const aabb = "The cat sat on the mat,\nand wore a funny hat.\nThe dog ran in the park,\nand barked until it's dark.";
+  const pairs: Tie[] = [{ a: 0, b: 1, kind: "rhyme", weight: 30 }, { a: 2, b: 3, kind: "rhyme", weight: 30 }];
+  const aabbPages = splitStoryIntoPages(aabb, { wordsPerPage: 40, pages: 2, ties: pairs });
+  check(aabbPages.length === 2 && aabbPages[0]!.split("\n").length === 2, `AABB isn't cut between its pairs: ${JSON.stringify(aabbPages)}.`);
+
+  // A rhyme told in prose: two sentences of one paragraph stay together when one page has to go.
+  const told = "The fox met a crow.\n\nThe crow said hello, you know. The fox said bye, oh my.\n\nThey both went home.";
+  const toldAtoms = atomsOf(told);
+  check(toldAtoms.length === 4, `A paragraph of two sentences isn't two atoms: ${toldAtoms.length}.`);
+  const keep = splitStoryIntoPages(told, { wordsPerPage: 6, pages: 3, ties: [{ a: 1, b: 2, kind: "rhyme", weight: 30 }] });
+  check(keep.length === 3 && keep.some((p) => p.includes("hello, you know. The fox said bye")), `A tied rhyme in prose is parted: ${JSON.stringify(keep)}.`);
+
+  // The author's own pages are never crossed, however many pages are asked for, and a language with no spaces has none put in.
+  const marked = storyForPages(readManuscript("Page 1\nA one. A two. A three.\n\nPage 2\nB one. B two."));
+  const markedPages = splitStoryIntoPages(marked, { wordsPerPage: 40, pages: 2 });
+  check(markedPages.length === 2 && markedPages[0]!.startsWith("A one") && markedPages[1]!.startsWith("B one"), `A page of the author's is crossed: ${JSON.stringify(markedPages)}.`);
+  const markedMore = splitStoryIntoPages(marked, { wordsPerPage: 40, pages: 4 });
+  check(markedMore.length === 4 && markedMore[0]!.startsWith("A") && markedMore[1]!.startsWith("A") && markedMore[3]!.startsWith("B"), `Pages asked for beyond the author's two aren't cut inside them: ${JSON.stringify(markedMore)}.`);
+  check(markedMore.slice(0, 2).every((p) => !p.includes("B")), "A page of the author's second part holds words of the first.");
+  const japanese = "あさになりました。ミアはおきました。";
+  check(splitStoryIntoPages(japanese, { wordsPerPage: 40 })[0] === japanese, "A space is put between sentences written without them.");
+  const japaneseTwo = splitStoryIntoPages(japanese, { wordsPerPage: 40, pages: 2 });
+  check(japaneseTwo.length === 2 && words(japanese, japaneseTwo), "A sentence in Japanese is lost when it is cut.");
+}
+
+// --- Reading a plan's page turns --------------------------------------------------------------------------
+
+{
+  const COUPLETS = "Der Mond schien hell,\nder Wind ging schnell.\n\nDie Katze lief fort,\nan einen stillen Ort.";
+  const lines = ["Der Mond schien hell,", "der Wind ging schnell.", "Die Katze lief fort,", "an einen stillen Ort."];
+  const whole = inspectCuts(COUPLETS, [lines.slice(0, 2).join("\n"), lines.slice(2).join("\n")]);
+  check(whole !== null && whole.excess.length === 0 && whole.cost === 0, "Two couplets on two pages are reported as cut.");
+
+  // Four pages from four lines have to part both couplets: that costs nothing more than any plan could.
+  const forced = inspectCuts(COUPLETS, lines);
+  check(forced !== null && forced.excess.length === 0 && forced.cost === forced.optimum && forced.cost > 0, "A stretch that can't avoid parting a couplet is reported.");
+
+  // Three pages need only one couplet parted. Parting both is more than it takes.
+  const needless = inspectCuts(COUPLETS, [lines[0]!, `${lines[1]}\n\n${lines[2]}`, lines[3]!]);
+  check(needless !== null && needless.excess.length > 0 && needless.cost > needless.optimum, "A plan that parts both couplets when one would do isn't reported.");
+  const cheap = inspectCuts(COUPLETS, [lines.slice(0, 2).join("\n"), lines[2]!, lines[3]!]);
+  check(cheap !== null && cheap.excess.length === 0, "A plan that parts only the one couplet it has to is reported.");
+
+  // A turn in the middle of a line is the worst there is, and is found on the page that ends there.
+  const mid = inspectCuts(COUPLETS, ["Der Mond schien", "hell,\nder Wind ging schnell.\n\nDie Katze lief fort,\nan einen stillen Ort."]);
+  check(mid !== null && mid.excess.length === 1 && mid.excess[0]!.page === 1 && mid.excess[0]!.kind === "sentence", "A page that ends inside a line isn't found.");
+
+  // A refrain that comes back isn't mistaken for its first telling.
+  const REFRAIN = "Ho ho, said the owl,\nho ho, said the night.\n\nThe moon came up slow.\n\nHo ho, said the owl,\nho ho, said the night.";
+  const refrainPages = ["Ho ho, said the owl,\nho ho, said the night.", "The moon came up slow.", "Ho ho, said the owl,\nho ho, said the night."];
+  const refrain = inspectCuts(REFRAIN, refrainPages);
+  check(refrain !== null && refrain.cost === 0 && refrain.excess.length === 0, "A repeated refrain is read as cut.");
+  check(inspectCuts(REFRAIN, [refrainPages[1]!, refrainPages[0]!, refrainPages[2]!]) === null, "Pages that don't line up with the story are judged.");
+
+  // A model's ties count when they are given, and not otherwise.
+  const ABAB = "The sun was warm and bright,\nthe river ran so wide,\nwe played until the night,\nwith friends along the tide.";
+  const abab = [ "The sun was warm and bright,\nthe river ran so wide,", "we played until the night,\nwith friends along the tide." ];
+  const rhymes: Tie[] = [{ a: 0, b: 2, kind: "rhyme", weight: 30 }, { a: 1, b: 3, kind: "rhyme", weight: 30 }];
+  check(inspectCuts(ABAB, abab)?.excess.length === 0, "Two halves of a stanza are reported without any ties.");
+  check((inspectCuts(ABAB, abab, { ties: rhymes })?.excess.length ?? 0) > 0, "Parting both rhymes isn't reported when the rhymes are known.");
+  check(inspectCuts("One. Two. Three.", ["One. Two.", "Three."])?.excess.length === 0, "A story of prose is held to its cuts.");
+
+  // Ties from a model are only kept when they make sense; its numbers count from 1.
+  const sample = atomsOf("Roses are red,\nviolets are blue.\nSugar is sweet,\nand so are you.\n\nPage two starts here.");
+  const kept = sanitizeTies(
+    [
+      { a: 1, b: 2, kind: "rhyme" },
+      { a: 1, b: 2, kind: "rhyme" },
+      { a: 3, b: 4, kind: "poem" },
+      { a: 0, b: 2, kind: "rhyme" },
+      { a: 2, b: 99, kind: "refrain" },
+      { a: 4, b: 3, kind: "rhyme" },
+      { a: 1.5, b: 3, kind: "rhyme" },
+      "nothing",
+      { a: 3, b: 4, kind: "thought" },
+    ],
+    sample,
+  );
+  check(kept.length === 2 && kept[0]!.a === 0 && kept[0]!.b === 1 && kept[1]!.kind === "thought", `A model's ties aren't read as they should: ${JSON.stringify(kept)}.`);
+  check(sanitizeTies("nothing", sample).length === 0 && sanitizeTies(undefined, sample).length === 0, "Ties that aren't a list are read.");
 }
 
 // --- Who is on a page -------------------------------------------------------------------------------------
@@ -418,6 +550,28 @@ const PAGES = ["Mia woke up early.", "She looked out of the window. The garden w
   check(verse.calls.length === 2 && verse.calls[0]!.system.includes("VERSE:"), "Verse isn't told to the plan, or a cut stanza isn't repaired.");
   check(verse.doc.spreads[0]!.text === "Der Mond schien hell,\nder Wind ging schnell.", "The stanza was cut in the end.");
 
+  // A model that keeps cutting the stanza is not asked a third time: the pages are cut in code, the model writes the pictures.
+  const stubborn = await run({ storyText: VERSE, contentLocale: "de-DE" }, [cut, cut, whole]);
+  check(stubborn.calls.length === 3 && stubborn.calls[2]!.user.includes("THE PAGES ARE ALREADY CUT"), `A stanza the model keeps cutting wasn't re-cut in code: ${stubborn.calls.length} calls.`);
+  check(splitVerseBlocks(VERSE, stubborn.doc.spreads.map((s) => s.text)).length === 0, "A re-cut plan still divides a stanza.");
+  check(firstTextMismatch(VERSE, stubborn.doc.spreads.map((s) => s.text)) === null, "A re-cut for page turns changed the words.");
+  check(stubborn.doc.spreads.every((s) => s.illustration), "A page cut in code has no picture brief.");
+
+  // A page turn that cannot be avoided is not sent back: when the page count asks for more pages than the story has
+  // stanzas, the plan that parts the fewest lines is the right one.
+  const target = { pages: 3, wordsPerPage: 10, case: "spread" as const };
+  const needed = reply(["Der Mond schien hell,\nder Wind ging schnell.", "Die Katze lief fort,", "an einen stillen Ort.", "Da kam der Morgen, rosa und weit, und alle Tiere waren bereit für den neuen Tag."]);
+  const stretchedOk = await run({ storyText: VERSE, contentLocale: "de-DE", pageTarget: { ...target, pages: 4 } }, [needed]);
+  check(stretchedOk.calls.length === 1, `A stretch that must part one pair was sent back: ${stretchedOk.calls.length} calls.`);
+  const wasteful = reply(["Der Mond schien hell,", "der Wind ging schnell.", "Die Katze lief fort,", "an einen stillen Ort.", "Da kam der Morgen, rosa und weit, und alle Tiere waren bereit für den neuen Tag."]);
+  const stretchedBad = await run({ storyText: VERSE, contentLocale: "de-DE", pageTarget: { ...target, pages: 5 } }, [wasteful]);
+  check(stretchedBad.calls.length === 1, "A stretch that has to part both pairs was sent back.");
+  const needless = reply(["Der Mond schien hell,", "der Wind ging schnell.\n\nDie Katze lief fort,", "an einen stillen Ort.", "Da kam der Morgen, rosa und weit, und alle Tiere waren bereit für den neuen Tag."]);
+  const stretchedFixed = await run({ storyText: VERSE, contentLocale: "de-DE", pageTarget: { ...target, pages: 4 } }, [needless, needless, needed]);
+  check(stretchedFixed.calls.length === 3, `A stretch that parts both pairs when one would do wasn't re-cut: ${stretchedFixed.calls.length} calls.`);
+  check(stretchedFixed.doc.spreads.filter((s) => s.text.includes("\n")).length >= 1 && stretchedFixed.doc.spreads.length === 4, "A re-cut stretch isn't the pages that part the least.");
+  check(stretchedFixed.calls[0]!.system.includes("PAGE TURNS IN VERSE AND PATTERNS"), "The plan isn't told where a page turn may fall.");
+
   // A model that writes the line break as two characters still gives a line break.
   const escaped = reply(["Der Mond schien hell,\\nder Wind ging schnell.", "Die Katze lief fort,\\nan einen stillen Ort.", "Da kam der Morgen, rosa und weit, und alle Tiere waren bereit für den neuen Tag."]);
   const fixed = await run({ storyText: VERSE, contentLocale: "de-DE" }, [escaped]);
@@ -463,6 +617,85 @@ const PAGES = ["Mia woke up early.", "She looked out of the window. The garden w
 
   // Never on a plan the reader's own request is changing, and never unless asked for.
   check((await run({}, [reply(PAGES)])).calls.length === 1, "A plan is reviewed without being asked.");
+}
+
+// --- Lines that belong together, found by a model ---------------------------------------------------------
+
+/** Like `run`, but the ties call is answered by its own reply and asked for, whatever order the calls come in. */
+async function runWithTies(
+  config: Partial<BookConfig>,
+  planReplies: unknown[],
+  tiesReply: unknown,
+  options: { findTies?: boolean; edit?: string } = {},
+): Promise<{ doc: ScreenplayDoc; calls: (Call & { schema: string })[] }> {
+  const calls: (Call & { schema: string })[] = [];
+  const provider = openaiTextProvider as unknown as { generateStructured: (creds: unknown, req: { schemaName?: string; messages: { content: string }[]; temperature?: number }) => Promise<unknown> };
+  const original = provider.generateStructured;
+  let plans = 0;
+  provider.generateStructured = async (_creds, req) => {
+    const schema = req.schemaName ?? "";
+    calls.push({ schema, system: req.messages[0]!.content, user: req.messages[1]!.content, temperature: req.temperature });
+    if (schema === "screenplayTies") {
+      if (tiesReply instanceof Error) throw tiesReply;
+      return JSON.parse(JSON.stringify(tiesReply));
+    }
+    const next = planReplies[Math.min(plans, planReplies.length - 1)];
+    plans += 1;
+    return JSON.parse(JSON.stringify(next));
+  };
+  try {
+    const doc = await generateScreenplay({
+      config: { ...createDefaultConfig("en-US"), textModel: { provider: "openai", id: "stub" }, storyBrief: createDefaultStoryBrief("guided"), storyText: STORY, ...config },
+      anchors: CAST,
+      creds: { apiKey: "stub" },
+      model: "stub",
+      findTies: options.findTies ?? true,
+      ...(options.edit ? { edit: options.edit, previous: plan(PAGES) } : {}),
+    });
+    return { doc, calls };
+  } finally {
+    provider.generateStructured = original;
+  }
+}
+
+{
+  // Two sentences that rhyme, in one paragraph: nothing in the layout says they belong together.
+  const TOLD = "The fox met a crow.\n\nThe crow said hello, you know. The fox said bye, oh my.\n\nThey both went home.";
+  // Three pages for four sentences: one of the two merges is free, and only one of them parts the rhyme.
+  const apart = ["The fox met a crow.\n\nThe crow said hello, you know.", "The fox said bye, oh my.", "They both went home."];
+  const together = ["The fox met a crow.", "The crow said hello, you know. The fox said bye, oh my.", "They both went home."];
+  const tied = { ties: [{ a: 2, b: 3, kind: "rhyme" }] };
+
+  const blind = await runWithTies({ storyText: TOLD }, [reply(apart)], { ties: [] });
+  check(blind.calls.length === 2 && blind.calls.filter((c) => c.schema === "screenplayTies").length === 1, "The ties aren't asked for once, next to the plan.");
+  check(blind.doc.spreads.length === 3 && blind.doc.spreads[1]!.text === "The fox said bye, oh my.", "A plan with no ties known was sent back.");
+
+  const seen = await runWithTies({ storyText: TOLD }, [reply(apart), reply(together)], tied);
+  check(seen.calls.length === 3, `A rhyme parted in prose wasn't sent back once: ${seen.calls.length} calls.`);
+  check(seen.doc.spreads.length === 3 && seen.doc.spreads[1]!.text.includes("you know. The fox said bye"), "The rhyming sentences were not kept on one page.");
+  const repair = seen.calls.find((c) => c.schema !== "screenplayTies" && c.user.includes("REVISION REQUEST"));
+  check(Boolean(repair?.user.includes("a rhyming pair")), "The repair doesn't say what belongs together.");
+  const tiesCall = seen.calls.find((c) => c.schema === "screenplayTies")!;
+  check(tiesCall.user.includes("2. The crow said hello, you know.") && tiesCall.user.includes("3. The fox said bye, oh my.") && tiesCall.temperature === 0, "The ties call isn't given the story's sentences numbered, or isn't made at a steady temperature.");
+  check(!tiesCall.user.includes("ANCHORS") && !tiesCall.system.includes("illustration"), "The ties call is given the page plan's prompt.");
+
+  // When the model keeps parting the rhyme, the pages are cut in code.
+  const stuck = await runWithTies({ storyText: TOLD }, [reply(apart), reply(apart), reply(together)], tied);
+  check(stuck.calls.length === 4 && stuck.doc.spreads.some((s) => s.text.includes("you know. The fox said bye")), `A rhyme the model keeps parting wasn't re-cut: ${stuck.calls.length} calls.`);
+
+  // The ties are an extra: a call that fails, answers nonsense, or isn't made never costs the plan anything.
+  const failed = await runWithTies({ storyText: TOLD }, [reply(apart)], new Error("down"));
+  check(failed.doc.spreads.length === 3 && failed.calls.filter((c) => c.schema !== "screenplayTies").length === 1, "A failed ties call changed the plan or its repair.");
+  const nonsense = await runWithTies({ storyText: TOLD }, [reply(apart)], { ties: [{ a: 9, b: 1, kind: "rhyme" }, { a: "x" }] });
+  check(nonsense.doc.spreads.length === 3 && nonsense.calls.length === 2, "A nonsense reply from the ties call changed the plan.");
+  const off = await runWithTies({ storyText: TOLD }, [reply(apart)], tied, { findTies: false });
+  check(off.calls.length === 1 && off.calls[0]!.schema === "screenplay", "The ties are asked for when they weren't wanted.");
+  const edited = await runWithTies({ storyText: TOLD }, [reply(apart)], tied, { edit: "Make page 2 calmer." });
+  check(edited.calls.every((c) => c.schema !== "screenplayTies"), "The ties are asked for on a revision.");
+  const studio = await runWithTies({ storyBrief: undefined, textHandling: "creative", storyText: TOLD }, [reply(apart)], tied);
+  check(studio.calls.every((c) => c.schema !== "screenplayTies"), "The ties are asked for when the words may be changed.");
+  const prose = await runWithTies({ storyText: "Mia woke up." }, [reply(["Mia woke up."])], tied);
+  check(prose.calls.every((c) => c.schema !== "screenplayTies"), "The ties are asked for a story of one sentence.");
 }
 
 // --- What the illustrator is told ------------------------------------------------------------------------

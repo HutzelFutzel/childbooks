@@ -426,7 +426,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("text", "{{textGuidance}}"),
       blk(
         "verse",
-        "VERSE: parts of this story are written as lines. Keep every line break exactly as written, in the page text. A stanza (lines with no blank line between them) is never divided between pages, and neither is a repeated refrain: a page may only begin between stanzas or between paragraphs.",
+        "VERSE: parts of this story are written as lines. Keep every line break exactly as written, in the page text. A stanza (lines with no blank line between them) stays on one page, and so does a repeated refrain with the lines it answers: a page turn falls between stanzas or between paragraphs. Only when the page count asked for cannot be reached otherwise is a stanza divided, and then as the PAGE TURNS IN VERSE AND PATTERNS rule says.",
         "hasVerse",
       ),
       blk(
@@ -449,7 +449,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "pageSpread",
-        "Reach that count only by giving the moments the story already has more room — split a moment across pages between its sentences or paragraphs (never inside a stanza), let a repetition this reader enjoys carry onto the next page. Never add an event, a character or a place the story does not have.",
+        "Reach that count only by giving the moments the story already has more room — split a moment across pages between its paragraphs, stanzas or sentences, and never through lines that belong together unless there is no other way to reach the count; let a repetition this reader enjoys carry onto the next page. Never add an event, a character or a place the story does not have.",
         "isSpread",
       ),
       blk(
@@ -459,7 +459,12 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "pacing",
-        "Pace the story well across the pages. Where the text does not fit the pacing above, split a long passage across two pages between its sentences or paragraphs (never inside a stanza) or merge two thin ones — do not overload a single page.",
+        "Pace the story well across the pages. Where the text does not fit the pacing above, split a long passage across two pages between its paragraphs or stanzas, or between sentences that do not belong together, or merge two thin ones — do not overload a single page.",
+      ),
+      // A new block, so a template an admin has already saved gains it too.
+      blk(
+        "pageTurnTies",
+        "PAGE TURNS IN VERSE AND PATTERNS: never put a page turn through a line, or through a sentence that runs over a line break. Keep lines that rhyme together, a refrain with the lines it answers, and a repeated pattern on one page whenever the page count allows. When the page count asked for cannot be reached without dividing them, divide where it parts the least: between stanzas first, then between pairs of rhyming lines (a stanza of four lines becomes two and two), and between the two lines of a rhyming pair only when nothing else is left (then one line to a page is allowed). If a rhyme comes in an order like ABAB, divide so that as few rhyming lines as possible are parted.",
       ),
       blk(
         "staging",
@@ -548,6 +553,29 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("story", "\nSTORY:\n{{story}}"),
       blk("plan", "\nPAGE PLAN:\n{{planText}}"),
     ],
+  },
+
+  // core/pipeline/screenplay.ts → readTies
+  screenplayTies: {
+    system: [
+      blk(
+        "role",
+        "You read a children's picture-book story that is going to be cut into pages, and you mark which of its lines belong together, so that a page turn is never put between them. You never change, add or reorder a word: you only report which numbered lines belong with which.",
+      ),
+      blk(
+        "kinds",
+        "Report a tie between two lines (their numbers, the smaller first) of one of these kinds. rhyme: the two lines end in the same sound, or answer each other as a rhyming pair, in the story's own language; slant rhymes count, and so does a rhyme in the middle of a stanza. refrain: a line that repeats, or nearly repeats, an earlier one, tied to the line it repeats. pattern: lines built the same way that go together as a run (a list, a counting or cumulative sequence, a repeated question and its answer). thought: two lines that are one sentence or one thought and cannot be read apart.",
+      ),
+      blk(
+        "limits",
+        "Tie only lines at most {{maxSpan}} lines apart and in the same part of the story. Tie a line to at most three others. Do not tie lines merely because they are next to each other: a tie means a reader would be hurt by a page turn between them. Prose with no rhyme or pattern has no ties, so return an empty list for it.",
+      ),
+      blk(
+        "output",
+        'Return {"ties": [{"a": 3, "b": 4, "kind": "rhyme"}, …]}: "a" and "b" are the line numbers shown, and "kind" is rhyme, refrain, pattern or thought.',
+      ),
+    ],
+    user: [blk("story", "THE STORY, one numbered line per verse line or sentence:\n{{story}}")],
   },
 
   // core/pipeline/localize.ts → locateSubject
@@ -2135,6 +2163,21 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("safetyList", "The age band's 'never include' list.", SAFETY_SAMPLE),
         ],
         sampleFlags: { hasSafety: true },
+      },
+      {
+        key: "screenplayTies",
+        label: "Screenplay ties",
+        description:
+          "Reads the story's numbered lines and sentences and reports which belong together (rhymes, refrains, repeated patterns), so the page plan never puts a page turn between them. It only moves page turns; it never changes a word.",
+        variables: [
+          V(
+            "story",
+            "The story, one numbered line per verse line or sentence, with a blank line between paragraphs.",
+            "1. Der Mond schien hell,\n2. der Wind ging schnell.\n\n3. Die Katze lief fort,\n4. an einen stillen Ort.",
+          ),
+          V("maxSpan", "The most lines apart two tied lines may be.", "8"),
+        ],
+        sampleFlags: {},
       },
     ],
   },

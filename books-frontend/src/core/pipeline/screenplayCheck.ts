@@ -15,7 +15,8 @@ import type { Anchor, CoverSpec, ScreenplayDoc, ScreenplaySpread } from "../type
 import { anchorNameKeys, normalizeAnchorName } from "../book/anchorRefs";
 import { paginate } from "./pagination";
 import { inspectPageSentences, inspectScreenplayDensity } from "./screenplayFit";
-import { firstTextMismatch, splitVerseBlocks } from "./screenplayText";
+import { describeCut, inspectCuts, type Tie } from "./screenplayCuts";
+import { firstTextMismatch } from "./screenplayText";
 
 export type ScreenplayProblemCode =
   | "text-mismatch"
@@ -153,6 +154,10 @@ export interface ScreenplayCheckInput {
   names: readonly NameIssue[];
   /** How many pages the plan may leave wordless. */
   wordlessAllowed: number;
+  /** Lines that belong together which only a reader hears (rhymes, refrains); the text's own structure is always read. */
+  ties?: readonly Tie[];
+  /** The book's language, for reading sentences. */
+  locale?: string;
 }
 
 export interface ScreenplayCheck {
@@ -199,13 +204,11 @@ export function inspectScreenplay(input: ScreenplayCheckInput): ScreenplayCheck 
           : `The author's words are not all on the pages: the story continues "${mismatch.expected}" after the last page.`,
       });
     } else {
-      for (const cut of splitVerseBlocks(story, pageTexts)) {
-        add({
-          code: "verse-split",
-          page: cut.page,
-          repair: true,
-          message: `The lines "${cut.block}…" are one stanza and must stay together on one page.`,
-        });
+      // A page turn may fall through lines that belong together only when no
+      // plan of this many pages could avoid it; then it falls where it costs least.
+      const cuts = inspectCuts(story, pageTexts, { ties: input.ties, locale: input.locale });
+      for (const cut of cuts?.excess ?? []) {
+        add({ code: "verse-split", page: cut.page, repair: true, message: describeCut(cut) });
       }
     }
   }

@@ -1738,6 +1738,7 @@ async function renderTask(
         prompts,
         signal,
         review: true,
+        findTies: true,
       }),
       model.params,
     );
