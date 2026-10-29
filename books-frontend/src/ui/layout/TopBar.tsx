@@ -2,6 +2,8 @@
 
 import { BookOpen } from "lucide-react";
 import { useAppConfigStore } from "../../state/appConfigStore";
+import { BrandMark } from "./BrandMark";
+import { JobThread } from "./JobProgress";
 
 export interface TopBarProps {
   /** Optional center / breadcrumb slot. */
@@ -13,51 +15,42 @@ export interface TopBarProps {
   right?: React.ReactNode;
 }
 
+/**
+ * Workspace bar (Studio, Account, Admin): the same paper, hairline and
+ * Fredoka type as the marketing margin, but short and quiet, so the book stays
+ * the subject. No ribbon here; a coral thread along the bottom edge fills
+ * while generation jobs run.
+ */
 export function TopBar({ center, left, contextLabel, right }: TopBarProps) {
   const branding = useAppConfigStore((s) => s.branding);
 
   return (
-    <header className="sticky top-0 z-30 flex h-13 items-center justify-between gap-2 border-b border-ink-900/[0.08] bg-white/95 px-2.5 backdrop-blur-md sm:px-4">
+    <header className="sticky top-0 z-30 flex h-13 items-center justify-between gap-2 border-b border-ink-900/12 bg-canvas/96 px-2.5 backdrop-blur-sm sm:px-4">
       <div className="flex min-w-0 shrink items-center gap-2">
         {left}
         {contextLabel ? (
-          <div className="flex min-w-0 items-center gap-2 border-l border-ink-900/10 pl-2 sm:pl-3">
-            <span className="hidden size-6 shrink-0 items-center justify-center rounded-md bg-ink-900/[0.04] text-ink-700 ring-1 ring-inset ring-ink-900/[0.07] sm:inline-flex">
-              <BookOpen className="size-3.5" />
-            </span>
-            <p className="truncate text-sm font-semibold tracking-[-0.01em] text-ink-900">{contextLabel}</p>
+          <div className="flex min-w-0 items-center gap-2 border-l border-ink-900/12 pl-2 sm:pl-3">
+            <BookOpen aria-hidden className="hidden size-4 shrink-0 text-brand-600 sm:block" />
+            <p className="truncate font-display text-[15px] font-semibold tracking-[-0.01em] text-ink-900">
+              {contextLabel}
+            </p>
           </div>
         ) : (
-          <div className="flex min-w-0 items-center gap-2">
-            {branding.logo?.imageUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={branding.logo.imageUrl} alt={branding.brandName} className="h-9 w-auto shrink-0" />
-            ) : (
-              <>
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-600 text-(--color-brand-foreground) shadow-soft">
-                  {branding.icon?.imageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={branding.icon.imageUrl} alt="" className="size-6 object-contain" />
-                  ) : (
-                    <BookOpen className="size-5" />
-                  )}
-                </span>
-                {/* Tagline drops out first on narrow screens — the brand name
-                    alone still identifies the app without crowding the Sparks
-                    badge / auth menu on the right. */}
-                <div className="min-w-0 leading-tight">
-                  <p className="truncate text-sm font-bold text-ink-900">{branding.brandName}</p>
-                  <p className="hidden truncate text-[11px] text-ink-400 sm:block">{branding.tagline}</p>
-                </div>
-              </>
-            )}
-          </div>
+          <BrandMark
+            siteName={branding.brandName}
+            logoUrl={branding.logo?.imageUrl}
+            iconUrl={branding.icon?.imageUrl}
+            tagline={branding.tagline}
+            size="sm"
+          />
         )}
       </div>
 
       <div className="hidden md:block">{center}</div>
 
-      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">{right}</div>
+      <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">{right}</div>
+
+      <JobThread />
     </header>
   );
 }

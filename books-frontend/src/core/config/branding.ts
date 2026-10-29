@@ -67,7 +67,11 @@ export type BrandAssetSlot =
   | "defaultCoverFrontPortrait"
   | "defaultCoverBackPortrait"
   | "backCoverLogo"
-  | "guideAvatar";
+  | "guideAvatar"
+  | "contactMascot"
+  | "footerMascotLeft"
+  | "footerMascotCenter"
+  | "footerMascotRight";
 
 export const BRAND_ASSET_SLOTS: BrandAssetSlot[] = [
   "logo",
@@ -83,6 +87,10 @@ export const BRAND_ASSET_SLOTS: BrandAssetSlot[] = [
   "defaultCoverBackPortrait",
   "backCoverLogo",
   "guideAvatar",
+  "contactMascot",
+  "footerMascotLeft",
+  "footerMascotCenter",
+  "footerMascotRight",
 ];
 
 /** Brand colors (hex). `primary` also drives the browser theme color. */
@@ -130,6 +138,17 @@ export interface BrandingConfig {
   /** Profile picture of the guide character in the Chat studio. */
   guideAvatar: BrandAsset | null;
   /**
+   * Mascot illustration shown on the Contact modal & `/contact` correspondence
+   * card (defaults to the built-in Hugo hedgehog SVG placeholder when null).
+   */
+  contactMascot: BrandAsset | null;
+  /** Left character in the footer colophon curtain-call (defaults to Momo the Mole SVG). */
+  footerMascotLeft: BrandAsset | null;
+  /** Center character in the footer colophon curtain-call (defaults to Cleo the Cat SVG). */
+  footerMascotCenter: BrandAsset | null;
+  /** Right character in the footer colophon curtain-call (defaults to Scout the Squirrel SVG). */
+  footerMascotRight: BrandAsset | null;
+  /**
    * Fixed edge of {@link backCoverLogo}, in centimetres. Landscape logos
    * (wider than tall) get this as their *height*; portrait / square logos get
    * this as their *width* — the other edge follows the file's own aspect
@@ -176,6 +195,10 @@ export function createDefaultBrandingConfig(): BrandingConfig {
     defaultCoverBackPortrait: null,
     backCoverLogo: null,
     guideAvatar: null,
+    contactMascot: null,
+    footerMascotLeft: null,
+    footerMascotCenter: null,
+    footerMascotRight: null,
     backCoverLogoSizeCm: DEFAULT_BACK_COVER_LOGO_SIZE_CM,
     colors: { primary: "#f96a4d", accent: "#f79b04" },
     watermark: null,
@@ -288,6 +311,10 @@ export function normalizeBrandingConfig(input: unknown): BrandingConfig {
     defaultCoverBackPortrait: normalizeAsset(b.defaultCoverBackPortrait),
     backCoverLogo: normalizeAsset(b.backCoverLogo),
     guideAvatar: normalizeAsset(b.guideAvatar),
+    contactMascot: normalizeAsset(b.contactMascot),
+    footerMascotLeft: normalizeAsset(b.footerMascotLeft),
+    footerMascotCenter: normalizeAsset(b.footerMascotCenter),
+    footerMascotRight: normalizeAsset(b.footerMascotRight),
     backCoverLogoSizeCm: clamp(
       b.backCoverLogoSizeCm,
       MIN_BACK_COVER_LOGO_SIZE_CM,

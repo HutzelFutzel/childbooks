@@ -53,7 +53,7 @@ export function HeroOnRamp({ text }: { text: SiteTextMap }) {
         <button
           type="submit"
           disabled={isSubmitting}
-          className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-full bg-linear-to-b from-brand-500 to-brand-600 px-6 text-base font-semibold text-(--color-brand-foreground) shadow-soft transition-all hover:from-brand-600 hover:to-brand-700 active:scale-[0.98] disabled:opacity-80"
+          className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-full bg-linear-to-b from-brand-500 to-brand-600 px-6 text-base font-medium text-(--color-brand-foreground) [text-shadow:0_1px_1.5px_rgba(20,22,58,0.2)] shadow-soft transition-all hover:from-brand-600 hover:to-brand-700 active:scale-[0.98] disabled:opacity-80"
         >
           {isSubmitting ? (
             <>

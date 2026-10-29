@@ -144,7 +144,7 @@ export function SparksBadge({ walletOnly = false }: { /** Mount just the wallet 
           className={`inline-flex items-center gap-1.5 rounded-full py-1 pl-2.5 pr-1.5 text-sm ring-1 ring-inset transition ${
             low
               ? "bg-amber-50 font-semibold text-amber-700 ring-amber-200 group-hover:bg-amber-100"
-              : "bg-white/60 font-medium text-ink-500 ring-ink-200/70 group-hover:bg-white group-hover:text-ink-700"
+              : "bg-transparent font-medium text-ink-600 ring-ink-900/12 group-hover:bg-ink-900/[0.04] group-hover:text-ink-900"
           }`}
           title="Your Sparks"
         >

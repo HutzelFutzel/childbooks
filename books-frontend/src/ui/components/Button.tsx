@@ -19,7 +19,7 @@ export interface ButtonProps
 
 const VARIANTS: Record<Variant, string> = {
   primary:
-    "bg-gradient-to-b from-brand-500 to-brand-600 text-(--color-brand-foreground) shadow-soft hover:from-brand-600 hover:to-brand-700 focus-visible:ring-brand-400",
+    "bg-gradient-to-b from-brand-500 to-brand-600 text-(--color-brand-foreground) [text-shadow:0_1px_1.5px_rgba(20,22,58,0.2)] shadow-soft hover:from-brand-600 hover:to-brand-700 focus-visible:ring-brand-400",
   secondary:
     "bg-white text-ink-700 ring-1 ring-inset ring-ink-200 hover:bg-ink-50 focus-visible:ring-brand-400",
   ghost:

@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { popIn } from "../lib/motion";
 import { cn } from "../lib/cn";
 
@@ -24,10 +24,12 @@ export interface PopoverProps {
   children: ReactNode | ((close: () => void) => ReactNode);
   align?: "start" | "center" | "end";
   side?: "bottom" | "top";
-  /** Width class for the panel. */
+  /** Width / surface classes for the panel. */
   panelClassName?: string;
   /** Open on hover as well as click (still tap-friendly). */
   openOnHover?: boolean;
+  /** Optional custom motion variants (defaults to `popIn`). */
+  variants?: Variants;
 }
 
 /** Gap between the trigger and the panel, matching the old mb-2 / mt-2 (0.5rem). */
@@ -55,6 +57,7 @@ export function Popover({
   side = "bottom",
   panelClassName,
   openOnHover = false,
+  variants = popIn,
 }: PopoverProps) {
   const [open, setOpen] = useState(false);
   const [style, setStyle] = useState<CSSProperties | null>(null);
@@ -239,7 +242,7 @@ export function Popover({
                 id={id}
                 role="dialog"
                 ref={panelRef}
-                variants={popIn}
+                variants={variants}
                 initial="hidden"
                 animate="show"
                 exit="exit"

@@ -18,6 +18,34 @@ function formatElapsed(ms: number): string {
 }
 
 /**
+ * A 2px coral thread along the bottom edge of the workspace bar that fills as
+ * generation tasks finish: the book is being made. Renders nothing when idle.
+ * Mount inside a `relative` header.
+ */
+export function JobThread() {
+  const active = useJobsStore((s) => s.active);
+  if (active.length === 0) return null;
+  const total = active.reduce((n, j) => n + j.total, 0);
+  const done = active.reduce((n, j) => n + j.completed + j.failed, 0);
+  const pct = total > 0 ? Math.min(100, Math.max(4, (done / total) * 100)) : 4;
+  return (
+    <div
+      role="progressbar"
+      aria-label="Generation progress"
+      aria-valuemin={0}
+      aria-valuemax={total}
+      aria-valuenow={done}
+      className="pointer-events-none absolute inset-x-0 -bottom-px h-[2px] bg-brand-600/12"
+    >
+      <div
+        className="h-full bg-brand-600 transition-[width] duration-700 ease-out motion-reduce:transition-none"
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
+/**
  * Compact indicator for in-flight generation jobs. Because generation runs
  * server-side, this stays accurate even across refreshes and reflects work the
  * worker is doing in the background. Shows a live time estimate (from the

@@ -28,6 +28,28 @@ export const popIn: Variants = {
   exit: { opacity: 0, y: -6, scale: 0.97, transition: { duration: 0.1 } },
 };
 
+/**
+ * Endpaper page-lift entrance for the account card: drops from the top margin
+ * with a slight ~1.8deg page rotation, then settles flat onto paper.
+ */
+export const endpaperLift: Variants = {
+  hidden: { opacity: 0, y: -8, rotate: -1.8, scale: 0.985 },
+  show: {
+    opacity: 1,
+    y: 0,
+    rotate: 0,
+    scale: 1,
+    transition: { type: "spring", stiffness: 360, damping: 28 },
+  },
+  exit: {
+    opacity: 0,
+    y: -6,
+    rotate: -1,
+    scale: 0.985,
+    transition: { duration: 0.12 },
+  },
+};
+
 /** Transition for the `reveal` entrance (exported so callers can add delay). */
 export const revealTransition: Transition = { type: "spring", stiffness: 260, damping: 22 };
 

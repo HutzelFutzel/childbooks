@@ -60,7 +60,10 @@ export default async function ContactPage() {
         <div className="grid items-start gap-8 lg:grid-cols-[1.3fr_1fr]">
           {/* Main Contact Form */}
           <div>
-            <ContactForm privacyUrl={privacyUrl} />
+            <ContactForm
+              privacyUrl={privacyUrl}
+              mascotUrl={branding.contactMascot?.imageUrl ?? null}
+            />
           </div>
 
           {/* Reassurance & Quick Info sidebar */}

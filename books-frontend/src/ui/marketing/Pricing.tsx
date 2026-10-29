@@ -110,7 +110,7 @@ export function Pricing({
         <Reveal delay={0.18} className="mt-8 flex flex-col items-center justify-center gap-4 sm:flex-row">
           <Link
             href="/studio"
-            className="inline-flex w-full items-center justify-center rounded-full bg-brand-600 px-8 py-3.5 text-base font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700 sm:w-auto"
+            className="inline-flex w-full items-center justify-center rounded-full bg-brand-600 px-8 py-3.5 text-base font-medium text-(--color-brand-foreground) [text-shadow:0_1px_1.5px_rgba(20,22,58,0.2)] shadow-soft transition hover:bg-brand-700 sm:w-auto"
           >
             <EditableText
               slotId="pricing.ctaPrimary"

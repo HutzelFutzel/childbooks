@@ -100,16 +100,25 @@ export function contrastBetween(a: Rgb, b: Rgb): number {
 }
 
 /**
- * A readable foreground (dark ink or white) for text on the given background:
- * whichever has the higher WCAG contrast. A fixed luminance cut-off picks
- * white on mid-tones where dark ink reads far better (the true crossover sits
- * near 0.18, not 0.5).
+ * A readable foreground (dark ink or white) for text on the given background.
+ *
+ * Notice why a naive luminance comparison (`contrast(bg, dark) > contrast(bg, white)`)
+ * fails on warm coral/terracotta (`#e04f2e`, `L ≈ 0.258`): dark ink `#14163a`
+ * barely beats white at 4.8:1 on `brand-600`, then drops below WCAG AA (to
+ * ~3.8:1) on hovered `brand-700`, and visually clashes ("muddy dark blue on
+ * red-orange").
+ *
+ * So we only switch to dark ink when the background is genuinely light enough
+ * (`L >= 0.42`, e.g. golden amber `#f79b04` or pastel yellows/mints) that dark
+ * ink clears 7:1+ across both rest and hover states. On mid/saturated brand
+ * colors like coral (`#f96a4d`), we use crisp white `#ffffff` and pair it with
+ * a subtle text-protection shadow on filled buttons so white text meets the
+ * recommended contrast without altering the brand color.
  */
 export function readableOn(bgHex: string, fallback = "#ffffff"): string {
   const rgb = parseHex(bgHex);
   if (!rgb) return fallback;
-  const dark = parseHex(DARK_FOREGROUND)!;
-  return contrastBetween(rgb, dark) > contrastBetween(rgb, WHITE) ? DARK_FOREGROUND : "#ffffff";
+  return luminance(rgb) >= 0.42 ? DARK_FOREGROUND : "#ffffff";
 }
 
 /**

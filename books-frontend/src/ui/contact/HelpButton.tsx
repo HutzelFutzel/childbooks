@@ -12,7 +12,7 @@ export function HelpButton() {
       onClick={openContact}
       aria-label="Help and contact"
       title="Help & contact"
-      className="flex size-8 items-center justify-center rounded-lg text-ink-500 transition hover:bg-ink-100 hover:text-ink-700"
+      className="flex size-9 items-center justify-center rounded-full text-ink-500 transition-colors hover:bg-ink-900/[0.05] hover:text-ink-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink-900"
     >
       <HelpCircle className="size-[18px]" />
     </button>

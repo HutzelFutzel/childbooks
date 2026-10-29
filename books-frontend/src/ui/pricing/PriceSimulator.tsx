@@ -475,7 +475,7 @@ export function PriceSimulator({
 
               <Link
                 href="/studio"
-                className="mt-6 flex w-full items-center justify-center rounded-2xl bg-brand-600 px-5 py-3 text-sm font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
+                className="mt-6 flex w-full items-center justify-center rounded-2xl bg-brand-600 px-5 py-3 text-sm font-medium text-(--color-brand-foreground) [text-shadow:0_1px_1.5px_rgba(20,22,58,0.2)] shadow-soft transition hover:bg-brand-700"
               >
                 Start making your book
               </Link>
