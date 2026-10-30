@@ -69,8 +69,6 @@ export type BrandAssetSlot =
   | "backCoverLogo"
   | "guideAvatar"
   | "contactMascot"
-  | "footerMascotLeft"
-  | "footerMascotCenter"
   | "footerMascotRight";
 
 export const BRAND_ASSET_SLOTS: BrandAssetSlot[] = [
@@ -88,8 +86,6 @@ export const BRAND_ASSET_SLOTS: BrandAssetSlot[] = [
   "backCoverLogo",
   "guideAvatar",
   "contactMascot",
-  "footerMascotLeft",
-  "footerMascotCenter",
   "footerMascotRight",
 ];
 
@@ -142,11 +138,7 @@ export interface BrandingConfig {
    * card (defaults to the built-in Hugo hedgehog SVG placeholder when null).
    */
   contactMascot: BrandAsset | null;
-  /** Left character in the footer colophon curtain-call (defaults to Momo the Mole SVG). */
-  footerMascotLeft: BrandAsset | null;
-  /** Center character in the footer colophon curtain-call (defaults to Cleo the Cat SVG). */
-  footerMascotCenter: BrandAsset | null;
-  /** Right character in the footer colophon curtain-call (defaults to Scout the Squirrel SVG). */
+  /** Character peeking over the footer colophon rule (defaults to Scout the Squirrel SVG). */
   footerMascotRight: BrandAsset | null;
   /**
    * Fixed edge of {@link backCoverLogo}, in centimetres. Landscape logos
@@ -196,8 +188,6 @@ export function createDefaultBrandingConfig(): BrandingConfig {
     backCoverLogo: null,
     guideAvatar: null,
     contactMascot: null,
-    footerMascotLeft: null,
-    footerMascotCenter: null,
     footerMascotRight: null,
     backCoverLogoSizeCm: DEFAULT_BACK_COVER_LOGO_SIZE_CM,
     colors: { primary: "#f96a4d", accent: "#f79b04" },
@@ -312,8 +302,6 @@ export function normalizeBrandingConfig(input: unknown): BrandingConfig {
     backCoverLogo: normalizeAsset(b.backCoverLogo),
     guideAvatar: normalizeAsset(b.guideAvatar),
     contactMascot: normalizeAsset(b.contactMascot),
-    footerMascotLeft: normalizeAsset(b.footerMascotLeft),
-    footerMascotCenter: normalizeAsset(b.footerMascotCenter),
     footerMascotRight: normalizeAsset(b.footerMascotRight),
     backCoverLogoSizeCm: clamp(
       b.backCoverLogoSizeCm,

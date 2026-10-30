@@ -38,9 +38,7 @@ import { HedgehogPlaceholder } from "../../../guide/chat/GuideAvatar";
 import { BrandMark } from "../../../layout/BrandMark";
 import { cn } from "../../../lib/cn";
 import {
-  CleoDanglingOnLedgeSvg,
   FooterMascots,
-  MomoReadingOnLedgeSvg,
   ScoutPeekingLedgeSvg,
 } from "../../../marketing/FooterMascots";
 import { EditorTabs, Section, TextField } from "../products/parts";
@@ -164,38 +162,14 @@ const CHARACTER_ASSETS: AssetMeta[] = [
     fallbackRender: () => <HedgehogPlaceholder className="size-11" />,
   },
   {
-    slot: "footerMascotLeft",
-    label: "Footer character — Left (Momo)",
-    whereUsed: "Footer colophon ledge (left)",
-    spec: "~512×512 PNG / SVG",
-    hint: "Left companion seated on the footer rule. Falls back to Momo the Mole.",
-    ratio: "1/1",
-    category: "characters",
-    keywords: "momo mole footer left mascot character curtain call",
-    fallbackLabel: "Built-in Momo SVG",
-    fallbackRender: () => <MomoReadingOnLedgeSvg className="size-12" />,
-  },
-  {
-    slot: "footerMascotCenter",
-    label: "Footer character — Center (Cleo)",
-    whereUsed: "Footer colophon ledge (center)",
-    spec: "~512×512 PNG / SVG",
-    hint: "Center companion perched on the footer rule. Falls back to Cleo the Siamese Cat.",
-    ratio: "1/1",
-    category: "characters",
-    keywords: "cleo cat siamese footer center mascot character curtain call",
-    fallbackLabel: "Built-in Cleo SVG",
-    fallbackRender: () => <CleoDanglingOnLedgeSvg className="size-12" />,
-  },
-  {
     slot: "footerMascotRight",
-    label: "Footer character — Right (Scout)",
-    whereUsed: "Footer colophon ledge (right)",
+    label: "Footer character (Scout)",
+    whereUsed: "Footer colophon ledge",
     spec: "~512×512 PNG / SVG",
-    hint: "Right companion peeking over the footer rule. Falls back to Scout the Squirrel.",
+    hint: "Companion peeking over the footer rule. Falls back to Scout the Squirrel.",
     ratio: "1/1",
     category: "characters",
-    keywords: "scout squirrel footer right mascot character curtain call",
+    keywords: "scout squirrel footer mascot character curtain call",
     fallbackLabel: "Built-in Scout SVG",
     fallbackRender: () => <ScoutPeekingLedgeSvg className="size-12" />,
   },
@@ -558,9 +532,9 @@ export function BrandingTab() {
       {showCharactersSection && (
         <Section
           title="Characters & Mascots"
-          hint="Storybook companions across the Contact card, Studio chat guide, and Footer curtain-call. Every slot has a built-in vector illustration when left empty."
+          hint="Storybook companions across the Contact card, Studio chat guide, and footer. Every slot has a built-in vector illustration when left empty."
         >
-          {/* Compact live stage showing the 3 footer mascots & contact courier in context */}
+          {/* Compact live stage showing the footer mascot & contact courier in context */}
           {!normalizedQuery && !onlyMissing && (
             <div className="grid grid-cols-1 gap-3 rounded-xl border border-ink-100 bg-ink-50/50 p-3 sm:grid-cols-2">
               <div className="flex items-center justify-between gap-3 rounded-lg bg-white px-3.5 py-2.5 ring-1 ring-inset ring-ink-100">
@@ -615,15 +589,13 @@ export function BrandingTab() {
                 <div className="min-w-0">
                   <div className="text-xs font-semibold text-ink-800">Footer Colophon Ledge</div>
                   <p className="mt-0.5 text-[11px] text-ink-500">
-                    Live preview of Momo, Cleo &amp; Scout along the footer rule
+                    Live preview of Scout along the footer rule
                   </p>
                 </div>
                 <div className="shrink-0 border-b border-ink-200 px-1">
                   <FooterMascots
-                    leftUrl={branding.footerMascotLeft?.imageUrl}
-                    centerUrl={branding.footerMascotCenter?.imageUrl}
-                    rightUrl={branding.footerMascotRight?.imageUrl}
-                    className="[&>div]:!size-11 gap-1.5"
+                    url={branding.footerMascotRight?.imageUrl}
+                    className="[&>div:last-child]:!size-11"
                   />
                 </div>
               </div>

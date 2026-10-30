@@ -33,10 +33,8 @@ const COLUMNS = [
 /**
  * Editorial Book Colophon & Character Ledge Footer:
  * - Warm cream paper (`bg-canvas`) with a 1px ink colophon rule.
- * - Top curtain-call ledge where Momo (reading on a stack of books), Cleo
- *   (perched with her tail & paw dangling *below* the 1px line), and Scout
- *   (peeking up with his paws resting *over* the line) physically interact
- *   with the divider across mobile, tablet, and desktop.
+ * - Top curtain-call ledge where Scout peeks up with his paws resting *over*
+ *   the 1px line, across mobile, tablet, and desktop.
  * - Responsive 2-column mobile / multi-column desktop index for product,
  *   company, SEO landing pages, and legal links.
  */
@@ -59,7 +57,7 @@ export async function Footer({
   return (
     <footer className="relative overflow-hidden border-t border-ink-900/12 bg-canvas">
       <div className="mx-auto max-w-6xl px-6 pt-12 sm:pt-14">
-        {/* Top Colophon Ledge: Imprint on the left, characters perched ON and hanging OVER the 1px rule on the right */}
+        {/* Top Colophon Ledge: Imprint on the left, Scout peeking over the 1px rule on the right */}
         <div className="relative flex flex-col justify-between gap-6 border-b border-ink-900/14 md:flex-row md:items-end">
           <div className="max-w-md pb-2 md:pb-7">
             <BrandMark
@@ -87,15 +85,11 @@ export async function Footer({
             </div>
           </div>
 
-          {/* Characters sit flush on the bottom border of this container so Cleo's tail & Scout's paws cross the 1px line */}
+          {/* Scout sits flush on the bottom border so his paws cross the 1px line */}
           <div className="flex items-end justify-end">
             <FooterMascots
-              leftUrl={branding.footerMascotLeft?.imageUrl}
-              leftAlt={branding.footerMascotLeft?.alt}
-              centerUrl={branding.footerMascotCenter?.imageUrl}
-              centerAlt={branding.footerMascotCenter?.alt}
-              rightUrl={branding.footerMascotRight?.imageUrl}
-              rightAlt={branding.footerMascotRight?.alt}
+              url={branding.footerMascotRight?.imageUrl}
+              alt={branding.footerMascotRight?.alt}
             />
           </div>
         </div>
