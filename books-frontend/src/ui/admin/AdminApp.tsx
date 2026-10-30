@@ -17,7 +17,7 @@ import { OrdersDialog } from "@/ui/checkout/OrdersDialog";
 import { PlansDialog } from "@/ui/billing/PlansDialog";
 import { SparksBadge } from "@/ui/layout/SparksBadge";
 import { cn } from "@/ui/lib/cn";
-import { isDev } from "@/platform/runtime";
+import { useDevBanner } from "@/ui/layout/DevBannerProvider";
 import { useAuthStore } from "@/state/authStore";
 import { useAdminHealth } from "@/state/adminHealthStore";
 import { useAccountUiStore } from "@/state/accountUiStore";
@@ -258,6 +258,7 @@ function SidebarChrome({
 export default function AdminApp() {
   const router = useRouter();
   const pathname = usePathname();
+  const devBanner = useDevBanner();
   const initAuth = useAuthStore((s) => s.init);
   const ready = useAuthStore((s) => s.ready);
   const adminReady = useAuthStore((s) => s.adminReady);
@@ -346,7 +347,7 @@ export default function AdminApp() {
     <div
       className={cn(
         "flex flex-col overflow-hidden bg-canvas",
-        isDev() ? "h-[calc(100vh-1.5rem)]" : "h-screen",
+        devBanner ? "h-[calc(100vh-1.5rem)]" : "h-screen",
       )}
     >
       <AdminProgressBar />

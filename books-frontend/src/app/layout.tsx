@@ -16,6 +16,8 @@ import { ArrivalInit } from "../ui/acquisition/ArrivalInit";
 import { AuthInit } from "../ui/auth/AuthInit";
 import { Toaster } from "../ui/components/Toaster";
 import { NumberInputWheelGuard } from "../ui/forms/NumberInputWheelGuard";
+import { isDev } from "../platform/runtime";
+import { DevBannerProvider } from "../ui/layout/DevBannerProvider";
 import { DevEnvironmentBanner } from "../ui/layout/DevEnvironmentBanner";
 import { ClientLogInit } from "../ui/layout/ClientLogInit";
 import { getBrandingConfig } from "../server/branding";
@@ -87,31 +89,36 @@ export default async function RootLayout({
     getAnnouncementsConfig(),
   ]);
   const themeVars = brandingThemeVars(branding);
+  // Same boolean that decides whether the banner is in the document. Client
+  // chrome reads it from DevBannerProvider instead of calling isDev() again.
+  const showDevBanner = isDev();
 
   return (
     <html lang="en" style={themeVars as React.CSSProperties}>
       <body>
-        <DevEnvironmentBanner />
-        <ClientLogInit />
-        <AuthInit />
-        <ArrivalInit />
-        <Toaster />
-        <NumberInputWheelGuard />
-        {children}
-        {/* Cookie consent gates Google Analytics — no analytics cookies fire
-            until the visitor grants the analytics category. */}
-        <ConsentManager
-          config={cookieConfig}
-          privacyUrl={legalUrlByRole(legal, "privacy") || undefined}
-          cookiePolicyUrl={legalUrlByRole(legal, "cookies") || undefined}
-        />
-        {/* Affiliate attribution — gated on the marketing category, so it loads
-            nothing until the visitor allows it (and nothing at all unless a
-            Rewardful key is configured). */}
-        <AffiliateTracking />
-        {/* Marketing → Announcements. Renders nothing on Studio/Admin/internal
-            routes — see the component's own comment. */}
-        <AnnouncementBanner config={announcements} />
+        <DevBannerProvider show={showDevBanner}>
+          {showDevBanner ? <DevEnvironmentBanner /> : null}
+          <ClientLogInit />
+          <AuthInit />
+          <ArrivalInit />
+          <Toaster />
+          <NumberInputWheelGuard />
+          {children}
+          {/* Cookie consent gates Google Analytics — no analytics cookies fire
+              until the visitor grants the analytics category. */}
+          <ConsentManager
+            config={cookieConfig}
+            privacyUrl={legalUrlByRole(legal, "privacy") || undefined}
+            cookiePolicyUrl={legalUrlByRole(legal, "cookies") || undefined}
+          />
+          {/* Affiliate attribution — gated on the marketing category, so it loads
+              nothing until the visitor allows it (and nothing at all unless a
+              Rewardful key is configured). */}
+          <AffiliateTracking />
+          {/* Marketing → Announcements. Renders nothing on Studio/Admin/internal
+              routes — see the component's own comment. */}
+          <AnnouncementBanner config={announcements} />
+        </DevBannerProvider>
       </body>
     </html>
   );

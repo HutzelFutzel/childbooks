@@ -16,11 +16,11 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "../lib/cn";
-import { isDev } from "../../platform/runtime";
 import { useAuthStore, userLabel, userSecondaryLine } from "../../state/authStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSparksStore } from "../../state/sparksStore";
 import { BrandMark } from "../layout/BrandMark";
+import { useDevBanner } from "../layout/DevBannerProvider";
 import { DEV_BANNER_HEIGHT_REM } from "../layout/DevEnvironmentBanner";
 import { UserAvatar } from "../components/UserMenu";
 import { AccountMenu } from "./AccountMenu";
@@ -34,8 +34,11 @@ const GuestMigrationDialog = dynamic(
   { ssr: false },
 );
 
-// `DevEnvironmentBanner` scrolls away with the page, so once it's out of view
-// this header slides up from `top-6` to `top-0` to close the gap.
+// When the server actually rendered `DevEnvironmentBanner`, it scrolls away
+// with the page, so this header starts at `top-6` and slides up to `top-0`
+// once that strip is out of view. In production the provider is false and
+// the header stays at `top-0` — calling `isDev()` here can disagree with the
+// server and leave an empty gap.
 const DEV_BANNER_HEIGHT_PX = DEV_BANNER_HEIGHT_REM * 16;
 
 // Three focused top-margin destinations. Secondary anchors (Features, FAQ,
@@ -79,6 +82,7 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
   const [openingStudio, startStudioTransition] = useTransition();
   const [scrolled, setScrolled] = useState(false);
   const [pastDevBanner, setPastDevBanner] = useState(false);
+  const devBanner = useDevBanner();
   const [hoveredHref, setHoveredHref] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -140,7 +144,7 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
       <header
         className={cn(
           "fixed inset-x-0 z-50 transition-[top,background-color,box-shadow] duration-200",
-          isDev() && !pastDevBanner ? "top-6" : "top-0",
+          devBanner && !pastDevBanner ? "top-6" : "top-0",
           scrolled || menuOpen
             ? "bg-canvas/96 shadow-[0_6px_20px_-14px_rgba(20,22,58,0.12)]"
             : "bg-transparent",
@@ -296,7 +300,7 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
               transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
               className={cn(
                 "fixed inset-x-0 bottom-0 z-40 flex flex-col justify-between overflow-y-auto border-t border-ink-900/10 bg-canvas px-6 pt-6 pb-8 md:hidden",
-                isDev() && !pastDevBanner ? "top-[5.75rem]" : "top-[4.25rem]",
+                devBanner && !pastDevBanner ? "top-[5.75rem]" : "top-[4.25rem]",
               )}
             >
               {/* Primary Table of Contents */}

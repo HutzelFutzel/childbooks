@@ -6,7 +6,7 @@ import { MotionConfig } from "framer-motion";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { cn } from "@/ui/lib/cn";
-import { isDev } from "@/platform/runtime";
+import { useDevBanner } from "@/ui/layout/DevBannerProvider";
 import { AuthMenu } from "@/ui/auth/AuthMenu";
 import { AuthDialog } from "@/ui/auth/AuthDialog";
 import { GuestMigrationDialog } from "@/ui/auth/GuestMigrationDialog";
@@ -55,6 +55,7 @@ import { useChatStudio } from "@/state/chatStudio";
 export default function StudioApp() {
   const router = useRouter();
   const pathname = usePathname();
+  const devBanner = useDevBanner();
   const route = useMemo(() => parseStudioPath(pathname), [pathname]);
   const projects = useProjectsStore((s) => s.projects);
   const loadProjects = useProjectsStore((s) => s.load);
@@ -507,7 +508,7 @@ export default function StudioApp() {
         "flex flex-col overflow-hidden bg-canvas",
         // Leaves room for the dev-environment banner (`h-6`) above it instead
         // of overflowing past the viewport — see ui/layout/DevEnvironmentBanner.
-        isDev() ? "h-[calc(100vh-1.5rem)]" : "h-screen",
+        devBanner ? "h-[calc(100vh-1.5rem)]" : "h-screen",
       )}
     >
       {/* Cookieless device/session beacon — see SessionTracker for the privacy

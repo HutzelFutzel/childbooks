@@ -35,9 +35,12 @@ export const DEV_BANNER_HEIGHT_REM = 1.5;
  * else here), and `Nav` tracks that: it starts at `top-6`, under the banner,
  * then slides up to `top-0` once scrolled past `DEV_BANNER_HEIGHT_REM` of
  * scroll — see `ui/marketing/Nav`. Renders nothing at all in production
- * builds. No hooks/browser APIs are needed (`isDev`/`useEmulators` just read
- * inlined `NEXT_PUBLIC_*`/`NODE_ENV` values), so this can render as a plain
- * server component.
+ * builds. The root layout passes that same server-side decision into
+ * `DevBannerProvider`; client chrome must read `useDevBanner()` rather than
+ * calling `isDev()` again, or a production bundle can keep the offset after
+ * this banner has rendered nothing. No hooks/browser APIs are needed
+ * (`isDev`/`useEmulators` just read inlined `NEXT_PUBLIC_*`/`NODE_ENV`
+ * values), so this can render as a plain server component.
  */
 export function DevEnvironmentBanner() {
   if (!isDev()) return null;
