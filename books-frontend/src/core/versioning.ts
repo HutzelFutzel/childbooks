@@ -290,6 +290,27 @@ export function pruneVersionTree<T>(
 }
 
 /**
+ * Bound a tree to at most `maxVersions` nodes, keeping the root, the cursor and
+ * the most recent versions — but not the whole root→cursor path. For an artifact
+ * revised again and again in a straight line, that path IS the history, so
+ * {@link pruneVersionTree} could never drop anything. Keeping the root keeps the
+ * result one connected tree. Pure.
+ */
+export function pruneToRecent<T>(
+  tree: VersionTree<T>,
+  maxVersions: number,
+): VersionTree<T> {
+  const all = allVersions(tree);
+  if (maxVersions <= 0 || all.length <= maxVersions) return tree;
+  const keep = new Set([tree.rootId, tree.cursorId]);
+  for (const n of [...all].sort((a, b) => nodeOrder(b) - nodeOrder(a))) {
+    if (keep.size >= maxVersions) break;
+    keep.add(n.id);
+  }
+  return { ...tree, nodes: relink(tree.nodes, keep) };
+}
+
+/**
  * Delete a single version node, keeping the tree valid. Children of the removed
  * node are re-parented to its parent (or promoted toward the root). The cursor,
  * if it pointed at the removed node, moves to the parent (or nearest survivor).

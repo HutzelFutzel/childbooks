@@ -17,6 +17,7 @@ import { isAdminUid, isAnonymousToken, type AuthedRequest } from "./auth";
 import { backendPipelineEnv } from "./pipelineEnv";
 import { newSpendLedger, runWithSpendLedger, withUsage } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
+import { reportProviderOutage } from "./providerOutage";
 import { isClientMilestone, touchProject } from "./projects";
 import {
   ensureAffordAction,
@@ -301,6 +302,8 @@ function sendError(res: Response, err: unknown): void {
   // HTTP. `retryable` rides along so the client never invites a retry of a
   // request that can only fail the same way again.
   if (err instanceof ProviderError) {
+    // The pipeline's own retries are spent by the time a request lands here.
+    void reportProviderOutage(err, { source: "backend" });
     // Always 502/504 — never the provider's own status. 401/403 here mean "the
     // CALLER's auth" everywhere else in this API, so forwarding a provider key
     // rejection as 401 would send `backendFetch` off to refresh a session that

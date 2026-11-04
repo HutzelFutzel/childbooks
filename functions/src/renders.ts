@@ -28,7 +28,7 @@
 import express, { type Express, type Response } from "express";
 import { FieldPath, FieldValue, getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { getBrandingConfig } from "./appConfig";
 import type { AuthedRequest } from "./auth";
 import { createAdminAssetHost, publicUrlForPath } from "./assets";

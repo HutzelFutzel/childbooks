@@ -7,6 +7,10 @@ import { FulfillmentError } from "./fulfillment/errors";
 export type ProviderErrorKind =
   | "auth" // invalid / missing API key
   | "rate_limit" // 429 - should back off and retry
+  // The provider refused because OUR account is out of credit or over its
+  // billing limit. Retried like a throttle (a top-up lands without a deploy),
+  // but nothing on our side fixes it, so a run that still fails pages ops.
+  | "billing"
   | "transient" // network / 5xx - retryable
   | "invalid_request" // 4xx we caused - not retryable
   | "not_found" // model / endpoint missing
@@ -49,7 +53,7 @@ export class ProviderError extends Error {
     this.details = options.details;
     this.retryable =
       options.retryable ??
-      (options.kind === "rate_limit" || options.kind === "transient");
+      (options.kind === "rate_limit" || options.kind === "billing" || options.kind === "transient");
     if (options.cause !== undefined) {
       (this as { cause?: unknown }).cause = options.cause;
     }
@@ -85,6 +89,28 @@ export function kindFromStatus(status: number): ProviderErrorKind {
   return "unknown";
 }
 
+/**
+ * Whether a failed provider response says our account cannot pay for the call.
+ *
+ * The status alone can't tell: OpenAI answers an empty balance with the same 429
+ * as a per-minute throttle, and Gemini's per-minute throttle also mentions "plan
+ * and billing details". Only the provider's own code or a credit/billing-specific
+ * phrase counts.
+ */
+export function isBillingRefusal(body: string): boolean {
+  if (!body) return false;
+  try {
+    const error = JSON.parse(body)?.error;
+    const codes = [error?.code, error?.type].filter((v): v is string => typeof v === "string");
+    if (codes.some((c) => c === "insufficient_quota" || c === "billing_hard_limit_reached")) return true;
+  } catch {
+    // Not JSON: fall through to the wording.
+  }
+  return /no credits remaining|credit balance is too low|credits? (are |is )?(depleted|exhausted)|billing hard limit|billing (is )?not enabled|enable billing/i.test(
+    body,
+  );
+}
+
 /** Produce a short, user-facing message for an error. */
 export function describeError(err: unknown): string {
   if (err instanceof FulfillmentError) {
@@ -110,6 +136,8 @@ export function describeError(err: unknown): string {
         return "AI generation isn't available right now. It's managed on the server — please try again shortly.";
       case "rate_limit":
         return "The AI service is busy right now. Please try again in a moment.";
+      case "billing":
+        return "The AI service is unavailable on our side right now. We've been alerted and are fixing it, so please try again a little later.";
       case "transient":
         return "A temporary network/server issue occurred. Please try again.";
       case "not_found":

@@ -24,7 +24,7 @@
  * unnoticed forever, and the watermark is left untouched so the same
  * uncovered range is retried (and grows) until it's actually reported.
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";

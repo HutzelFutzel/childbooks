@@ -27,8 +27,7 @@
  * dispatch/worker/reaper engine needs no changes.
  */
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
-import { onSchedule } from "firebase-functions/v2/scheduler";
-import { onTaskDispatched } from "firebase-functions/v2/tasks";
+import { loadRuntimeEnv, onSchedule, onTaskDispatched } from "./runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { randomUUID } from "node:crypto";
 import {
@@ -64,6 +63,7 @@ import {
   type UsageEvent,
 } from "./usage";
 import { errorText, meterAndSettle } from "./actionRun";
+import { reportProviderOutage } from "./providerOutage";
 import { featureAllowedForUser } from "./plans";
 import {
   ensureAfford,
@@ -2257,6 +2257,7 @@ export const onGenerationJob = onDocumentCreated(
     const snap = event.data;
     if (!snap) return;
     ensureAdmin();
+    await loadRuntimeEnv();
     const uid = event.params.uid as string;
     const job = snap.data() as AnyJob;
     if (job.status !== "pending") return;
@@ -2568,6 +2569,7 @@ async function runClaimedTask(run: ClaimedRun): Promise<void> {
       { kind: task.lastErrorKind ?? "timeout", retryable: false },
     );
     logger.error("[fan] task out of attempts or time", { jobId, taskId, attempts: attemptNo, remainingMs });
+    await reportProviderOutage(cause, { source: "worker", uid, projectId: jobProjectId(job) ?? null, jobId, action: job.kind });
     const marked = await markTaskError(taskRef, claimToken, cause.message, cause);
     outcome.settled = true;
     if (marked) {
@@ -2620,6 +2622,7 @@ async function runClaimedTask(run: ClaimedRun): Promise<void> {
       });
       throw err;
     }
+    await reportProviderOutage(err, { source: "worker", uid, projectId: jobProjectId(job) ?? null, jobId, action: job.kind });
     const marked = await markTaskError(
       taskRef,
       claimToken,

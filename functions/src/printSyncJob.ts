@@ -10,7 +10,7 @@
  * the same hour, rare enough to be a handful of provider requests per sweep (only
  * non-terminal orders from the last few weeks are polled).
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "./storage";
 import { ALL_SECRETS } from "./secrets";

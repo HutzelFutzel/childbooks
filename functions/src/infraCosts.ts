@@ -16,7 +16,7 @@
  * extra SDK dependency is needed. Failures raise an admin alert and are retried
  * naturally the next day (events are idempotent on day+service).
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "./storage";
 import { getAdminSettings } from "./adminSettings";

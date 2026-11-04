@@ -10,7 +10,7 @@
  * urgent — it exists so a missed webhook can't quietly cost or over-report money
  * for longer than a day.
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "../runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "../storage";
 import { ALL_SECRETS } from "../secrets";

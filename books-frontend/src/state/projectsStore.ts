@@ -49,6 +49,8 @@ import { applyBookTitle, applyCoverLine } from "../core/book/coverEdits";
 import { authoringOf, withAuthoring } from "../core/guide/projectState";
 import { reconcileCoverLettering } from "../ui/design/designInit";
 import { ProjectConflictError } from "../core/storage/repositories";
+import { StoredValueTooLargeError } from "../core/storage/types";
+import { compactProjectHistory } from "../core/book/compactHistory";
 import { resolveBookConflict } from "../core/guide/merge";
 import { likenessPhotosOf } from "../core/guide/portrait";
 import { reconcilePendingLooks } from "../core/guide/pending";
@@ -206,11 +208,16 @@ interface ProjectsState {
   bookConflict: PendingBookConflict | null;
   settleBookConflict: (keep: "mine" | "theirs") => Promise<void>;
   /**
-   * Id of a project whose last save FAILED for a transient reason (offline,
-   * storage error). Edits stay in memory; saving is retried automatically and
-   * a banner tells the user their latest changes aren't stored yet.
+   * Id of a project whose last save FAILED. Edits stay in memory and a banner
+   * tells the user their latest changes aren't stored yet.
    */
   saveFailedProjectId: string | null;
+  /**
+   * Why it failed. Only a `transient` failure (offline, storage hiccup) is
+   * retried on a timer; the others would fail the same way every time, so
+   * they wait for the next edit or a manual retry.
+   */
+  saveFailureReason: SaveFailureReason | null;
   /**
    * A book that was just created and should already be open, before the URL
    * has caught up. While this is set, the library route must not close the
@@ -322,6 +329,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   staleProjectId: null,
   bookConflict: null,
   saveFailedProjectId: null,
+  saveFailureReason: null,
   pendingEntryId: null,
 
   async retrySave(id) {
@@ -340,6 +348,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       loaded: false,
       staleProjectId: null,
       saveFailedProjectId: null,
+      saveFailureReason: null,
       pendingEntryId: null,
     });
     const { projects } = await getRepos();
@@ -961,7 +970,6 @@ if (typeof window !== "undefined") {
   void import("../platform/clientLogger").then(
     ({ clientLog, recordBreadcrumb, setClientLogProjectId }) => {
       let prevCurrentId: string | null = useProjectsStore.getState().currentId;
-      let prevSaveFailedId: string | null = useProjectsStore.getState().saveFailedProjectId;
       let prevStaleId: string | null = useProjectsStore.getState().staleProjectId;
       if (prevCurrentId) {
         setClientLogProjectId(prevCurrentId);
@@ -973,17 +981,6 @@ if (typeof window !== "undefined") {
           setClientLogProjectId(state.currentId);
           if (state.currentId) {
             recordBreadcrumb("studio", "open_project", state.currentId);
-          }
-        }
-        if (state.saveFailedProjectId !== prevSaveFailedId) {
-          prevSaveFailedId = state.saveFailedProjectId;
-          if (state.saveFailedProjectId) {
-            clientLog.warn({
-              domain: "studio",
-              event: "project.save.failed",
-              message: "Saving book changes to storage failed transiently; retrying in background.",
-              projectId: state.saveFailedProjectId,
-            });
           }
         }
         if (state.staleProjectId !== prevStaleId) {
@@ -1111,6 +1108,50 @@ function withEditsSince(shown: Project, now: Project, settled: Project): Project
   if (outcome.kind === "merged") return outcome.project;
   return resolveBookConflict(outcome.merged, now, settled, outcome.conflicts, "mine", Date.now());
 }
+/**
+ * `tooLarge`: the book is over the storage document limit. `rejected`: the
+ * backend refused the write itself (permissions, an invalid value). Neither is
+ * fixed by sending the same book again.
+ */
+export type SaveFailureReason = "transient" | "tooLarge" | "rejected";
+
+function saveFailureReasonOf(err: unknown): SaveFailureReason {
+  if (err instanceof StoredValueTooLargeError) return "tooLarge";
+  const message = err instanceof Error ? err.message : String(err);
+  if (/exceeds the maximum allowed size|is longer than \d+ bytes/i.test(message)) return "tooLarge";
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === "permission-denied" || code === "invalid-argument") return "rejected";
+  return "transient";
+}
+
+/** One log line per failure (not per retry), with what the backend actually said. */
+function reportSaveFailure(projectId: string, reason: SaveFailureReason, err: unknown, project: Project): void {
+  if (typeof window === "undefined") return;
+  const code = (err as { code?: unknown } | null)?.code;
+  let bytes: number | null = err instanceof StoredValueTooLargeError ? err.bytes : null;
+  if (bytes === null) {
+    try {
+      bytes = new TextEncoder().encode(JSON.stringify(project)).length;
+    } catch {
+      bytes = null;
+    }
+  }
+  void import("../platform/clientLogger").then(({ clientLog }) => {
+    const write = reason === "transient" ? clientLog.warn : clientLog.error;
+    write({
+      domain: "studio",
+      event: "project.save.failed",
+      message:
+        reason === "transient"
+          ? "Saving book changes failed; retrying in the background."
+          : `Saving book changes failed and won't succeed on retry (${reason}).`,
+      projectId,
+      error: err,
+      context: { reason, code: typeof code === "string" ? code : null, bytes },
+    });
+  });
+}
+
 let saveRetryTimer: ReturnType<typeof setTimeout> | null = null;
 const SAVE_RETRY_MS = 10_000;
 const SAVE_DEBOUNCE_MS = 350;
@@ -1123,8 +1164,13 @@ function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<
     // A conflicted project is frozen from auto-save until the user reloads it,
     // so we don't keep re-attempting a write that can only be rejected.
     if (get().staleProjectId === id || get().bookConflict?.projectId === id) return;
-    const latest = get().projects.find((p) => p.id === id);
-    if (!latest) return;
+    const current = get().projects.find((p) => p.id === id);
+    if (!current) return;
+    // Compacted in memory too, so the copy being edited and the stored one agree.
+    const latest = compactProjectHistory(current);
+    if (latest !== current) {
+      set((state) => ({ projects: state.projects.map((p) => (p === current ? latest : p)) }));
+    }
     const { projects } = await getRepos();
     try {
       const saved = await projects.save(latest);
@@ -1135,7 +1181,7 @@ function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<
         projects: state.projects.map((p) =>
           p.id === id && p.rev !== saved.rev ? { ...p, rev: saved.rev } : p,
         ),
-        ...(state.saveFailedProjectId === id ? { saveFailedProjectId: null } : {}),
+        ...(state.saveFailedProjectId === id ? { saveFailedProjectId: null, saveFailureReason: null } : {}),
       }));
       if (saveRetryTimer != null) {
         clearTimeout(saveRetryTimer);
@@ -1149,10 +1195,14 @@ function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<
         set(() => ({ staleProjectId: id }));
         return;
       }
-      // Transient failure (e.g. offline): keep the edits in memory, tell the
-      // user their work isn't stored yet, and retry automatically.
-      set(() => ({ saveFailedProjectId: id }));
-      if (saveRetryTimer == null) {
+      // Keep the edits in memory and tell the user their work isn't stored yet.
+      // Only a transient failure (e.g. offline) is worth retrying on a timer.
+      const reason = saveFailureReasonOf(err);
+      const state = get();
+      const isNew = state.saveFailedProjectId !== id || state.saveFailureReason !== reason;
+      set(() => ({ saveFailedProjectId: id, saveFailureReason: reason }));
+      if (isNew) reportSaveFailure(id, reason, err, latest);
+      if (reason === "transient" && saveRetryTimer == null) {
         saveRetryTimer = setTimeout(() => {
           saveRetryTimer = null;
           void persistLatest(get, set, id);

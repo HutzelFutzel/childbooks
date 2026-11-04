@@ -31,7 +31,12 @@ import {
   uploadBytes,
 } from "firebase/storage";
 import { getFirebaseAuth, getFirebaseDb, getFirebaseStorage } from "../lib/firebase";
-import type { BlobStore, KeyValueStore, StorageBackend } from "../core/storage/types";
+import {
+  StoredValueTooLargeError,
+  type BlobStore,
+  type KeyValueStore,
+  type StorageBackend,
+} from "../core/storage/types";
 import {
   BLOB_VARIANTS,
   IMMUTABLE_BLOB_CACHE_CONTROL,
@@ -65,6 +70,23 @@ interface KvDoc {
   updatedAt: number;
 }
 
+/**
+ * Firestore refuses a document over 1 MiB (1,048,576 bytes, field names and the
+ * document path included). Checked here so an oversized book fails as itself,
+ * before the network, instead of as a generic write error.
+ */
+const MAX_JSON_BYTES = 1_048_000;
+
+function encodeValue(key: string, value: unknown): KvDoc {
+  const json = JSON.stringify(value);
+  // A UTF-16 unit is at most 3 UTF-8 bytes, so short strings can't be over.
+  if (json.length * 3 > MAX_JSON_BYTES) {
+    const bytes = new TextEncoder().encode(json).length;
+    if (bytes > MAX_JSON_BYTES) throw new StoredValueTooLargeError(key, bytes, MAX_JSON_BYTES);
+  }
+  return { key, json, updatedAt: Date.now() };
+}
+
 const firestoreKv: KeyValueStore = {
   async get<T>(key: string): Promise<T | null> {
     const uid = currentUid();
@@ -81,8 +103,7 @@ const firestoreKv: KeyValueStore = {
 
   async set<T>(key: string, value: T): Promise<void> {
     const uid = requireUid();
-    const payload: KvDoc = { key, json: JSON.stringify(value), updatedAt: Date.now() };
-    await setDoc(doc(getFirebaseDb(), `users/${uid}/store`, docId(key)), payload);
+    await setDoc(doc(getFirebaseDb(), `users/${uid}/store`, docId(key)), encodeValue(key, value));
   },
 
   async remove(key: string): Promise<void> {
@@ -104,8 +125,7 @@ const firestoreKv: KeyValueStore = {
         }
       }
       const next = mutator(prev);
-      const payload: KvDoc = { key, json: JSON.stringify(next), updatedAt: Date.now() };
-      tx.set(ref, payload);
+      tx.set(ref, encodeValue(key, next));
       return next;
     });
   },

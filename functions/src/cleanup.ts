@@ -17,7 +17,7 @@
  * have `providerData.length > 0` and are never selected here. Recently-active
  * guests (mid-conversion) are skipped by the age threshold.
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { getAuth, type UserRecord } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";

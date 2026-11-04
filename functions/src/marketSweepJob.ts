@@ -16,7 +16,7 @@
  * finishing unknown rows from a previous attempt. The resulting capability is
  * immediately reprojected into the public product catalog.
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "./storage";
 import { ALL_SECRETS } from "./secrets";

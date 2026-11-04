@@ -3,7 +3,7 @@ import express, { type Express, type Response } from "express";
 import { getFirestore, type DocumentReference } from "firebase-admin/firestore";
 import { getFunctions } from "firebase-admin/functions";
 import { logger } from "firebase-functions/v2";
-import { onTaskDispatched } from "firebase-functions/v2/tasks";
+import { onTaskDispatched } from "./runtimeTriggers";
 import type { AuthedRequest } from "./auth";
 import { isAnonymousToken } from "./auth";
 import { loadPromptContext } from "./appConfig";
@@ -14,6 +14,7 @@ import { ensureAdmin } from "./storage";
 import { ALL_SECRETS } from "./secrets";
 import { newSpendLedger, runWithSpendLedger, withUsage } from "./usage";
 import { log } from "./logs";
+import { reportProviderOutage } from "./providerOutage";
 import {
   reviseStory,
   rewriteStory,
@@ -351,6 +352,7 @@ async function runRevision(uid: string, jobId: string): Promise<void> {
         ...(err instanceof StoryRevisionFormatError && err.details ? { details: err.details } : {}),
       },
     });
+    await reportProviderOutage(err, { source: "worker", uid, projectId: job.projectId, jobId, action: "storyEdit" });
     if (spend.events.length > 0) {
       await meterAndSettle({
         uid,

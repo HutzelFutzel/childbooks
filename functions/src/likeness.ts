@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import express, { type Express, type Response } from "express";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions/v2";
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import sharp from "sharp";
 import {
   LIKENESS_CONSENT_VERSION,

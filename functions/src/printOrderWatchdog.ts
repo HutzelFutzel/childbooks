@@ -17,7 +17,7 @@
  * Where it can fix something itself (re-register the webhook, re-drive a stranded
  * order, adopt a missed payment) it does, and says so.
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";

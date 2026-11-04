@@ -5,6 +5,18 @@
  */
 import type { BlobSize } from "./blobVariants";
 
+/** A value too big for the backend's per-document limit. Retrying the same value can never succeed. */
+export class StoredValueTooLargeError extends Error {
+  constructor(
+    readonly key: string,
+    readonly bytes: number,
+    readonly limit: number,
+  ) {
+    super(`"${key}" is ${bytes} bytes, over the ${limit}-byte storage limit.`);
+    this.name = "StoredValueTooLargeError";
+  }
+}
+
 export interface KeyValueStore {
   get<T>(key: string): Promise<T | null>;
   set<T>(key: string, value: T): Promise<void>;

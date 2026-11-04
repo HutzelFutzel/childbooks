@@ -79,7 +79,7 @@ import {
   singleSubjectEdit,
   type ResolvedEditOp,
 } from "./intentResolve";
-import { errorForLog } from "../errors";
+import { errorForLog, isAbortError } from "../errors";
 import {
   growToMinPartSide,
   locateAndCountSubjects,
@@ -391,12 +391,8 @@ export function applyIllustrationRender(
     ...(render.textInk ? { textInk: render.textInk } : {}),
   };
   const next = tree
-    ? addVersion(tree, content, {
-        parentId: render.parentId,
-        prompt: render.prompt,
-        label: render.label,
-      })
-    : createVersionTree(content, { prompt: render.prompt, label: render.label });
+    ? addVersion(tree, content, { parentId: render.parentId, label: render.label })
+    : createVersionTree(content, { label: render.label });
   // Bound history so the persisted project can't grow without limit. Blobs of
   // dropped versions are reclaimed by the scoped blob GC.
   return pruneVersionTree(next, DEFAULT_MAX_VERSIONS);
@@ -1218,15 +1214,15 @@ async function locateSubjectsNow(args: {
   page: { base64: string; mimeType: string };
   env: PipelineEnv;
   signal?: AbortSignal;
-}): Promise<DepictedSubject[]> {
+}): Promise<{ located: DepictedSubject[]; failure?: unknown }> {
   const { anchors, page, env, signal } = args;
-  if (anchors.length === 0) return [];
+  if (anchors.length === 0) return { located: [] };
   const model = env.models.bindingModel ?? env.models.textModel;
   let key: string;
   try {
     key = env.apiKeyFor(model.provider);
-  } catch {
-    return [];
+  } catch (error) {
+    return { located: [], failure: error };
   }
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
   try {
@@ -1243,17 +1239,19 @@ async function locateSubjectsNow(args: {
         signal: helperSignal(signal),
       }),
     );
-    return anchors.flatMap((a) => {
-      const b = found.get(a.id);
-      return b ? [{ anchorId: a.id, box: b.box, brief: a.description, confidence: 1 }] : [];
-    });
+    return {
+      located: anchors.flatMap((a) => {
+        const b = found.get(a.id);
+        return b ? [{ anchorId: a.id, box: b.box, brief: a.description, confidence: 1 }] : [];
+      }),
+    };
   } catch (error) {
     if (signal?.aborted) throw error;
     console.warn(
       `[illustration] could not locate ${anchors.map((a) => a.name).join(", ")} for an in-place change:`,
       errorForLog(error),
     );
-    return [];
+    return { located: [], failure: error };
   }
 }
 
@@ -2015,7 +2013,7 @@ async function renderPage(
     const known = new Set(prevDepicted.map((d) => d.anchorId));
     const missing = anchors.filter((a) => wanted.has(a.id) && !known.has(a.id));
     if (missing.length > 0) {
-      const located = await locateSubjectsNow({
+      const { located, failure } = await locateSubjectsNow({
         anchors: missing,
         page: compositionData,
         env,
@@ -2026,7 +2024,24 @@ async function renderPage(
       // Nothing to change in place without knowing where they are: stop now,
       // before any picture is paid for.
       if (lost.length > 0 && options.inPlaceOnly) {
-        const reason = `could not find ${lost.map((a) => a.name).join(", ")} on the page`;
+        const names = lost.map((a) => a.name).join(", ");
+        // The look itself failed (most often its deadline), which says nothing
+        // about the picture: fail as what it was, so the edit is retried and the
+        // reader isn't told the person is missing from the page.
+        if (failure) {
+          const ranOut =
+            failure instanceof ProviderError
+              ? failure.kind === "aborted" || failure.kind === "timeout"
+              : isAbortError(failure);
+          throw ranOut
+            ? new ProviderError(`Could not check where ${names} stand on the page in time.`, {
+                kind: "timeout",
+                cause: failure,
+                details: errorForLog(failure),
+              })
+            : failure;
+        }
+        const reason = `could not find ${names} on the page`;
         console.warn(`[illustration] in-place change stopped: ${reason}`);
         throw new InPlaceEditError(reason);
       }

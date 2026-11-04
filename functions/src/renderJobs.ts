@@ -35,7 +35,7 @@ import express, { type Express, type Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
 import { getFunctions } from "firebase-admin/functions";
 import { logger } from "firebase-functions/v2";
-import { onTaskDispatched } from "firebase-functions/v2/tasks";
+import { onTaskDispatched } from "./runtimeTriggers";
 import sharp from "sharp";
 import type { Browser, Page } from "puppeteer-core";
 import { getBrandingConfig, getImageMasksConfig } from "./appConfig";

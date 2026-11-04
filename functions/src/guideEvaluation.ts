@@ -1,4 +1,4 @@
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { getFirestore } from "firebase-admin/firestore";
 import { ALL_SECRETS } from "./secrets";
 import { ensureAdmin } from "./storage";

@@ -7,7 +7,7 @@
  * up with linear backoff and bounded attempts. Recovery/exhaustion both raise
  * admin alerts (see `retryFailedFulfillments`).
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "./storage";
 import { ALL_SECRETS } from "./secrets";

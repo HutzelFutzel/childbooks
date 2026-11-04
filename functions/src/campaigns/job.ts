@@ -16,7 +16,7 @@
  * Daily rather than hourly: nothing here is time-critical to the hour, and both
  * passes read broadly enough that running them 24× more often would be pure cost.
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "../runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "../storage";
 import { ALL_SECRETS } from "../secrets";

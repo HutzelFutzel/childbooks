@@ -6,7 +6,7 @@
  * hour: the invite screen showing "pending" for something that can no longer be
  * accepted is exactly the kind of small lie that generates support mail.
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "../runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "../storage";
 import { ALL_SECRETS } from "../secrets";

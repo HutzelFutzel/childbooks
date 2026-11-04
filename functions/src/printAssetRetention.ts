@@ -19,7 +19,7 @@
  *
  * Bounded per run so a large backlog drains over days instead of timing out.
  */
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { getStorage } from "firebase-admin/storage";
 import { ensureAdmin, storageBucketName } from "./storage";

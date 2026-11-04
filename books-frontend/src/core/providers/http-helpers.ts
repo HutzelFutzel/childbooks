@@ -3,7 +3,7 @@
  * platform HTTP layer and normalize failures into ProviderError.
  */
 import type { ProviderId } from "../config/options";
-import { kindFromStatus, ProviderError } from "../errors";
+import { isBillingRefusal, kindFromStatus, ProviderError } from "../errors";
 import { providerHttp } from "./httpContext";
 
 function isAbort(err: unknown): boolean {
@@ -81,7 +81,12 @@ export async function requestJson<T>(
     const message = extractMessage(body);
     throw new ProviderError(
       message || `${provider} request failed with status ${res.status}`,
-      { kind: kindFromStatus(res.status), provider, status: res.status, details: body },
+      {
+        kind: isBillingRefusal(body) ? "billing" : kindFromStatus(res.status),
+        provider,
+        status: res.status,
+        details: body,
+      },
     );
   }
 

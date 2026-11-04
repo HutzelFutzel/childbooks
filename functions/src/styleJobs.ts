@@ -9,7 +9,7 @@
  */
 import { getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions/v2";
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onSchedule } from "./runtimeTriggers";
 import { deleteBlobById, ensureAdmin } from "./storage";
 import { CANDIDATE_TTL_MS } from "./customStyles";
 import { deleteShowcase, showcaseBlobIds } from "./styleShowcase";

@@ -11,12 +11,13 @@
  * ours to make, never the reader's to pay for: the provider call is metered
  * under a non-billable step and settled at zero Sparks.
  */
-import { onTaskDispatched } from "firebase-functions/v2/tasks";
+import { onTaskDispatched } from "./runtimeTriggers";
 import { logger } from "firebase-functions/v2";
 import { getFirestore } from "firebase-admin/firestore";
 import "./providerHttp";
 import { downscaleReference } from "./imaging";
 import { meterAndSettle } from "./actionRun";
+import { reportProviderOutage } from "./providerOutage";
 import { getGenerationTuningConfig, loadModelCapabilities, loadPromptContext } from "./appConfig";
 import { apiKeyFor, requireTier, resolveImageModels } from "./modelResolve";
 import { ALL_SECRETS } from "./secrets";
@@ -187,19 +188,28 @@ export async function generateStyleReference(uid: string, styleId: string, revis
   });
 }
 
+const STYLE_REFERENCE_MAX_ATTEMPTS = 3;
+
 export const runStyleReference = onTaskDispatched<{ uid: string; styleId: string; revision: number }>(
   {
     secrets: ALL_SECRETS,
     memory: "1GiB",
     timeoutSeconds: 300,
     concurrency: 2,
-    retryConfig: { maxAttempts: 3, minBackoffSeconds: 30, maxBackoffSeconds: 300 },
+    retryConfig: { maxAttempts: STYLE_REFERENCE_MAX_ATTEMPTS, minBackoffSeconds: 30, maxBackoffSeconds: 300 },
     // A background nicety: it may never crowd out the pictures readers are waiting for.
     rateLimits: { maxConcurrentDispatches: 2, maxDispatchesPerSecond: 1 },
   },
   async (req) => {
     const { uid, styleId, revision } = req.data;
     if (!uid || !styleId || !Number.isInteger(revision)) return;
-    await generateStyleReference(uid, styleId, revision);
+    try {
+      await generateStyleReference(uid, styleId, revision);
+    } catch (err) {
+      if (req.retryCount >= STYLE_REFERENCE_MAX_ATTEMPTS - 1) {
+        await reportProviderOutage(err, { source: "worker", uid, action: "styleReference" });
+      }
+      throw err;
+    }
   },
 );
