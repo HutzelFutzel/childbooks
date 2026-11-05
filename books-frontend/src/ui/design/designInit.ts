@@ -12,6 +12,8 @@ import { planPageLayout } from "../../core/book/pageLayout";
 import type { LayoutPlan, PageSide, ResolvedSlot } from "../../core/book/layouts";
 import { getBookLayout } from "../../core/book/layouts";
 import { paginate } from "../../core/pipeline/pagination";
+import { storyBoxOf } from "../../core/book/storyBox";
+import { registerStoryBoxEnsurer } from "../../core/book/storyBoxEnsurer";
 import { getCursor } from "../../core/versioning";
 import {
   COVER_BACK_ID,
@@ -365,6 +367,25 @@ function authorBox(design: BookDesign, text: string, z: number): TextBox {
     sharedStyle: sharedStyle(design, "book-author"),
   });
   box.role = "book-author";
+  return box;
+}
+
+/**
+ * A text box for the line under the title, or the author line, for a cover that has none yet: the first time
+ * the reader writes one, it appears on the cover where it would have been seeded.
+ */
+export function coverLineBox(design: BookDesign, role: "book-subtitle" | "book-author", text: string, z: number): TextBox {
+  if (role === "book-author") return authorBox(design, text, z);
+  const box = makeTextBox({
+    rect: { x: 0.15, y: 0.3, w: 0.7, h: 0.12 },
+    text,
+    family: design.defaultFontFamily,
+    sizePct: design.defaultFontSizePct,
+    presetId: "shadowed",
+    z,
+    sharedStyle: sharedStyle(design, "book-subtitle"),
+  });
+  box.role = "book-subtitle";
   return box;
 }
 
@@ -1023,6 +1044,32 @@ export function illustrationMatchesLayout(project: Project, page: DesignPage): b
   const layout = getBookLayout(project.config.layoutId);
   return render.layoutId === layout.id && render.compositionMode === page.plan.mode;
 }
+
+/**
+ * Make sure a page that has words also shows them. A page added after the layout
+ * was seeded, or one that was blank, has no story box; this adds only that box,
+ * from the active layout, and touches nothing else on the page. A page that
+ * already has a story box (or several) is left exactly as it is.
+ */
+export function ensureStoryBox(
+  project: Project,
+  pageId: string,
+  layoutsConfig?: LayoutsConfig | null,
+): Project {
+  const design = project.design;
+  const doc = project.screenplay ? getCursor(project.screenplay).content : null;
+  const spread = doc?.spreads.find((s) => s.id === pageId);
+  if (!design || !spread || !spread.text.trim()) return project;
+  const stored = design.pages[pageId];
+  if (stored && storyBoxOf(stored) !== "none") return project;
+  const page = buildDesignPages(project, layoutsConfig).find((p) => p.id === pageId);
+  if (!page || page.isCover) return project;
+  const next = stored ? relayoutPageDesign(design, page, stored) : seedPageDesign(design, page);
+  return { ...project, design: { ...design, pages: { ...design.pages, [pageId]: next } } };
+}
+
+// The assistant adds words to pages through core, which cannot load this file; it calls back here.
+registerStoryBoxEnsurer((project, pageId) => ensureStoryBox(project, pageId));
 
 export { uid as newTextBoxId };
 export { uid as newImageId };

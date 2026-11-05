@@ -12,6 +12,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   BookOpen,
   BookText,
+  FileText,
   Info,
   Layers as LayersIcon,
   MoreHorizontal,
@@ -24,6 +25,7 @@ import {
 } from "lucide-react";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { getCursor } from "../../core/versioning";
+import { hasNoPicture } from "../../core/book/pagePlan";
 import { staleIllustrationSpreadIds } from "../../state/ai";
 import { prefetchBlob } from "../../state/blobs";
 import { useJobsStore } from "../../state/jobsStore";
@@ -44,6 +46,7 @@ import { PageStagePanel } from "./PageEditorCard";
 import { PairPageStagePanel } from "./PairPageStage";
 import { useStudio } from "./StudioContext";
 import { useStudioPanelStore } from "./studioPanelStore";
+import { pageNumberOf } from "../../core/book/pageRefs";
 import {
   buildDisplaySpreads,
   coverSideOf,
@@ -87,6 +90,9 @@ export function BookCanvas() {
   const closeImageEdit = useStudioPanelStore((s) => s.closeImageEdit);
   const closeToolPanel = useStudioPanelStore((s) => s.closeToolPanel);
   const toggleToolPanel = useStudioPanelStore((s) => s.toggleToolPanel);
+  const openToolPanel = useStudioPanelStore((s) => s.openToolPanel);
+  const pageToOpen = useStudioPanelStore((s) => s.pageToOpen);
+  const clearPageToOpen = useStudioPanelStore((s) => s.clearPageToOpen);
   const models = useResolvedModels();
   const screenplayJob = useJobsStore((s) => s.screenplayJob);
   const startScreenplay = useJobsStore((s) => s.startScreenplay);
@@ -162,6 +168,7 @@ export function BookCanvas() {
     }
     return pageIds[0];
   }, [selection, activeDisp]);
+  const activePageNumber = activePageId ? pageNumberOf(project, activePageId) : null;
   const activePageLabel = useMemo(
     () =>
       activeDisp
@@ -169,6 +176,25 @@ export function BookCanvas() {
         : undefined,
     [activeDisp, activePageId],
   );
+
+  // A page the reader just added opens its card as soon as the book shows it, so describing it is the next thing they see.
+  useEffect(() => {
+    if (!pageToOpen) return;
+    const target = displays.find((disp) => displayEntries(disp).some(({ entry }) => entry.page.id === pageToOpen));
+    if (!target) return;
+    setEditingDisp(target.id);
+    select({ kind: "page", pageId: pageToOpen });
+    openToolPanel("page");
+    clearPageToOpen();
+  }, [pageToOpen, displays, setEditingDisp, select, openToolPanel, clearPageToOpen]);
+
+  /** The page on the canvas is a picture page that has not been drawn: the way to describe it is one tap away. */
+  const needsPicture = useMemo(() => {
+    if (!activePageId || !doc) return false;
+    const spread = doc.spreads.find((candidate) => candidate.id === activePageId);
+    if (!spread || hasNoPicture(spread) || spread.placeholder) return false;
+    return !project.illustrations?.[activePageId];
+  }, [activePageId, doc, project.illustrations]);
 
   const retryScreenplay = useCallback(() => {
     void startScreenplay(project, true).catch((err) => notify.error(err));
@@ -227,10 +253,27 @@ export function BookCanvas() {
           <span className="mx-1 hidden h-5 w-px bg-ink-200 sm:block" />
           <ToolbarIconButton
             icon={<LayersIcon className="size-4" />}
-            label="Arrange"
+            label="Arrange layout"
+            showLabel
             active={toolPanel === "layers"}
             disabled={!activePageId}
             onClick={() => toggleToolPanel("layers")}
+          />
+          <ToolbarIconButton
+            icon={<FileText className="size-4" />}
+            label={
+              activePageNumber !== null
+                ? `Edit page ${activePageNumber}`
+                : activePageId === COVER_BACK_ID
+                  ? "Edit back cover"
+                  : activePageId === COVER_FRONT_ID
+                    ? "Edit front cover"
+                    : "Edit page"
+            }
+            showLabel
+            active={toolPanel === "page"}
+            disabled={!activePageId}
+            onClick={() => toggleToolPanel("page")}
           />
           {activePageId && arrangePages.length > 0 && (
             <div className="flex h-9 items-center justify-center">
@@ -317,6 +360,14 @@ export function BookCanvas() {
                 select({ kind: "none" });
               }}
             >
+              {needsPicture && toolPanel !== "page" && (
+                <div className="mb-2 flex shrink-0 items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 px-3 py-2">
+                  <p className="text-xs font-medium text-brand-800">This page has no picture yet.</p>
+                  <Button size="sm" variant="secondary" onClick={() => openToolPanel("page")}>
+                    What happens on this page?
+                  </Button>
+                </div>
+              )}
               {activeDisp ? (
                 <ActiveSpreadStage disp={activeDisp} />
               ) : (
@@ -338,6 +389,7 @@ export function BookCanvas() {
                 <ElementPanel
                   toolPanel={toolPanel}
                   arrangePages={arrangePages}
+                  activePageId={activePageId}
                   onClose={closeInspector}
                 />
               </InspectorDock>
@@ -362,12 +414,15 @@ function SurfaceIdentity({ disp }: { disp: DisplaySpread }) {
 function ToolbarIconButton({
   icon,
   label,
+  showLabel,
   active,
   disabled,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
+  /** Say the name next to the icon, for the tool people have to find. */
+  showLabel?: boolean;
   active?: boolean;
   disabled?: boolean;
   onClick: () => void;
@@ -381,11 +436,13 @@ function ToolbarIconButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "flex size-9 items-center justify-center rounded-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 disabled:pointer-events-none disabled:opacity-35",
+        "flex h-9 items-center justify-center gap-1.5 rounded-lg text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 disabled:pointer-events-none disabled:opacity-35",
+        showLabel ? "px-2.5" : "w-9",
         active ? "bg-brand-50 text-brand-700" : "text-ink-500 hover:bg-ink-100 hover:text-ink-800",
       )}
     >
       {icon}
+      {showLabel ? <span>{label}</span> : null}
     </button>
   );
   return control;

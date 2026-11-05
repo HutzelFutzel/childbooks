@@ -90,6 +90,7 @@ import { pickRandomActiveMaskId } from "../../core/config/imageMasks";
 import { useStudioPanelStore } from "./studioPanelStore";
 import { labelForOps, diffDesign } from "../../core/book/changeLog";
 import { canRedoSelector, canUndoSelector, useBookHistory } from "../../state/bookHistory";
+import { useChatStudio } from "../../state/chatStudio";
 import {
   patchStorySnapshot,
   storySnapshotsEqual,
@@ -916,7 +917,8 @@ export function StudioProvider({
   const setEditingDisp = useCallback((id: string | null) => {
     setEditingDispId(id);
     setSelection({ kind: "none" });
-    useStudioPanelStore.getState().reset();
+    // The page card stays open from one spread to the next; every other sheet closes.
+    useStudioPanelStore.getState().onSpreadChange();
   }, []);
 
   const setAnchorGenerating = useCallback((id: string, on: boolean) => {
@@ -1134,27 +1136,44 @@ export function StudioProvider({
     useBookHistory.getState().hydrate(projectId);
   }, [projectId]);
 
+  /**
+   * After Undo or Redo: bring the page it changed into view, and ring it for a moment, so the reader sees
+   * what went back. A page already in front of them stays where it is.
+   */
+  const showWhatChanged = useCallback((pages: readonly string[]) => {
+    const page = pages.find((id) => id !== "*");
+    if (!page) return;
+    const chat = useChatStudio.getState();
+    if (!chat.looking.includes(page)) chat.jumpToPage(page);
+    chat.setHoverUnit(page);
+    window.setTimeout(() => {
+      if (useChatStudio.getState().hoverUnit === page) useChatStudio.getState().setHoverUnit(null);
+    }, 1400);
+  }, []);
+
   const undo = useCallback(() => {
     coalesceKey.current = null;
     void useBookHistory
       .getState()
       .undo(projectId)
-      .then(() => {
+      .then((outcome) => {
         const next = useProjectsStore.getState().current();
         if (next) sanitizeSelection(next);
+        if (outcome.status === "done") showWhatChanged(outcome.entry.pages);
       });
-  }, [projectId, sanitizeSelection]);
+  }, [projectId, sanitizeSelection, showWhatChanged]);
 
   const redo = useCallback(() => {
     coalesceKey.current = null;
     void useBookHistory
       .getState()
       .redo(projectId)
-      .then(() => {
+      .then((outcome) => {
         const next = useProjectsStore.getState().current();
         if (next) sanitizeSelection(next);
+        if (outcome.status === "done") showWhatChanged(outcome.entry.pages);
       });
-  }, [projectId, sanitizeSelection]);
+  }, [projectId, sanitizeSelection, showWhatChanged]);
 
   const historyCanUndo = useBookHistory(canUndoSelector(projectId));
   const historyCanRedo = useBookHistory(canRedoSelector(projectId));

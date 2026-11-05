@@ -137,7 +137,7 @@ export function wellIntro(
       return [{ key: "askWhich", priority: "question" }];
     case "agentBlocked":
       return well.remedy.requirement === "notLocked"
-        ? [{ key: "lockedBlocked", priority: "question" }]
+        ? [{ key: well.remedy.line ?? "lockedBlocked", priority: "question" }]
         : [{ key: "blocked", priority: "question", vars: { what: well.remedy.what } }];
     case "sparksOffer":
       return [{ key: "sparksOffer", priority: "question" }];

@@ -76,6 +76,11 @@ jobs:
       - name: Check guide invariants
         run: yarn check:guide
 
+      # Editing a page after drawing starts: the page plan's edits, and the book's
+      # art style held out of reach of every page's text and prompt.
+      - name: Check page editing invariants
+        run: yarn check:pages
+
       # App Hosting applies apphosting.yaml's env when it builds; a bare
       # `yarn build:web` here would not, and NEXT_PUBLIC_* are inlined at build
       # time. Load them so this really is the same build production gets.

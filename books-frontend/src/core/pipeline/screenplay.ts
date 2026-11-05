@@ -25,6 +25,7 @@ import { optionsGuidance } from "../config/storyCraft";
 import { fixPagination, fitSpreadsToPages } from "./pagination";
 import { readManuscript, splitGuidance, storyForPages } from "../story/manuscriptShape";
 import { restoreModelLineBreaks } from "../story/lineBreaks";
+import { withoutStyleAsides } from "../book/styleRequest";
 import { briefOf, namedHeroes } from "../story/brief";
 import { withRetry } from "./retry";
 import { resolveAudienceOverlays, type AudienceOverlays } from "../prompts/audience";
@@ -718,16 +719,17 @@ function mapScreenplay(
     // A model writes a line break as a real one or as the two characters \n.
     const text = restoreModelLineBreaks(s.text);
     const wardrobe = (s.wardrobe ?? []).flatMap((entry) => {
-      const outfit = entry.outfit.trim();
+      const outfit = withoutStyleAsides(entry.outfit.trim());
       const { ids } = matchAnchorNames([entry.anchor], anchors);
       return outfit && ids[0] ? [{ anchorId: ids[0], outfit }] : [];
     });
-    const continuity = (s.continuity ?? "").trim();
+    const continuity = withoutStyleAsides((s.continuity ?? "").trim());
     return {
       id: uid(),
       kind: s.kind,
       text,
-      illustration: s.illustration,
+      // The book's look is set once for the whole book; a page's brief only says what is drawn.
+      illustration: withoutStyleAsides(s.illustration),
       layoutNote: s.layoutNote,
       ...(continuity ? { continuity } : {}),
       ...(wardrobe.length > 0 ? { wardrobe } : {}),
@@ -751,14 +753,14 @@ function mapScreenplay(
     frontCover: {
       title: raw.frontCover.title,
       subtitle: raw.frontCover.subtitle,
-      illustration: raw.frontCover.illustration,
+      illustration: withoutStyleAsides(raw.frontCover.illustration),
       ...toRefs(raw.frontCover.anchors, "front"),
     },
     // The back cover carries no words of its own: only words the reader added survive a revision.
     backCover: {
       title: previous?.backCover?.title ?? "",
       subtitle: previous?.backCover?.subtitle ?? "",
-      illustration: raw.backCover.illustration,
+      illustration: withoutStyleAsides(raw.backCover.illustration),
       ...toRefs(raw.backCover.anchors, "back"),
     },
     spine: { text: raw.spineText },

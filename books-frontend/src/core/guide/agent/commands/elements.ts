@@ -15,6 +15,9 @@ import { bookProductForConfig } from "../../../book";
 import { interiorUnitIds, pageNumberOf } from "../../../book/pageRefs";
 import { illustrationUnits } from "../../../book/units";
 import { applyBookTitle, applyCoverLine } from "../../../book/coverEdits";
+import { setPageWords, spreadOf } from "../../../book/pagePlan";
+import { ensureStoryBoxFor } from "../../../book/storyBoxEnsurer";
+import { storyBoxOf } from "../../../book/storyBox";
 import { coverLinesOf } from "../../../book/coverLines";
 import { authoringOf, withAuthoring } from "../../projectState";
 import { COVER_FRONT_ID, type Project } from "../../../types";
@@ -145,15 +148,6 @@ function bubbleSizing(chars: number, aspect: number): { w: number; h: number; si
     }
   }
   return { w, h: 0.4, size: 0.024 };
-}
-
-/** The story text box of a page, when there is exactly one the reader could mean. */
-function storyBoxOf(page: PageDesign | undefined): TextBox | "none" | "several" {
-  const boxes = (page?.textBoxes ?? []).filter(
-    (box) => !box.hidden && !box.locked && (box.role === "story-body" || (!box.role && Boolean(box.slotId))),
-  );
-  if (boxes.length === 0) return "none";
-  return boxes.length > 1 ? "several" : boxes[0]!;
 }
 
 export const ELEMENT_COMMANDS: CommandDef[] = [
@@ -539,9 +533,9 @@ export const ELEMENT_COMMANDS: CommandDef[] = [
       const page = design.pages[pageId];
       const box = storyBoxOf(page);
       const label = pageWord(project, pageId);
-      if (box === "none") return { kind: "invalid", reason: `${label[0]!.toUpperCase()}${label.slice(1)} has no words to change.`, say: true };
       if (box === "several") return { kind: "invalid", reason: `${label[0]!.toUpperCase()}${label.slice(1)} has more than one text box. Edit it in the page editor.`, say: true };
-      const current = textFromParagraphs(box.paragraphs);
+      // The page's words are what is shown on it; a page with no text box yet has the plan's words.
+      const current = box === "none" ? (spreadOf(project, pageId)?.text ?? "") : textFromParagraphs(box.paragraphs);
       const from = arg(args, "from");
       let next = words;
       if (from) {
@@ -550,16 +544,11 @@ export const ELEMENT_COMMANDS: CommandDef[] = [
         next = `${current.slice(0, at)}${words}${current.slice(at + from.length)}`.slice(0, WORDS_MAX);
       }
       if (next.trim() === current.trim()) return { kind: "noop", beat: beat("alreadyThat") };
-      const pages2: Record<string, PageDesign> = {
-        ...design.pages,
-        [pageId]: {
-          ...page!,
-          textBoxes: page!.textBoxes.map((candidate) => (candidate.id === box.id ? { ...candidate, paragraphs: wordParagraphs(next) } : candidate)),
-        },
-      };
+      // The plan's words and the text box are written together, and a page with no box gets one.
+      const written = ensureStoryBoxFor(setPageWords(project, pageId, next), pageId);
       return {
         kind: "write",
-        project: { ...project, design: { ...design, pages: pages2 } },
+        project: written,
         beat: beat("done", undefined, { receipt: `Changed the words on ${label}` }),
         view: "pages",
       };

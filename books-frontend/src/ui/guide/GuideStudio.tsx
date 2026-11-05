@@ -629,10 +629,24 @@ function ChatShell({
       leaveFocus();
       return;
     }
+    // Edit opens the page the reader pointed at, else the spread that is open. From another tab (Story,
+    // Style) nothing is open, so it starts at the first inside page rather than the front cover.
+    const isInside = (id: string) => id !== COVER_FRONT_ID && id !== COVER_BACK_ID;
+    const chip = store().chip;
+    const chipUnit = chip && chip.kind !== "person" && dispIndexOf(displays, chip.unitId) >= 0 ? chip.unitId : undefined;
     const disp = displays[Math.min(Math.max(0, spread), displays.length - 1)];
-    const unitId = disp ? dispUnitIds(disp)[0] : undefined;
+    const openIds = disp ? dispUnitIds(disp) : [];
+    const fromBook = view === "pages";
+    const firstInside = displays.flatMap((d) => dispUnitIds(d)).find(isInside);
+    const unitId = fromBook
+      ? chipUnit && openIds.includes(chipUnit)
+        ? chipUnit
+        : openIds[0]
+      : (chipUnit ?? firstInside ?? openIds[0]);
     if (!unitId) return;
     store().setView("pages");
+    const index = dispIndexOf(displays, unitId);
+    if (index >= 0) setSpread(index);
     enterFocus(unitId);
   };
   useEffect(() => {
@@ -1044,7 +1058,7 @@ function BookPane({
           >
             {view === "style" && <StyleView project={project} locked={journey.locked} />}
             {view === "cast" && <CastView project={project} locked={journey.locked} />}
-            {view === "story" && <StoryView project={project} locked={journey.locked} />}
+            {view === "story" && <StoryView project={project} locked={journey.locked} drawOffered={journey.chatWell?.kind === "bookFinish"} />}
             {view === "pages" && (
               <PagesView
                 project={project}
@@ -1052,6 +1066,7 @@ function BookPane({
                 onIndex={onSpread}
                 onFocus={onFocus}
                 stalePages={journey.stalePages}
+                canEditPages={journey.locked}
               />
             )}
           </motion.div>

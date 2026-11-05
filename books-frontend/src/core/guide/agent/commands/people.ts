@@ -32,6 +32,7 @@ import { authoringOf, withAuthoring } from "../../projectState";
 import type { GuideTarget } from "../../target";
 import { peopleWithoutPortrait } from "../requirements";
 import { castOf, countMentions, foldName, resolveAnchor, resolvePerson } from "../resolve";
+import { storyOf } from "../../../book/pagePlan";
 import type { CommandDef, CommandResult, Impact } from "../types";
 import {
   whenAgeToSet,
@@ -231,7 +232,7 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
       const found = resolvePerson(project, arg(args, "person"));
       if (found.kind !== "one") return { level: "reversible", effects: [] };
       const name = found.value.name.trim();
-      const mentions = countMentions(project.config.storyText, name);
+      const mentions = countMentions(storyOf(project), name);
       return {
         // Only a story that names them is a decision; otherwise Undo is the safety.
         level: mentions > 0 ? "destructive" : "reversible",
@@ -243,7 +244,7 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
     },
     choices: (project, args) => {
       const found = resolvePerson(project, arg(args, "person"));
-      if (found.kind !== "one" || countMentions(project.config.storyText, found.value.name.trim()) === 0) return null;
+      if (found.kind !== "one" || countMentions(storyOf(project), found.value.name.trim()) === 0) return null;
       return [
         { label: "rewriteWithout", args: { story: "rewrite" } },
         { label: "keepStoryAsIs", args: { story: "keep" } },
@@ -267,7 +268,7 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
           ),
         };
       }
-      const rewrite = arg(args, "story") === "rewrite" && countMentions(project.config.storyText, name) > 0;
+      const rewrite = arg(args, "story") === "rewrite" && countMentions(storyOf(project), name) > 0;
       return {
         kind: "write",
         project: next,

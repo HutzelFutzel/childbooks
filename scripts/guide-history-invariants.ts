@@ -37,11 +37,14 @@ import { createVersionTree } from "../books-frontend/src/core/versioning";
 import { bookBusyOf, busyReason } from "../books-frontend/src/core/guide/bookBusy";
 import { changesTheScene } from "../books-frontend/src/core/pipeline/editScope";
 import { anchorsNamedIn, castOnPage, withPageCast } from "../books-frontend/src/core/book/pageCast";
+import { hasNoPicture, pageKind, spreadOf } from "../books-frontend/src/core/book/pagePlan";
 import { restoreCastOf, snapshotForFields } from "../books-frontend/src/core/guide/agent/restore";
 import { GUIDE_COMMANDS } from "../books-frontend/src/core/guide/agent/registry";
 import { resolvePaperColor } from "../books-frontend/src/core/guide/agent/commands/design";
 import type { CommandContext } from "../books-frontend/src/core/guide/agent/types";
 import type { CheckResult } from "./guide-agent-invariants";
+// Plugs in the editor's text-box seeding, which the page commands call through core.
+import "../books-frontend/src/ui/design/designInit";
 
 const failures: string[] = [];
 const notes: string[] = [];
@@ -341,7 +344,20 @@ export function checkGuideHistory(): CheckResult {
     partly.kind === "effect" && partly.effect.kind === "redrawPage" && partly.effect.unitIds.join() === pageIds[1],
     "a page with no picture is left out of a batch instead of failing it",
   );
-  check(edit.run(drawnBook, { change: "an umbrella" }, ctxFor([pageIds[2]!])).kind === "invalid", "a page with no picture has nothing to change");
+  // A page with no picture is drawn from what the reader says happens on it, not "changed".
+  const undrawn = edit.run(drawnBook, { change: "Arthur finds a lantern" }, ctxFor([pageIds[2]!]));
+  check(
+    undrawn.kind === "write" &&
+      undrawn.then?.kind === "redrawPage" &&
+      undrawn.then.mode === "new" &&
+      undrawn.then.unitIds.join() === pageIds[2] &&
+      /lantern/.test(spreadOf(undrawn.project, pageIds[2]!)?.illustration ?? ""),
+    "a page with no picture is drawn from what the reader says happens on it",
+  );
+  check(
+    edit.run(drawnBook, { change: "make it watercolor" }, ctxFor([pageIds[2]!])).kind === "noop",
+    "a request that is only about the look changes nothing",
+  );
   check(edit.run(drawnBook, { change: "an umbrella" }, ctxFor(["gone"])).kind === "invalid", "a page that is gone has nothing to change");
   check(edit.run(drawnBook, { change: "" }, ctxFor([pageIds[1]!])).kind === "ask", "a picture change with no change asks what");
 
@@ -631,25 +647,75 @@ export function checkGuideHistory(): CheckResult {
   const five = bookWithPages(5);
   const fiveIds = interiorUnitIds(five);
   const orderOf = (p: Project) => interiorUnitIds(p).join(",");
-  const run = (id: "addPage" | "removePage" | "duplicatePage" | "movePage", p: Project, args: Record<string, string>, pages?: string[]) =>
+  const run = (id: "addPage" | "removePage" | "duplicatePage" | "movePage" | "setPagePicture", p: Project, args: Record<string, string>, pages?: string[]) =>
     GUIDE_COMMANDS[id].run(p, args, ctxFor(pages));
 
-  const atEnd = run("addPage", five, {});
+  const atEnd = run("addPage", five, { type: "blank" });
   check(atEnd.kind === "write" && interiorUnitIds(atEnd.project).length === 6 && interiorUnitIds(atEnd.project).slice(0, 5).join(",") === fiveIds.join(","), "a page added with no place goes at the end");
-  const afterTwo = run("addPage", five, { where: "after" }, [fiveIds[1]!]);
+  const afterTwo = run("addPage", five, { where: "after", type: "blank" }, [fiveIds[1]!]);
   check(afterTwo.kind === "write" && interiorUnitIds(afterTwo.project)[2] !== fiveIds[2] && interiorUnitIds(afterTwo.project)[3] === fiveIds[2], "a page added after page 2 becomes page 3");
-  const atStart = run("addPage", five, { where: "start" });
+  const atStart = run("addPage", five, { where: "start", type: "blank" });
   check(atStart.kind === "write" && interiorUnitIds(atStart.project)[1] === fiveIds[0], "a page added at the start pushes the others down");
-  check(run("addPage", five, { where: "before" }).kind === "invalid", "before with no page named asks which");
+  check(run("addPage", five, { where: "before", type: "blank" }).kind === "invalid", "before with no page named asks which");
+
+  // A page described when it is added is a picture page, drawn through the priced card, the same page when planned and written.
+  const described = run("addPage", five, { where: "after", scene: "Arthur finds a lantern in the cave" }, [fiveIds[1]!]);
+  const describedAgain = run("addPage", five, { where: "after", scene: "Arthur finds a lantern in the cave" }, [fiveIds[1]!]);
+  const describedId = described.kind === "write" ? interiorUnitIds(described.project)[2] : undefined;
+  check(
+    described.kind === "write" &&
+      described.then?.kind === "redrawPage" &&
+      described.then.unitIds.join() === describedId &&
+      describedAgain.kind === "write" &&
+      interiorUnitIds(describedAgain.project)[2] === describedId,
+    "a described page is the same page when it is planned and when it is written, and goes to the redraw card",
+  );
+  check(
+    described.kind === "write" && describedId !== undefined && pageKind(described.project, describedId) === "picture" && !hasNoPicture(spreadOf(described.project, describedId)!),
+    "a described page is a picture page that needs drawing",
+  );
+  check(run("addPage", five, {}).kind === "ask", "an added page with nothing said about it asks what happens on it");
+  const wordsPage = run("addPage", five, { words: "The end." });
+  const wordsId = wordsPage.kind === "write" ? interiorUnitIds(wordsPage.project)[5] : undefined;
+  check(
+    wordsPage.kind === "write" && wordsId !== undefined && pageKind(wordsPage.project, wordsId) === "text" && wordsPage.then === undefined,
+    "a page added with only words is a page of text and costs nothing",
+  );
+  check(run("addPage", five, { scene: "in watercolor" }).kind === "ask", "a new page described only by a style asks again, since the look is the book's");
+  const mixedScene = run("addPage", five, { scene: "Arthur at the beach, in pixar style" });
+  check(
+    mixedScene.kind === "write" &&
+      mixedScene.beat.key === "styleKeptForBook" &&
+      !/pixar/i.test(spreadOf(mixedScene.project, interiorUnitIds(mixedScene.project)[5]!)?.illustration ?? "pixar"),
+    "a style request inside a page's description is left out and said so",
+  );
+
+  // Taking a picture off a page and putting it back never loses it.
+  const noPicture = run("setPagePicture", five, { picture: "off" }, [fiveIds[0]!]);
+  check(
+    noPicture.kind === "write" && pageKind(noPicture.project, fiveIds[0]!) !== "picture" && hasNoPicture(spreadOf(noPicture.project, fiveIds[0]!)!),
+    "a picture can be taken off a page",
+  );
+  if (noPicture.kind === "write") {
+    const back = run("setPagePicture", noPicture.project, { picture: "on" }, [fiveIds[0]!]);
+    check(back.kind === "write" && pageKind(back.project, fiveIds[0]!) === "picture", "the picture can be put back");
+    check(run("setPagePicture", noPicture.project, { picture: "off" }, [fiveIds[0]!]).kind === "noop", "taking the picture off twice does nothing");
+  }
 
   const removed = run("removePage", five, {}, [fiveIds[2]!]);
   check(removed.kind === "write" && interiorUnitIds(removed.project).join(",") === fiveIds.filter((id) => id !== fiveIds[2]).join(","), "removing page 3 leaves the others in order");
   check(run("removePage", five, {}).kind === "invalid", "removing with no page named asks which, never guesses");
   check(run("removePage", five, {}, [fiveIds[0]!, fiveIds[1]!]).kind === "invalid", "two pages to remove at once are not guessed at");
   check(run("removePage", bookWithPages(1), {}, [interiorUnitIds(bookWithPages(1))[0]!]).kind === "invalid", "the last page can't be removed");
-  check(GUIDE_COMMANDS.removePage.alwaysConfirm === true, "removing a page always confirms");
+  check(GUIDE_COMMANDS.removePage.alwaysConfirm !== true, "removing a page does not ask first: it is kept and can be put back");
   const impact = GUIDE_COMMANDS.removePage.impact?.(five, {}, ctxFor([fiveIds[2]!]));
-  check(impact?.level === "destructive" && impact.effects[0]?.kind === "removesPage" && (impact.effects[0] as { page: number }).page === 3, "the removal card names the page");
+  check(impact?.level === "reversible" && impact.effects[0]?.kind === "removesPage" && (impact.effects[0] as { page: number }).page === 3, "the removal still names the page");
+  check(removed.kind === "write" && (removed.project.removedPages ?? []).length === 1 && removed.project.removedPages![0]!.spread.id === fiveIds[2], "a removed page is kept");
+  if (removed.kind === "write") {
+    const back = run("restorePage", removed.project, {});
+    check(back.kind === "write" && orderOf(back.project) === fiveIds.join(",") && (back.project.removedPages ?? []).length === 0, "putting it back restores it in the same place");
+    check(run("restorePage", five, {}).kind === "invalid", "with nothing removed there is nothing to put back");
+  }
 
   const copy = run("duplicatePage", five, {}, [fiveIds[1]!]);
   check(copy.kind === "write" && interiorUnitIds(copy.project).length === 6 && interiorUnitIds(copy.project)[1] === fiveIds[1] && interiorUnitIds(copy.project)[2] !== fiveIds[2], "a copy lands right after its page");

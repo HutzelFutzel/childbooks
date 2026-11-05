@@ -10,6 +10,7 @@
  */
 import type { GuideAgentConfig } from "../../config/guideAgent";
 import { isSkillEnabled } from "../../config/guideAgent";
+import type { GuideLineKey } from "../copy";
 import type { BookViewId } from "../journey";
 import type { Project } from "../../types";
 import { aimAtSelection } from "./aim";
@@ -84,6 +85,23 @@ export interface PlanInput {
   factsWritten?: boolean;
 }
 
+/**
+ * What a refusal after the pages are drawn says, for the skills that have their own
+ * words for it. The general line tells the reader to change a picture; for a rewrite
+ * of the story or a new look that is the wrong advice, so those say what they can do.
+ */
+const AFTER_DRAWING_LINES: Partial<Record<CommandCall["id"], GuideLineKey>> = {
+  setStyle: "styleLockedBlocked",
+  reviseStory: "storyLockedBlocked",
+  draftStory: "storyLockedBlocked",
+};
+
+/** The refusal as the reader will meet it: the skill that was asked, and its own line where it has one. */
+export function withRefusal(id: CommandCall["id"], remedy: Remedy): Remedy {
+  const line = remedy.requirement === "notLocked" ? AFTER_DRAWING_LINES[id] : undefined;
+  return { ...remedy, skill: id, ...(line ? { line } : {}) };
+}
+
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value && typeof value === "object") {
@@ -144,7 +162,7 @@ export function planTurn(input: PlanInput): Plan {
     }
     const remedy = firstUnmet(working, def.requires, ctx);
     if (remedy) {
-      plan.blocked.push({ call: original, remedy });
+      plan.blocked.push({ call: original, remedy: withRefusal(original.id, remedy) });
       continue;
     }
     const prepared = def.prepare ? def.prepare(original.args) : original.args;
@@ -212,7 +230,7 @@ export function planTurn(input: PlanInput): Plan {
         plan.beats.push(result.beat);
         return;
       case "blocked":
-        plan.blocked.push({ call, remedy: result.remedy });
+        plan.blocked.push({ call, remedy: withRefusal(call.id, result.remedy) });
         return;
       case "noop":
         noops.push(result.beat);
@@ -227,7 +245,7 @@ export function planTurn(input: PlanInput): Plan {
   for (const { remedy } of plan.blocked.slice(0, 1)) {
     plan.beats.push(
       remedy.requirement === "notLocked"
-        ? beat("lockedBlocked", {}, { priority: "blocking" })
+        ? beat(remedy.line ?? "lockedBlocked", {}, { priority: "blocking" })
         : beat("blocked", { what: remedy.what }, { priority: "blocking" }),
     );
     if (remedy.view) plan.views.push(remedy.view);

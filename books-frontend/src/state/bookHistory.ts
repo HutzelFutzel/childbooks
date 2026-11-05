@@ -18,6 +18,7 @@ import {
   applyEntry,
   CHANGE_LOG_MAX,
   diffDesign,
+  diffPlan,
   entriesNewerThan,
   EMPTY_LOG,
   logWith,
@@ -25,6 +26,7 @@ import {
   newestApplied,
   nextRedo,
   pagesOfOps,
+  sameValue,
   takeStructural,
   withEntryState,
   type ChangeEntry,
@@ -33,6 +35,7 @@ import {
   type DesignOp,
 } from "../core/book/changeLog";
 import type { BookDesign, Project } from "../core/types";
+import { getCursor } from "../core/versioning";
 import { useProjectsStore } from "./projectsStore";
 
 const STORAGE_PREFIX = "childbooks.changeLog.v1.";
@@ -92,7 +95,22 @@ interface HistoryState {
     coalesceKey?: string;
     merge?: boolean;
   }) => ChangeEntry | null;
-  recordStructural: (input: { projectId: string; source: ChangeSource; label: string; before: Project; after: Project }) => ChangeEntry | null;
+  recordStructural: (input: {
+    projectId: string;
+    source: ChangeSource;
+    label: string;
+    before: Project;
+    after: Project;
+    /** The pages (or covers) it touched, so Undo can show where. Default: the whole book. */
+    pages?: string[];
+    /** The change is to the cover's words: the title and the chosen subtitle and author go back with it. */
+    cover?: boolean;
+  }) => ChangeEntry | null;
+  /**
+   * An edit to what a page says, shows and who is on it. Kept property by property, so it survives a reload and
+   * can be taken back on its own; falls back to a whole snapshot when the change is more than that.
+   */
+  recordPlan: (input: { projectId: string; source: ChangeSource; label: string; before: Project; after: Project }) => ChangeEntry | null;
   /** Take back the newest change, whoever made it. */
   undo: (projectId: string) => Promise<UndoOutcome>;
   redo: (projectId: string) => Promise<UndoOutcome>;
@@ -177,16 +195,43 @@ export const useBookHistory = create<HistoryState>((set, get) => {
       return entry;
     },
 
-    recordStructural: ({ projectId, source, label, before, after }) => {
+    recordPlan: ({ projectId, source, label, before, after }) => {
+      const planOps = diffPlan(
+        before.screenplay ? getCursor(before.screenplay).content : undefined,
+        after.screenplay ? getCursor(after.screenplay).content : undefined,
+      );
+      const unchangedElsewhere =
+        planOps !== null &&
+        sameValue(before.illustrations, after.illustrations) &&
+        sameValue(before.anchors, after.anchors);
+      if (!planOps || !unchangedElsewhere) return get().recordStructural({ projectId, source, label, before, after });
+      const ops = [...planOps, ...diffDesign(before.design, after.design)];
+      if (ops.length === 0) return null;
+      if (sizeOf(ops) > MAX_OPS_CHARS) return get().recordStructural({ projectId, source, label, before, after });
       get().hydrate(projectId);
       const entry: ChangeEntry = {
         id: newId(),
         at: Date.now(),
         source,
         label,
-        pages: ["*"],
+        pages: pagesOfOps(ops),
+        ops,
+        state: "applied",
+      };
+      save(projectId, logWith(logOf(projectId), entry));
+      return entry;
+    },
+
+    recordStructural: ({ projectId, source, label, before, after, pages, cover }) => {
+      get().hydrate(projectId);
+      const entry: ChangeEntry = {
+        id: newId(),
+        at: Date.now(),
+        source,
+        label,
+        pages: pages ?? ["*"],
         ops: [],
-        structural: { before: takeStructural(before), after: takeStructural(after) },
+        structural: { before: takeStructural(before, cover), after: takeStructural(after, cover) },
         state: "applied",
       };
       save(projectId, logWith(logOf(projectId), entry));

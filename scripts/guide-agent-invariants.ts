@@ -290,6 +290,12 @@ for (const path of guideAgentSettingPaths()) {
   check(plan.beats.some((b) => b.key === "lockedBlocked"), "A drawn book's blocked change did not use the plain line.");
   check(!plan.beats.some((b) => b.key === "blocked"), "A drawn book's blocked change still says the app's raw reason.");
   check(plan.views.length === 0 && !plan.blocked[0]!.remedy.view, "A drawn book's blocked change sends the reader to a view it does not help.");
+  // A new look or a rewrite of the whole story says what can be done instead, not the picture advice.
+  const restyle = planTurn({ project: drawn, calls: [call("setStyle", { style: "watercolor" })], ctx, config: defaults });
+  check(restyle.beats.some((b) => b.key === "styleLockedBlocked"), "A look change on a drawn book did not say the look is fixed.");
+  const rewrite = planTurn({ project: drawn, calls: [call("reviseStory", { instruction: "make it funnier" })], ctx, config: defaults });
+  check(rewrite.beats.some((b) => b.key === "storyLockedBlocked"), "A story rewrite on a drawn book did not say to name a page.");
+  check(rewrite.blocked[0]?.remedy.skill === "reviseStory", "A blocked request does not record which skill was asked for.");
 }
 
 {

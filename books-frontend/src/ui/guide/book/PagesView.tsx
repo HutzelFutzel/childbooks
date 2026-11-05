@@ -8,9 +8,10 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, ChevronRight, Maximize2, SquareDashedMousePointer } from "lucide-react";
+import { ChevronLeft, ChevronRight, Maximize2, Pencil, Plus, SquareDashedMousePointer } from "lucide-react";
 import { sameTarget } from "../../../core/guide/target";
-import type { Project } from "../../../core/types";
+import { pageNumberOf } from "../../../core/book/pageRefs";
+import { COVER_BACK_ID, COVER_FRONT_ID, type Project } from "../../../core/types";
 import { getCursor } from "../../../core/versioning";
 import { prefetchBlob } from "../../../state/blobs";
 import { illustrationActionFor, redrawUnits, startRedraw } from "../../../state/chatGeneration";
@@ -18,10 +19,14 @@ import { useChatStudio } from "../../../state/chatStudio";
 import { useJobsStore } from "../../../state/jobsStore";
 import { PreviewSpread } from "../../studio/BookPreview";
 import { dispAspect, displayEntries, type DisplaySpread } from "../../studio/spreadModel";
+import { addPicturePage } from "../../studio/pagePlanOps";
+import { RecentlyRemoved } from "../../studio/RecentlyRemoved";
 import { useStudio } from "../../studio/StudioContext";
+import { useStudioPanelStore } from "../../studio/studioPanelStore";
 import { cn } from "../../lib/cn";
 import { useGuideLabel, useGuideT } from "../intl";
 import { PaidAction } from "../chat/PaidAction";
+import { PageSheet } from "./PageSheet";
 import { SpotLayer } from "./SpotLayer";
 import { UnitStatus } from "./UnitStatus";
 import { VersionPager } from "./VersionPager";
@@ -38,12 +43,15 @@ export function PagesView({
   onIndex,
   onFocus,
   stalePages,
+  canEditPages,
 }: {
   project: Project;
   index: number;
   onIndex: (index: number) => void;
   onFocus: (unitId: string) => void;
   stalePages: readonly string[];
+  /** Drawing has started, so every page holds its own words and can be changed from its card. */
+  canEditPages: boolean;
 }) {
   const t = useGuideT("chrome");
   const { displays } = useStudio();
@@ -58,6 +66,12 @@ export function PagesView({
   const [marking, setMarking] = useState<string | null>(null);
   // Marking belongs to the picture it started on; turning the page ends it.
   useEffect(() => setMarking(null), [index]);
+  // The page panel beside the book. It is the editor's panel too: open here means open there. It stays open
+  // while pages are turned and follows to the new spread.
+  const panelOpen = useStudioPanelStore((s) => s.toolPanel === "page");
+  const pagePick = useStudioPanelStore((s) => s.pagePick);
+  const openPageEditor = useStudioPanelStore((s) => s.openPageEditor);
+  const closePanel = useStudioPanelStore((s) => s.closeToolPanel);
 
   // Prefetch adjacent spreads' web blobs so turning a page renders from memory.
   useEffect(() => {
@@ -120,8 +134,27 @@ export function PagesView({
     return { left: `${slot.left}%`, width: `${slot.width}%` };
   };
 
+  const insidePages = units.filter((id) => id !== COVER_FRONT_ID && id !== COVER_BACK_ID);
+  const sheetOpen = canEditPages && panelOpen;
+  const sheetPage = sheetOpen ? (pagePick && units.includes(pagePick) ? pagePick : (units[0] ?? null)) : null;
+  const openCard = (unitId: string, options?: { focusWords?: boolean }) => {
+    setChip(unitTarget(project, unitId));
+    openPageEditor(unitId, options);
+  };
+  // A new page can land on another spread; jumping there brings the card with it.
+  const addPageAfterThisSpread = () => {
+    const spreads = project.screenplay ? getCursor(project.screenplay).content.spreads : [];
+    const last = insidePages[insidePages.length - 1];
+    const docIndex = last ? spreads.findIndex((spread) => spread.id === last) + 1 : spreads.length;
+    const id = addPicturePage(docIndex);
+    if (!id) return;
+    openPageEditor(id);
+    useChatStudio.getState().jumpToPage(id);
+  };
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="@container relative flex h-full">
+    <div className="flex h-full min-w-0 flex-1 flex-col">
       <div
         ref={stageRef}
         className="relative flex min-h-0 flex-1 items-center justify-center p-1 sm:p-1.5"
@@ -155,8 +188,13 @@ export function PagesView({
                       key={unitId}
                       type="button"
                       style={slotStyle(unitId)}
-                      onClick={() => setChip(selected ? null : target)}
-                      onDoubleClick={() => onFocus(unitId)}
+                      onClick={() => {
+                        setChip(selected ? null : target);
+                        if (sheetOpen) openPageEditor(unitId);
+                      }}
+                      // Once pages can be changed, a double-click is the shortcut to doing that: the page's
+                      // panel opens with the cursor in its words. Before that it opens the layout editor.
+                      onDoubleClick={() => (canEditPages ? openCard(unitId, { focusWords: true }) : onFocus(unitId))}
                       aria-label={target.kind === "page" ? t("page", { n: target.page }) : t("cover")}
                       aria-pressed={selected}
                       className={cn(
@@ -214,6 +252,8 @@ export function PagesView({
                           event.stopPropagation();
                           onFocus(unitId);
                         }}
+                        title={canEditPages ? "Arrange layout" : undefined}
+                        aria-label={canEditPages ? "Arrange layout" : undefined}
                         className="absolute top-2 right-2 flex size-8 items-center justify-center rounded-full bg-white/90 text-ink-600 opacity-0 shadow-soft transition group-hover/half:opacity-100 hover:text-ink-900 pointer-coarse:opacity-100"
                       >
                         <Maximize2 className="size-3.5" />
@@ -249,6 +289,42 @@ export function PagesView({
         </div>
         <Arrow side="right" disabled={at >= total - 1} label={t("nextPage")} onClick={() => onIndex(at + 1)} />
       </div>
+      {canEditPages ? (
+        <div className="flex shrink-0 flex-wrap items-center justify-center gap-1.5 px-4 pb-1">
+          {units.map((unitId) => {
+            const isCover = unitId === COVER_FRONT_ID || unitId === COVER_BACK_ID;
+            const number = pageNumberOf(project, unitId);
+            const active = sheetPage === unitId;
+            return (
+              <button
+                key={unitId}
+                type="button"
+                onClick={() => (active ? closePanel() : openCard(unitId))}
+                aria-pressed={active}
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium ring-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-500",
+                  active ? "bg-ink-900 text-white ring-ink-900" : "bg-white text-ink-700 ring-ink-900/10 hover:bg-ink-50",
+                )}
+              >
+                <Pencil className="size-3" aria-hidden />
+                {isCover ? (unitId === COVER_BACK_ID ? "Edit back cover" : "Edit front cover") : `Edit page ${number}`}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={addPageAfterThisSpread}
+            className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white px-3 text-xs font-medium text-ink-700 ring-1 ring-ink-900/10 transition hover:bg-ink-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-500"
+          >
+            <Plus className="size-3" aria-hidden />
+            Add a page
+          </button>
+          <RecentlyRemoved className="border-0 p-0" side="top" />
+          {sheetOpen ? null : (
+            <span className="hidden text-xs text-ink-400 @2xl:inline">Tip: double-click a page to edit its words.</span>
+          )}
+        </div>
+      ) : null}
       <Strip
         displays={displays}
         project={project}
@@ -257,6 +333,24 @@ export function PagesView({
         onIndex={onIndex}
         label={disp.label}
       />
+    </div>
+    {sheetOpen ? (
+      <PageSheet
+        project={project}
+        pageId={sheetPage}
+        pageIds={units}
+        onPick={(id) => {
+          setChip(unitTarget(project, id));
+          openPageEditor(id);
+        }}
+        onClose={closePanel}
+        onOpenEditor={() => onFocus(sheetPage ?? units[0]!)}
+        onAdded={(id) => {
+          openPageEditor(id);
+          useChatStudio.getState().jumpToPage(id);
+        }}
+      />
+    ) : null}
     </div>
   );
 }

@@ -22,7 +22,7 @@ import {
   type BookLanguageId,
 } from "./config/bookLanguages";
 import type { VersionTree } from "./versioning";
-import type { BookDesign } from "./design";
+import type { BookDesign, PageDesign } from "./design";
 import { DEFAULT_BOOK_LAYOUT_ID, type CompositionMode } from "./book/layouts";
 
 export type { ProviderId, Modality, ModelTier } from "./config/options";
@@ -881,11 +881,31 @@ export interface BakedCoverText {
 }
 
 /** A generated page/cover illustration with provenance for staleness checks. */
+/** A page taken out of the book, kept whole enough to put back. */
+export interface RemovedPage {
+  /** The page as it was: its words, what was happening, who was on it, its picture settings. */
+  spread: ScreenplaySpread;
+  /** Its layout and text boxes. */
+  design?: PageDesign;
+  /** Its picture, trimmed to the version in use (and the first). */
+  illustration?: VersionTree<IllustrationImage>;
+  removedAt: number;
+  /** The page it followed, to put it back in the same place; absent when it was first. */
+  afterId?: string;
+}
+
 export interface IllustrationImage extends AnchorImage {
   /** Reference versions used, so we can detect when a reference changed. */
   references?: ReferenceUse[];
   /** Text strategy this image was generated for. */
   textMode?: TextMode;
+  /**
+   * Fingerprint of the page's "what's happening" text this picture was drawn from
+   * (`sceneSignatureOf`). A picture changed in place keeps the one it had, so it
+   * never claims to match a description it was not drawn from. Absent on pictures
+   * drawn before this was recorded, which are never flagged for it.
+   */
+  sceneSignature?: string;
   /** Output preferences requested by the surface and applied by the model. */
   generation?: import("./config/imageGeneration").ResolvedImageGenerationOptions;
   /**
@@ -1198,6 +1218,11 @@ export interface Project {
   illustrations?: Record<string, VersionTree<IllustrationImage>>;
   /** Final Design: app-owned overlay/typography/pattern layer. */
   design?: BookDesign;
+  /**
+   * The last pages taken out of the book, newest last, so one removed by mistake (or whose picture was
+   * paid for) can be put back, in the same place, after a reload. Counted by pages, never by time.
+   */
+  removedPages?: RemovedPage[];
   /** Chat studio authoring state (see `core/guide/projectState.ts`). */
   authoringState?: StudioAuthoringState;
   /**

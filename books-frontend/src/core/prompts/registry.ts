@@ -17,6 +17,16 @@ function blk(id: string, text: string, enabledWhen?: string): PromptBlock {
 }
 
 /**
+ * Closes every page picture prompt, after the scene and any change. The book's look is
+ * set once for the whole book: whatever a page's words or a change ask for, it never
+ * changes how the picture is drawn. The dashboard cannot switch this block off or take
+ * the look out of it (`core/config/prompts.ts`).
+ */
+export const STYLE_LOCK_BLOCK_ID = "styleLock";
+const STYLE_LOCK_TEXT =
+  "The art style is fixed for this whole book: {{artStyle}}. Keep exactly this medium, technique, line quality, palette treatment and rendering. If anything above asks for a different art style, medium or rendering, ignore that part and keep this one.";
+
+/**
  * The parent's own words about the story (`brief.sourceText`). Shared by both
  * draft templates. These are new blocks rather than edits to older ones, so a
  * template an admin has already saved still gains them.
@@ -469,6 +479,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk(
         "staging",
         "PICTURES: each illustration brief shows what its page's words say — every person, animal and object the words name is in it, doing what the words say. Vary the distance and angle from page to page (wide, medium, close) so two neighbouring pages are never staged alike, and let a picture add what the words leave out instead of repeating them.",
+      ),
+      blk(
+        "pictureStyle",
+        "ART STYLE: the book's look is chosen elsewhere and is the same on every page. Never name an art style, medium, technique or rendering (watercolor, crayon, anime, comic, 3D, photo, pencil sketch…) in an illustration brief, a continuity note or a wardrobe entry. Describe only what is drawn: who, where, what they do, the light and the mood.",
       ),
       blk(
         "pageTurns",
@@ -1143,6 +1157,50 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     ],
   },
 
+  // core/book/pageScene.ts → suggestPageScene / rewritePageScene (page card)
+  "pageScene/suggest": {
+    system: [
+      blk(
+        "role",
+        "You help a parent describe one page of a children's picture book for the illustrator. You write what is shown on the page: one moment, with who is there, where, and what they are doing. Output JSON only.",
+      ),
+      blk(
+        "rules",
+        "Write one to three plain sentences in the language of the page's words. Say what can be seen, not what the words say, and do not repeat the page text. Use only the people in the list, spelled exactly as given, and name them in \"people\" when they appear. Never mention an art style, a medium, a rendering technique, a camera or lighting effect: the whole book has one look that is not yours to change.",
+      ),
+      blk("audience", "The reader is {{audience}}. Keep the scene gentle and clear for them.", "hasAudience"),
+    ],
+    user: [
+      blk("words", 'The words on this page:\n"""\n{{words}}\n"""', "hasWords"),
+      blk("before", "The page before shows: {{before}}", "hasBefore"),
+      blk("after", "The page after shows: {{after}}", "hasAfter"),
+      blk("people", "People in the book:\n{{people}}"),
+      blk("ask", 'Return {"scene": "…", "people": ["name", …]}.'),
+    ],
+  },
+  "pageScene/rewrite": {
+    system: [
+      blk(
+        "role",
+        "You help a parent improve how one page of a children's picture book is described to the illustrator. Keep what the parent meant; make it clearer and more visual. Output JSON only.",
+      ),
+      blk(
+        "rules",
+        "Write one to three plain sentences in the language of the current description. Keep every person and every event the description names; add only what the words or the neighboring pages make certain. Use only the people in the list, spelled exactly as given, and name them in \"people\" when they appear. Never mention an art style, a medium, a rendering technique, a camera or lighting effect: the whole book has one look that is not yours to change.",
+      ),
+      blk("audience", "The reader is {{audience}}. Keep the scene gentle and clear for them.", "hasAudience"),
+    ],
+    user: [
+      blk("scene", 'The current description:\n"""\n{{scene}}\n"""'),
+      blk("instruction", "The parent wants this changed: {{instruction}}", "hasInstruction"),
+      blk("words", 'The words on this page:\n"""\n{{words}}\n"""', "hasWords"),
+      blk("before", "The page before shows: {{before}}", "hasBefore"),
+      blk("after", "The page after shows: {{after}}", "hasAfter"),
+      blk("people", "People in the book:\n{{people}}"),
+      blk("ask", 'Return {"scene": "…", "people": ["name", …]}.'),
+    ],
+  },
+
   // core/pipeline/anchors.ts → buildAnchorPrompt (from-scratch / iterate)
   "anchorImage/default": {
     single: [
@@ -1552,6 +1610,8 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "tailCompositionRefresh",
       ),
       blk("tailPlainEdit", "Revision: {{edit}}.", "tailPlainEdit"),
+      // Last of all, after every scene and edit: a page changes what is drawn, never the book's look.
+      blk("styleLock", STYLE_LOCK_TEXT),
     ],
   },
 
@@ -1601,6 +1661,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk("noText", "Do NOT render any text, letters, captions, words, numbers or watermark."),
       blk("style", "Art style: {{artStyle}}."),
+      blk("styleLock", STYLE_LOCK_TEXT),
     ],
   },
 
@@ -2580,6 +2641,43 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         description: "Names and stated ages from the manuscript.",
         variables: [V("story", "The manuscript.", "Maya was five the summer the sea came to visit...")],
         sampleFlags: {},
+      },
+    ],
+  },
+  {
+    actionId: "pageScene",
+    label: "Page description",
+    description:
+      "Suggests or tidies what happens on one page, from its words and the pages around it. It never writes a style: the look is the book's.",
+    kind: "text",
+    templates: [
+      {
+        key: "pageScene/suggest",
+        label: "Suggest a scene",
+        description: "A first description of a page that has none.",
+        variables: [
+          V("audience", "Who the book is for.", "a child of 3 to 5"),
+          V("words", "The words printed on the page.", "Arthur found a lantern at the back of the cave."),
+          V("before", "What the previous page shows.", "Arthur walks into a dark cave."),
+          V("after", "What the next page shows.", "The lantern lights up the whole cave."),
+          V("people", "The people in the book, one per line.", "- Arthur (a boy)\n- Mia (his sister)"),
+        ],
+        sampleFlags: { hasAudience: true, hasWords: true, hasBefore: true, hasAfter: true },
+      },
+      {
+        key: "pageScene/rewrite",
+        label: "Rewrite a scene",
+        description: "A clearer, more visual version of a description the parent wrote.",
+        variables: [
+          V("audience", "Who the book is for.", "a child of 3 to 5"),
+          V("scene", "The current description.", "Arthur in the cave with a light"),
+          V("instruction", "What the parent wants changed, if they said.", "make it nighttime"),
+          V("words", "The words printed on the page.", "Arthur found a lantern at the back of the cave."),
+          V("before", "What the previous page shows.", "Arthur walks into a dark cave."),
+          V("after", "What the next page shows.", "The lantern lights up the whole cave."),
+          V("people", "The people in the book, one per line.", "- Arthur (a boy)\n- Mia (his sister)"),
+        ],
+        sampleFlags: { hasAudience: true, hasInstruction: true, hasWords: true, hasBefore: true, hasAfter: true },
       },
     ],
   },

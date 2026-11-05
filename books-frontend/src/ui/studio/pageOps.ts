@@ -6,12 +6,13 @@
 import { getCursor, updateNodeContent } from "../../core/versioning";
 import { joinPairDesign } from "../../core/book/pairSurface";
 import type { Project, ScreenplayDoc, ScreenplaySpread, SpreadKind } from "../../core/types";
+import { removePage, restorePage } from "../../core/book/pagePlan";
+import { notify } from "../lib/notify";
 import { commitStudioProject } from "./studioUndo";
 import {
   duplicateSpreadProject,
   insertSpreadProject,
   moveSpreadProject,
-  removeSpreadProject,
   withSpreads,
   type NewSpreadOpts,
 } from "../../core/book/pageEdits";
@@ -49,7 +50,22 @@ export function insertSpreadAt(docIndex: number, opts: NewSpreadOpts = {}): stri
 
 /** Remove a page and drop its design overlay (+ illustration history entry). */
 export function removeSpread(spreadId: string): void {
-  commitStudioProject((p) => removeSpreadProject(p, spreadId));
+  commitStudioProject((p) => removePage(p, spreadId), { label: "Page removed" });
+  notify.undoable("Page removed", () => restoreRemovedPage(spreadId));
+}
+
+/** Put a removed page back where it was, with its picture. The newest removed page when none is named. */
+export function restoreRemovedPage(spreadId?: string): string | null {
+  let restored: string | null = null;
+  commitStudioProject(
+    (p) => {
+      const out = restorePage(p, spreadId);
+      restored = out.id;
+      return out.project;
+    },
+    { label: "Page put back" },
+  );
+  return restored;
 }
 
 export function moveSpread(spreadId: string, dir: -1 | 1): void {

@@ -13,6 +13,7 @@ import {
   Crop,
   Eye,
   EyeOff,
+  FileText,
   GripVertical,
   Image as ImageIcon,
   Layers as LayersIcon,
@@ -25,11 +26,14 @@ import {
   Unlock,
   X,
 } from "lucide-react";
-import { COVER_BACK_ID, type PageDesign } from "../../core/types";
+import { COVER_BACK_ID, COVER_FRONT_ID, type PageDesign } from "../../core/types";
 import { textFromParagraphs } from "../../core/design";
 import { cn } from "../lib/cn";
 import { ImageEditPanel, type ImageEditSection } from "../design/ImageEditPanel";
 import { DockSetupPanel } from "./DockSetupPanel";
+import { CoverCard } from "./CoverCard";
+import { PageCard } from "./PageCard";
+import { pageNumberOf } from "../../core/book/pageRefs";
 import { useStudio, type Selection } from "./StudioContext";
 import { useStudioPanelStore, type StudioToolPanel } from "./studioPanelStore";
 import { subjectForPage } from "./usePageIllustration";
@@ -108,12 +112,15 @@ export type ArrangePageRef = { id: string; label: string };
 export function ElementPanel({
   toolPanel,
   arrangePages,
+  activePageId,
   onClose,
 }: {
-  /** Docked tool opened from the page toolbar (arrange / setup). */
+  /** Docked tool opened from the page toolbar (arrange / setup / page). */
   toolPanel: StudioToolPanel | null;
   /** Every live page on the current canvas (1–2), for the Arrange panel. */
   arrangePages: ArrangePageRef[];
+  /** The page the canvas is on, which the page card is about. */
+  activePageId?: string;
   onClose: () => void;
 }) {
   const studio = useStudio();
@@ -126,7 +133,7 @@ export function ElementPanel({
     return (
       <PanelShell
         icon={<LayersIcon className="size-4" />}
-        title="Arrange"
+        title="Arrange layout"
         subtitle={
           arrangePages.length > 1
             ? "Pages on this canvas"
@@ -137,6 +144,47 @@ export function ElementPanel({
         <div className="p-4">
           <ArrangePanel pages={arrangePages} />
         </div>
+      </PanelShell>
+    );
+  }
+
+  if (toolPanel === "page" && activePageId) {
+    return (
+      <PanelShell
+        icon={<FileText className="size-4" />}
+        title={
+          activePageId === COVER_FRONT_ID
+            ? "Front cover"
+            : activePageId === COVER_BACK_ID
+              ? "Back cover"
+              : `Page ${pageNumberOf(studio.project, activePageId)}`
+        }
+        onClose={onClose}
+      >
+        {arrangePages.length === 2 ? (
+          <div role="radiogroup" aria-label="Which page" className="mx-4 mt-3 inline-flex rounded-lg bg-ink-900/[0.05] p-0.5">
+            {arrangePages.map((page) => (
+              <button
+                key={page.id}
+                type="button"
+                role="radio"
+                aria-checked={page.id === activePageId}
+                onClick={() => studio.select({ kind: "page", pageId: page.id })}
+                className={cn(
+                  "h-7 rounded-md px-3 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+                  page.id === activePageId ? "bg-white text-ink-900 shadow-2xs" : "text-ink-500 hover:text-ink-800",
+                )}
+              >
+                {page.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {activePageId === COVER_FRONT_ID || activePageId === COVER_BACK_ID ? (
+          <CoverCard coverId={activePageId} />
+        ) : (
+          <PageCard pageId={activePageId} />
+        )}
       </PanelShell>
     );
   }

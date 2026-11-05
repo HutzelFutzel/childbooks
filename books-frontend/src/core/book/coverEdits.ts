@@ -91,3 +91,14 @@ function syncCoverRoleBox(
     },
   };
 }
+
+/** Change fields of one cover's spec (its scene, who is on it, the back's blurb), leaving the rest as it was. */
+export function patchCoverSpec(p: Project, coverId: string, patch: Partial<CoverSpec>): Project {
+  const tree = p.screenplay;
+  if (!tree) return p;
+  const doc = getCursor(tree).content;
+  const key = coverId === COVER_FRONT_ID ? "frontCover" : "backCover";
+  const base: CoverSpec = doc[key] ?? { title: "", subtitle: "", illustration: "", anchorIds: [] };
+  const nextDoc: ScreenplayDoc = { ...doc, [key]: { ...base, ...patch } };
+  return { ...p, screenplay: updateNodeContent(tree, tree.cursorId, nextDoc) };
+}

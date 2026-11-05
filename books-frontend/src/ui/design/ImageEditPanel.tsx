@@ -536,9 +536,9 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
             <button
               type="button"
               className="text-left text-[11px] font-medium text-brand-600 hover:text-brand-700"
-              onClick={() => openImageEdit("scene")}
+              onClick={() => useStudioPanelStore.getState().openToolPanel("page")}
             >
-              Want a different scene? Edit what’s happening →
+              Want a different scene? Describe this page →
             </button>
           )}
         </>

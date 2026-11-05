@@ -207,3 +207,35 @@ export function redrawModeFor(
   if (target.kind === "person" && identityChanged(project, target.castId)) return "new";
   return hasPicture(project, target) ? "edit" : "new";
 }
+
+/**
+ * The reader describes another moment, not a change to this picture: "instead
+ * they are asleep under the tree", "now it's night and the lantern is lit".
+ * Such a description replaces what is happening on the page, so the picture is
+ * drawn anew and the page keeps saying what its picture shows.
+ *
+ * Deliberately narrow: only an opening word or phrase that moves to another
+ * moment counts. Anything else ("a bigger hat", "Arthur smiles") is a change to
+ * the picture there, and stays one.
+ */
+const NEW_MOMENT = [
+  /^(?:instead|now|then|later|next|suddenly|meanwhile|afterwards|the\s+next\s+(?:day|morning|night)|that\s+night|at\s+(?:night|sunset|sunrise|dawn|dusk))\b/u,
+  /^(?:a\s+)?scene\s+(?:where|of|with|in\s+which)\b/u,
+  /^(?:stattdessen|jetzt|dann|später|am\s+nächsten\s+(?:tag|morgen)|in\s+der\s+nacht)\b/u,
+];
+
+export function describesNewMoment(message: string): boolean {
+  const text = normalized(message);
+  if (!text) return false;
+  return NEW_MOMENT.some((pattern) => pattern.test(text));
+}
+
+/**
+ * What the one "what should change?" field does on a drawn page. A request for
+ * a new picture, or a description of another moment, draws anew; anything else
+ * changes the picture that is there. Nothing typed is a plain redraw.
+ */
+export function pictureChangeMode(message: string): RedrawMode {
+  if (!message.trim()) return "new";
+  return asksForNewPicture(message) || describesNewMoment(message) ? "new" : "edit";
+}

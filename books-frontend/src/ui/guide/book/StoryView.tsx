@@ -29,8 +29,8 @@ import { useGuideLabel, useGuideT } from "../intl";
 import { useHandOverStory } from "../useHandOverStory";
 import { journeyEntry } from "../../../core/guide/journey";
 import { storyHandedOver } from "../../../core/guide/ownWords";
-import { restoreModelLineBreaks } from "../../../core/story/lineBreaks";
 import { StoryFacts } from "./StoryFacts";
+import { StoryboardView } from "./StoryboardView";
 import { TitleFields } from "./TitleFields";
 import { STORY_EDIT_SCOPE_ERROR, storyTextHash } from "../../../core/story/revision";
 import { markExcerpt, type StoryMark } from "../../../core/story/storyMark";
@@ -42,7 +42,7 @@ const announced = new Set<string>();
 
 const BUSY_REVISION = new Set(["pending", "running", "ready"]);
 
-export function StoryView({ project, locked }: { project: Project; locked: boolean }) {
+export function StoryView({ project, locked, drawOffered = false }: { project: Project; locked: boolean; drawOffered?: boolean }) {
   const { updateStory } = useStudio();
   const t = useGuideT("chrome");
   const storyCraft = useAppConfigStore((s) => s.storyCraft);
@@ -159,7 +159,7 @@ export function StoryView({ project, locked }: { project: Project; locked: boole
           }
         />
         {locked ? (
-          <ReadOnlyStory text={project.config.storyText} />
+          <StoryboardView project={project} drawOffered={drawOffered} />
         ) : (
           <>
             {canImprove && !reviewing && !writing && (
@@ -314,23 +314,5 @@ function StoryHint({
       </div>
       {lengthHint && <p className="px-1 text-xs leading-relaxed text-ink-400">{lengthHint}</p>}
     </section>
-  );
-}
-
-function ReadOnlyStory({ text }: { text: string }) {
-  const restored = restoreModelLineBreaks(text);
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-8 font-serif text-[17px] leading-relaxed text-ink-800 sm:px-10">
-      <div className="flex flex-col gap-4">
-        {restored
-          .split(/\n\s*\n/)
-          .filter((paragraph) => paragraph.trim())
-          .map((paragraph, index) => (
-            <p key={index} className="whitespace-pre-wrap">
-              {paragraph.trim()}
-            </p>
-          ))}
-      </div>
-    </div>
   );
 }

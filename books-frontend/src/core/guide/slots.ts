@@ -26,6 +26,7 @@ import { readingModeLabel } from "../config/readingModes";
 import { getBookLanguage } from "../config/bookLanguages";
 import { currentAnchorImage } from "../pipeline/provenance";
 import { illustrationUnits } from "../book/units";
+import { storyOf } from "../book/pagePlan";
 import { unitIsDone } from "../book/pageCompletion";
 import { getCursor } from "../versioning";
 import { turningOf } from "./turning";
@@ -176,7 +177,7 @@ export const GUIDE_SLOTS: Record<GuideSlotId, GuideSlot> = {
     label: "The story",
     kind: "fact",
     describe: (p) => {
-      const words = wordCount(p.config.storyText);
+      const words = wordCount(storyOf(p));
       return words > 0 ? `${words} words` : null;
     },
   },

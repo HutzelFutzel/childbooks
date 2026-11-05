@@ -10,15 +10,40 @@
  */
 import { interiorUnitIds, pageNumberOf } from "../../../book/pageRefs";
 import {
+  derivedSpreadId,
   duplicateSpreadProject,
   insertSpreadProject,
-  removeSpreadProject,
   withSpreads,
 } from "../../../book/pageEdits";
+import {
+  cleanScene,
+  hasEarlierPicture,
+  hasNoPicture,
+  insertPage,
+  removePage,
+  restorePage,
+  setPageHasPicture,
+  spreadOf,
+} from "../../../book/pagePlan";
+import { styleRequestIn } from "../../../book/styleRequest";
 import { illustrationUnits } from "../../../book/units";
+import { ensureStoryBoxFor } from "../../../book/storyBoxEnsurer";
 import type { Project } from "../../../types";
 import type { CommandContext, CommandDef, Impact } from "../types";
-import { arg, beat } from "./shared";
+import { arg, askFor, beat } from "./shared";
+
+/** Longest wording a page added from the chat may carry. */
+const PAGE_WORDS_MAX = 700;
+
+/** The raw page list, placeholders included: what a derived page id has to be unique against. */
+function docIdsOf(project: Project): string[] {
+  const ids: string[] = [];
+  withSpreads(project, (spreads) => {
+    for (const spread of spreads) ids.push(spread.id);
+    return spreads;
+  });
+  return ids;
+}
 
 /** The one page the reader means, or the sentence that says why there is none. */
 function onePage(project: Project, ctx: Pick<CommandContext, "pages">, what: string): { id: string } | { reason: string } {
@@ -50,7 +75,8 @@ function removeImpact(project: Project, ctx: CommandContext): Impact {
   if ("reason" in picked) return { level: "none", effects: [] };
   const spread = illustrationUnits(project).find((unit) => unit.id === picked.id);
   return {
-    level: "destructive",
+    // The page is kept, with its picture, and can be put back: it is not lost.
+    level: "reversible",
     effects: [
       {
         kind: "removesPage",
@@ -89,7 +115,7 @@ export const PAGE_COMMANDS: CommandDef[] = [
     suggest: [{ id: "addPage", views: ["pages"], duringDrawing: true }],
     structural: true,
     summary:
-      "Add a blank page to the finished book: at the end, at the start, or before or after the page they name. The new page has no picture and no words yet; they can ask for either after.",
+      "Add a page to the finished book: at the end, at the start, or before or after the page they name. With 'scene' (what happens on it, in the reader's words) it is a picture page and is drawn right away, the reader sees the price first; with only 'words' it is a page of text; 'type' blank leaves it empty on purpose. Never invent the scene or the words: with neither and no 'type', the app asks.",
     args: [
       {
         name: "where",
@@ -98,9 +124,22 @@ export const PAGE_COMMANDS: CommandDef[] = [
         hint: "end (the default), start, before or after: before and after need the page they name",
         options: ["end", "start", "before", "after"],
       },
+      { name: "scene", kind: "text", required: false, hint: "what happens on the new page, in the reader's words, when they say it" },
+      { name: "words", kind: "text", required: false, hint: "the exact words the new page should print, only when the reader wrote them" },
+      {
+        name: "type",
+        kind: "choice",
+        required: false,
+        hint: "blank only when they ask for an empty or blank page; leave empty otherwise",
+        options: ["picture", "text", "blank"],
+      },
     ],
-    examples: ["Add a page at the end", "Add a blank page after page 5", "Put a new page before page 2"],
-    help: "Adds a blank page: at the end, at the start, or next to a page you name. It has no picture yet. Undo removes it.",
+    examples: [
+      "Add a page after page 5 where Arthur finds a lantern in the cave",
+      "Add a page at the end that says “The end.”",
+      "Add a blank page after page 5",
+    ],
+    help: "Adds a page: at the end, at the start, or next to a page you name. Tell me what happens on it and I'll draw it in the book's look; or give it words, or leave it blank. You see the price before anything is drawn. Undo removes it.",
     requires: ["pagesStarted"],
     undoable: true,
     run: (project, args, ctx) => {
@@ -120,11 +159,96 @@ export const PAGE_COMMANDS: CommandDef[] = [
       } else if (at <= 0) {
         at = docIndexOf(project, interior[0] ?? "");
       }
-      const out = insertSpreadProject(project, Math.max(0, at), { blankCanvas: true });
+      const index = Math.max(0, at);
+      const type = arg(args, "type").toLowerCase();
+      const asked = styleRequestIn(arg(args, "scene"));
+      const scene = cleanScene(arg(args, "scene"));
+      const words = arg(args, "words").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").slice(0, PAGE_WORDS_MAX);
+      // The same book and the same words make the same page, so what is planned is what is written.
+      const id = derivedSpreadId([...docIdsOf(project), index, scene, words, type]);
+
+      if (type === "blank") {
+        const blank = insertSpreadProject(project, index, { blankCanvas: true, id });
+        return {
+          kind: "write",
+          project: blank.project,
+          beat: beat("done", undefined, { receipt: `Added a blank page ${phrase}` }),
+          view: "pages",
+        };
+      }
+
+      // Nothing said about the page: ask, rather than leave an empty page the reader has to find.
+      // A request that was only about the look is answered first: the page is the same look as the book.
+      if (!scene && !words) return askFor("scene", asked.phrases.length > 0 ? "styleIsBookWide" : "askNewPageScene");
+
+      if (type === "text" || !scene) {
+        const textPage = ensureStoryBoxFor(insertPage(project, index, { words, picture: false, id }).project, id);
+        return {
+          kind: "write",
+          project: textPage,
+          beat: beat("done", undefined, { receipt: `Added a page of words ${phrase}` }),
+          view: "pages",
+        };
+      }
+
+      const added = insertPage(project, index, { scene, ...(words ? { words } : {}), id });
+      const withBox = words ? ensureStoryBoxFor(added.project, id) : added.project;
       return {
         kind: "write",
-        project: out.project,
-        beat: beat("done", undefined, { receipt: `Added a blank page ${phrase}` }),
+        project: withBox,
+        beat: beat(asked.phrases.length > 0 ? "styleKeptForBook" : "redrawReady", undefined, {
+          receipt: `Added a page ${phrase}`,
+        }),
+        // Describing a page is asking for it: the reader sees the price on the card before anything is drawn.
+        then: { kind: "redrawPage", unitIds: [id], instruction: "", mode: "new" },
+        view: "pages",
+      };
+    },
+  },
+  {
+    id: "setPagePicture",
+    area: "pages",
+    aimsAtPages: true,
+    suggest: false,
+    structural: true,
+    summary:
+      "Take the picture off ONE finished page so it shows only its words or stays blank ('page 6 doesn't need a picture', 'no picture on this page'), or put the picture back ('add the picture back on page 6'). Nothing is deleted: putting it back is free and brings back the last picture. To draw a different picture on that page, use editPicture instead.",
+    args: [
+      {
+        name: "picture",
+        kind: "choice",
+        required: true,
+        hint: "off to take the picture off, on to put the last one back",
+        options: ["on", "off"],
+      },
+    ],
+    examples: ["Page 6 doesn't need a picture", "Put the picture back on page 6"],
+    help: "Takes the picture off a page, or puts the last one back. The picture is kept, so nothing is lost and Undo brings it back too.",
+    requires: ["pagesStarted"],
+    undoable: true,
+    run: (project, args, ctx) => {
+      const picked = onePage(project, ctx, "change");
+      if ("reason" in picked) return { kind: "invalid", reason: picked.reason, say: true };
+      const on = arg(args, "picture").toLowerCase() === "on";
+      const label = pageWord(project, picked.id);
+      const spread = spreadOf(project, picked.id);
+      if (!spread) return { kind: "invalid", reason: "That page isn't in the book any more.", say: true };
+      if (on && !hasNoPicture(spread)) return { kind: "noop", beat: beat("alreadyThat") };
+      if (!on && hasNoPicture(spread)) return { kind: "noop", beat: beat("alreadyThat") };
+      const next = setPageHasPicture(project, picked.id, on);
+      // Back on with nothing to show again is a page that needs describing: say so rather than leave it empty.
+      if (on && !hasEarlierPicture(project, picked.id)) {
+        return {
+          kind: "write",
+          project: next,
+          beat: beat("askNewPageScene", undefined, { priority: "question", receipt: `Added a picture to ${label}` }),
+          view: "pages",
+        };
+      }
+      return {
+        kind: "write",
+        project: next,
+        beat: beat("done", undefined, { receipt: on ? `Put the picture back on ${label}` : `Took the picture off ${label}` }),
         view: "pages",
       };
     },
@@ -135,12 +259,11 @@ export const PAGE_COMMANDS: CommandDef[] = [
     aimsAtPages: true,
     suggest: false,
     structural: true,
-    alwaysConfirm: true,
     summary:
-      "Take one page out of the finished book, with its picture and words. Only the page they name or have selected; never guess it.",
+      "Take one page out of the finished book, with its picture and words. Only the page they name or have selected; never guess it. The page is kept, so it can be put back.",
     args: [],
     examples: ["Remove page 7", "Delete the last page", "Take out page 3"],
-    help: "Takes a page out of the book with its picture and words. You always see which page first, and Undo brings it back.",
+    help: "Takes a page out of the book with its picture and words. The page is kept: say \"put it back\", use Undo, or choose it under Recently removed to bring it back in the same place.",
     requires: ["pagesStarted"],
     undoable: true,
     impact: (project, _args, ctx) => removeImpact(project, ctx),
@@ -153,8 +276,33 @@ export const PAGE_COMMANDS: CommandDef[] = [
       const label = pageWord(project, picked.id);
       return {
         kind: "write",
-        project: removeSpreadProject(project, picked.id),
-        beat: beat("done", undefined, { receipt: `Removed ${label}` }),
+        project: removePage(project, picked.id),
+        beat: beat("done", undefined, { receipt: `Removed ${label}. Say "put it back" to restore it.` }),
+        view: "pages",
+      };
+    },
+  },
+  {
+    id: "restorePage",
+    area: "pages",
+    suggest: false,
+    structural: true,
+    summary:
+      "Put back the page that was removed most recently, with its picture and words, in the place it was ('put it back', 'bring back the page I deleted', 'undo removing that page'). Only pages removed through the app; the last ten are kept.",
+    args: [],
+    examples: ["Put that page back", "Bring back the page I just deleted"],
+    help: "Brings back the page you removed most recently, with its picture, where it was. The last ten removed pages are kept, and you can also pick one under Recently removed beside the pages.",
+    requires: ["pagesStarted"],
+    undoable: true,
+    run: (project) => {
+      const out = restorePage(project);
+      if (!out.id) {
+        return { kind: "invalid", reason: "There is no removed page to put back.", say: true };
+      }
+      return {
+        kind: "write",
+        project: out.project,
+        beat: beat("done", undefined, { receipt: `Put ${pageWord(out.project, out.id)} back` }),
         view: "pages",
       };
     },

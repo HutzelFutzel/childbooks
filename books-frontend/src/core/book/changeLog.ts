@@ -20,8 +20,9 @@
  * book; the invariants run this module offline.
  */
 import type { BookDesign } from "../design";
-import type { IllustrationImage, Project, ScreenplayDoc } from "../types";
-import type { VersionTree } from "../versioning";
+import type { IllustrationImage, Project, ScreenplayDoc, ScreenplaySpread } from "../types";
+import { getCursor, updateNodeContent, type VersionTree } from "../versioning";
+import { authoringOf, withAuthoring } from "../guide/projectState";
 
 // --- Operations ---------------------------------------------------------------------
 
@@ -214,7 +215,7 @@ export function applyOps(
 /** The page ids a set of ops touched. "*" stands for a book-wide setting. */
 export function pagesOfOps(ops: readonly DesignOp[]): string[] {
   const pages = new Set<string>();
-  for (const op of ops) pages.add(op.path[0] === "pages" && op.path[1] ? op.path[1] : "*");
+  for (const op of ops) pages.add((op.path[0] === "pages" || op.path[0] === "plan") && op.path[1] ? op.path[1] : "*");
   return [...pages];
 }
 
@@ -223,7 +224,8 @@ export function labelForOps(ops: readonly DesignOp[]): string {
   const parts = new Set<string>();
   for (const op of ops) {
     const [scope, , kind] = op.path;
-    if (scope !== "pages") parts.add("Book settings");
+    if (scope === "plan") parts.add(PLAN_LABELS[kind ?? ""] ?? "Page");
+    else if (scope !== "pages") parts.add("Book settings");
     else if (kind === "textBoxes") parts.add("Text");
     else if (kind === "shapes") parts.add("Shapes");
     else if (kind === "images") parts.add("Pictures");
@@ -234,6 +236,92 @@ export function labelForOps(ops: readonly DesignOp[]): string {
   return names.length === 0 ? "Change" : names.length === 1 ? names[0]! : `${names[0]} and more`;
 }
 
+// --- A page's plan: what it says, shows and who is on it ----------------------------------
+
+/**
+ * The properties of a page the reader edits by hand, and how they read in a change list. Their
+ * ops are written `["plan", pageId, property]` and apply to the screenplay, not the design, so a
+ * words or scene edit is one small entry that survives a reload instead of a whole-book snapshot.
+ */
+export const PLAN_PROPS = ["text", "illustration", "anchorIds", "anchorNames", "blankCanvas", "completion", "wordless"] as const;
+type PlanProp = (typeof PLAN_PROPS)[number];
+
+const PLAN_LABELS: Record<string, string> = {
+  text: "Words",
+  illustration: "What's happening",
+  anchorIds: "Who's on the page",
+  anchorNames: "Who's on the page",
+  blankCanvas: "Picture",
+  completion: "Picture",
+  wordless: "Words",
+};
+
+const planProp = (prop: string): prop is PlanProp => (PLAN_PROPS as readonly string[]).includes(prop);
+
+/**
+ * What changed on the pages' plan between two screenplays, one property at a time. Null when
+ * the pages themselves differ (one added, removed or moved): that is a change of structure and
+ * is kept whole, not property by property.
+ */
+export function diffPlan(before: ScreenplayDoc | undefined, after: ScreenplayDoc | undefined): DesignOp[] | null {
+  if (!before || !after) return before === after ? [] : null;
+  if (before.spreads.length !== after.spreads.length) return null;
+  const ops: DesignOp[] = [];
+  for (let i = 0; i < before.spreads.length; i += 1) {
+    const a = before.spreads[i]!;
+    const b = after.spreads[i]!;
+    if (a.id !== b.id) return null;
+    for (const prop of PLAN_PROPS) diffInto(["plan", a.id, prop], a[prop], b[prop], ops);
+    // Anything else about the page that differs is not a plan edit: keep the change whole.
+    const rest = (spread: ScreenplaySpread) => {
+      const copy: Record<string, unknown> = { ...spread };
+      for (const prop of PLAN_PROPS) delete copy[prop];
+      return copy;
+    };
+    if (!sameValue(rest(a), rest(b))) return null;
+  }
+  return ops;
+}
+
+/** Take plan ops back or put them on again. Same rules as `applyOps`: an older one only goes where the page still holds what it wrote. */
+export function applyPlanOps(
+  project: Project,
+  ops: readonly DesignOp[],
+  direction: "undo" | "redo",
+  options: { force?: boolean } = {},
+): ApplyResult & { project: Project } {
+  const conflicts: DesignOp[] = [];
+  let applied = 0;
+  const tree = project.screenplay;
+  if (!tree || ops.length === 0) return { design: project.design, project, applied, conflicts: tree ? [] : [...ops] };
+  const doc = clone(getCursor(tree).content);
+  for (const op of ops) {
+    const [, pageId, prop] = op.path;
+    const spread = doc.spreads.find((candidate) => candidate.id === pageId);
+    if (!spread || !prop || !planProp(prop)) {
+      conflicts.push(op);
+      continue;
+    }
+    const expected = direction === "undo" ? op.after : op.before;
+    const target = direction === "undo" ? op.before : op.after;
+    if (!options.force && !sameValue(spread[prop], expected)) {
+      conflicts.push(op);
+      continue;
+    }
+    const record = spread as unknown as Record<string, unknown>;
+    if (target === undefined) delete record[prop];
+    else record[prop] = clone(target);
+    applied += 1;
+  }
+  if (applied === 0) return { design: project.design, project, applied, conflicts };
+  return {
+    design: project.design,
+    project: { ...project, screenplay: updateNodeContent(tree, tree.cursorId, doc) },
+    applied,
+    conflicts,
+  };
+}
+
 // --- Entries and the log -------------------------------------------------------------------
 
 /** The slice of the book a structural change restores together. */
@@ -241,6 +329,12 @@ export interface StructuralSnapshot {
   design: BookDesign | undefined;
   screenplay: VersionTree<ScreenplayDoc> | undefined;
   illustrations: Record<string, VersionTree<IllustrationImage>> | undefined;
+  /**
+   * The cover's words that live outside the design and the screenplay: the book's title, and the subtitle and
+   * author the reader chose. Kept only by a change to the cover's words, so taking back any other change
+   * never rewrites a title.
+   */
+  cover?: { title: string; subtitle?: string; author?: string };
 }
 
 export type ChangeSource = "chat" | "editor";
@@ -310,21 +404,38 @@ export function entriesNewerThan(log: ChangeLog, id: string): ChangeEntry[] {
 
 // --- Restoring a whole project slice -------------------------------------------------
 
-export function takeStructural(project: Project): StructuralSnapshot {
+export function takeStructural(project: Project, withCover = false): StructuralSnapshot {
+  const chosen = authoringOf(project).cover;
   return {
     design: project.design ? clone(project.design) : undefined,
     screenplay: project.screenplay ? clone(project.screenplay) : undefined,
     illustrations: project.illustrations ? clone(project.illustrations) : undefined,
+    ...(withCover
+      ? {
+          cover: {
+            title: project.title,
+            ...(chosen?.subtitle !== undefined ? { subtitle: chosen.subtitle } : {}),
+            ...(chosen?.author !== undefined ? { author: chosen.author } : {}),
+          },
+        }
+      : {}),
   };
 }
 
 export function applyStructural(project: Project, snapshot: StructuralSnapshot): Project {
-  return {
+  const restored: Project = {
     ...project,
     design: snapshot.design,
     screenplay: snapshot.screenplay,
     illustrations: snapshot.illustrations,
   };
+  if (!snapshot.cover) return restored;
+  const cover = { ...authoringOf(restored).cover };
+  if (snapshot.cover.subtitle === undefined) delete cover.subtitle;
+  else cover.subtitle = snapshot.cover.subtitle;
+  if (snapshot.cover.author === undefined) delete cover.author;
+  else cover.author = snapshot.cover.author;
+  return withAuthoring({ ...restored, title: snapshot.cover.title }, { cover });
 }
 
 export interface EntryApplied {
@@ -351,10 +462,13 @@ export function applyEntry(
     }
     return { project: applyStructural(project, snapshot), applied: 1, conflicts: [] };
   }
-  const result = applyOps(project.design, entry.ops, direction, options);
+  const planOps = entry.ops.filter((op) => op.path[0] === "plan");
+  const designOps = entry.ops.filter((op) => op.path[0] !== "plan");
+  const planned = applyPlanOps(project, planOps, direction, options);
+  const result = applyOps(planned.project.design, designOps, direction, options);
   return {
-    project: result.applied > 0 ? { ...project, design: result.design } : project,
-    applied: result.applied,
-    conflicts: result.conflicts,
+    project: result.applied > 0 ? { ...planned.project, design: result.design } : planned.project,
+    applied: planned.applied + result.applied,
+    conflicts: [...planned.conflicts, ...result.conflicts],
   };
 }

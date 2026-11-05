@@ -44,6 +44,7 @@
     "check:character-scale": "node scripts/check-character-scale.mjs",
     "check:guide": "node scripts/check-guide.mjs",
     "check:screenplay": "node scripts/check-screenplay.mjs",
+    "check:pages": "node scripts/check-pages.mjs",
     "check:identity": "node scripts/check-identity.mjs",
     "smoke:screenplay": "node scripts/run-screenplay-smoke.mjs",
     "deploy": "node scripts/deploy.mjs",

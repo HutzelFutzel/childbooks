@@ -165,6 +165,7 @@ import type { AskOption, Beat, CommandArgs, CommandCall } from "../core/guide/ag
 import { beat } from "../core/guide/agent/commands/shared";
 import { guideAnswerRemote } from "../platform/aiClient";
 import { describePages, pagesNamedIn } from "../core/book/pageRefs";
+import { illustrationUnits } from "../core/book/units";
 import { pictureRectOnPage, regionOnPicture } from "../core/book/regionPicture";
 import type { NormRect } from "../core/design";
 import { diffDesign, labelForOps, newestApplied, EMPTY_LOG, type ChangeEntry } from "../core/book/changeLog";
@@ -371,6 +372,18 @@ interface ChatStudioState {
   pictureRegion: { unitId: string; rect: NormRect } | null;
   setPictureRegion: (region: { unitId: string; rect: NormRect } | null) => void;
   jumpToPage: (unitId: string) => void;
+  /**
+   * The reader tapped "Draw this page" on a page's card, which showed the price: draw it from what the page
+   * says happens on it. Nothing dearer than `upToSparks` starts; anything else leaves the priced button here.
+   */
+  /** Draw several pages in one go, at the price a tapped button showed (the same gate as `drawPage`). */
+  drawPages: (unitIds: string[], upToSparks: number) => Promise<void>;
+  drawPage: (
+    unitId: string,
+    upToSparks: number,
+    /** What should change in the picture there, and how: a plain redraw when nothing is given. */
+    change?: { instruction: string; mode: RedrawMode },
+  ) => Promise<void>;
   /** The order screen was asked for in a message. The studio answers each new request once. */
   orderRequest: number;
   requestOrder: () => void;
@@ -1676,6 +1689,23 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       }));
     },
 
+    drawPages: async (unitIds, upToSparks) => {
+      const project = live();
+      if (!project || unitIds.length === 0) return;
+      const targets = unitIds.map((id) => unitTarget(project, id));
+      const [target, ...others] = targets as [(typeof targets)[number], ...typeof targets];
+      const key = await offerRedraw(target, "", "new", [], others, false, upToSparks);
+      get().say([redrawBeat(key, targets, "answer")]);
+    },
+
+    drawPage: async (unitId, upToSparks, change) => {
+      const project = live();
+      if (!project) return;
+      const target = unitTarget(project, unitId);
+      const key = await offerRedraw(target, change?.instruction ?? "", change?.mode ?? "new", [], [], false, upToSparks);
+      get().say([redrawBeat(key, target, "answer")]);
+    },
+
     setLooking: (pageIds) =>
       set((state) =>
         state.looking.length === pageIds.length && state.looking.every((id, index) => id === pageIds[index])
@@ -2518,12 +2548,20 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     if (turn.openOrder) get().requestOrder();
     if (turn.pageRedraw) {
       const project = live();
-      const pageTargets = project ? turn.pageRedraw.unitIds.map((id) => unitTarget(project, id)) : [];
+      // A page that has left the book (removed since the message was read) is never drawn: it would only fail.
+      const inBook = new Set(project ? illustrationUnits(project).map((unit) => unit.id) : []);
+      const redrawIds = turn.pageRedraw.unitIds.filter((id) => inBook.has(id));
+      const pageTargets = project ? redrawIds.map((id) => unitTarget(project, id)) : [];
       const [target, ...otherPages] = pageTargets;
+      if (!target) {
+        const rest = beats.filter((b) => b.key !== "redrawReady");
+        beats.length = 0;
+        beats.push(...rest);
+      }
       if (target) {
         // The reader selected one page and typed another: look first, then pay. Nothing starts on its own.
         const pinned = get().chip;
-        const disagrees = Boolean(pinned && pinned.kind !== "person" && !turn.pageRedraw.unitIds.includes(pinned.unitId));
+        const disagrees = Boolean(pinned && pinned.kind !== "person" && !redrawIds.includes(pinned.unitId));
         const key = await offerRedraw(target, turn.pageRedraw.instruction, turn.pageRedraw.mode, [], otherPages, disagrees);
         // The skill said "tap redraw when you're ready"; say what actually happened instead.
         const rest = beats.filter((b) => b.key !== "redrawReady");
@@ -2531,9 +2569,9 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         beats.push(...rest, redrawBeat(key, pageTargets, "result"));
         // The first page stays selected, so the right side shows which picture the change is about.
         // A page the reader already has open stays where it is (and stays Edit): only the pin follows.
-        const inView = turn.pageRedraw.unitIds.find((id) => get().looking.includes(id));
+        const inView = redrawIds.find((id) => get().looking.includes(id));
         if (inView) get().setChip(unitTarget(project!, inView));
-        else get().jumpToPage(turn.pageRedraw.unitIds[0]!);
+        else get().jumpToPage(redrawIds[0]!);
       }
     } else if (turn.redraws.length > 0) {
       const [first, ...others] = turn.redraws as [(typeof turn.redraws)[number], ...(typeof turn.redraws)[number][]];
@@ -2550,8 +2588,21 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       const settled = await settlePictures(turn.startedFrom, turn.chose);
       if (settled) beats.push(settled);
     }
+    // A request the book could not take yet is counted, with which skill and why, never what was typed.
+    if (turn.well?.kind === "agentBlocked") {
+      track("blocked", {
+        requirement: turn.well.remedy.requirement,
+        ...(turn.well.remedy.skill ? { skill: turn.well.remedy.skill } : {}),
+      });
+    }
     // The redraw is started or priced by now: the page's own card may speak for itself again.
     useRedrawHold.getState().release();
+    // A page that was taken out of the book can't stay selected: the next message would be about a page that isn't there.
+    const after = live();
+    const selected = get().chip;
+    if (after && selected && selected.kind !== "person" && !illustrationUnits(after).some((unit) => unit.id === selected.unitId)) {
+      set({ chip: null });
+    }
     set((state) => ({
       // The conflict card the undo opened must outlive this turn's own well reset.
       agentWell: conflicted ? state.agentWell : turn.well,
@@ -2802,6 +2853,8 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     pages: NonNullable<RedrawRequest["pages"]> = [],
     /** Show the priced button even when it is cheap: the reader's words and their selection disagree. */
     hold = false,
+    /** A button that showed this price was tapped: start up to it, whatever the typed-picture cap says. */
+    tappedUpTo?: number,
   ): Promise<GuideLineKey> {
     const { autoStartRedraw } = await import("./typedPictures");
     // The spot the reader marked belongs to one picture changed in place: not to
@@ -2828,7 +2881,9 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       ...(pages.length > 0 ? { pages } : {}),
       ...(region ? { region } : {}),
     };
-    const outcome = hold ? ("declined" as const) : await autoStartRedraw(request).catch(() => "declined" as const);
+    const outcome = hold
+      ? ("declined" as const)
+      : await autoStartRedraw(request, tappedUpTo !== undefined ? { tappedUpTo } : {}).catch(() => "declined" as const);
     if (outcome === "started") return "redrawStarting";
     set({ redraw: request });
     return outcome === "needsSparks" ? "redrawNeedSparks" : "redrawReady";

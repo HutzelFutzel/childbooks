@@ -3,6 +3,8 @@
  * settings store and the selected models from the current project, runs the
  * analysis / image generation, and persists results via the projects store.
  */
+import { hasNoPicture } from "../core/book/pagePlan";
+import { sceneSignatureOf } from "../core/book/sceneSignature";
 import {
   buildIllustrationPrompt,
   chooseImageSize,
@@ -320,11 +322,36 @@ export function changedAnchorNamesForSpreads(
   return [...names];
 }
 
+/** Why a picture no longer matches its page: the people or places in it changed, or its description did. */
+export type IllustrationStaleness = "looks" | "scene";
+
 /**
- * Whether one spread/cover illustration is out of date vs current anchors.
+ * Why one spread/cover illustration is out of date, or null when it is not.
+ * "looks": a person or place in it changed since it was drawn. "scene": the page's
+ * "what's happening" text changed since it was drawn. When both are true the
+ * description wins, because a picture of the old moment is not worth keeping.
+ */
+export function illustrationStaleness(project: Project, spreadId: string): IllustrationStaleness | null {
+  const tree = project.illustrations?.[spreadId];
+  if (!tree) return null;
+  // A page shown without its picture is not waiting on one; the kept picture is only there to be put back.
+  const shown = spreadsById(project).get(spreadId);
+  if (shown && hasNoPicture(shown)) return null;
+  // Pictures drawn before the description was recorded are never flagged for it.
+  const drawnFrom = getCursor(tree).content.sceneSignature;
+  if (shown && drawnFrom !== undefined && drawnFrom !== sceneSignatureOf(shown.illustration)) return "scene";
+  return looksAreStale(project, spreadId) ? "looks" : null;
+}
+
+/**
+ * Whether one spread/cover illustration is out of date vs current anchors or its description.
  * Prefer this over {@link staleIllustrationSpreadIds} in per-page UI hot paths.
  */
 export function isIllustrationStale(project: Project, spreadId: string): boolean {
+  return illustrationStaleness(project, spreadId) !== null;
+}
+
+function looksAreStale(project: Project, spreadId: string): boolean {
   const tree = project.illustrations?.[spreadId];
   if (!tree) return false;
   // Words painted into a cover that the book no longer says.

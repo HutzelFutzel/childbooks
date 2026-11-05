@@ -15,11 +15,26 @@ export interface NewSpreadOpts {
   blankCanvas?: boolean;
   /** A ready-written text-only page (a dedication, a "belongs to" page…). */
   text?: string;
+  /**
+   * A fixed id. A skill that draws the page it adds needs the same id when it is
+   * planned and when it is written, so it derives one from the book instead of drawing one.
+   */
+  id?: string;
+}
+
+/** An id that is the same for the same change to the same book, and different for any other. */
+export function derivedSpreadId(parts: readonly (string | number)[]): string {
+  let h = 2166136261;
+  for (const ch of parts.join("|")) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 16777619);
+  }
+  return `sp_${(h >>> 0).toString(36).padStart(7, "0")}`;
 }
 
 function newSpread(opts: NewSpreadOpts = {}): ScreenplaySpread {
   return {
-    id: spreadUid(),
+    id: opts.id ?? spreadUid(),
     kind: opts.kind ?? "single",
     text: "",
     illustration: "",

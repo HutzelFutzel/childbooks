@@ -15,6 +15,7 @@
  * receipt also prevents an old task from resurrecting a version after the user
  * deletes it or bounded history pruning removes it.
  */
+import { isRemovedPage, withRemovedPicture } from "../core/book/pagePlan";
 import { create } from "zustand";
 import type { Unsubscribe } from "firebase/firestore";
 import { normalizeImageTier, type ImageTier } from "../core/config/modelConfig";
@@ -268,6 +269,11 @@ async function applyTask(
   blobId: string,
   projectId: string,
   apply: (project: Project, spread: ScreenplaySpread) => Promise<void>,
+  /**
+   * What to do with a picture that finishes for a page the reader has since removed. Their Sparks
+   * paid for it: it goes to the kept copy of the page, so putting the page back brings it too.
+   */
+  forRemovedPage?: (project: Project) => Project,
 ): Promise<boolean> {
   const key = `${task.jobId}:${task.id}`;
   if (inFlight.has(key)) return true;
@@ -275,6 +281,16 @@ async function applyTask(
   const project = liveProject(projectId);
   if (!project) return false; // project switched away — stop reconciling
   const spread = spreadsById(project).get(task.id);
+  if (!spread && forRemovedPage && isRemovedPage(project, task.id)) {
+    inFlight.add(key);
+    try {
+      await useProjectsStore.getState().patchCurrent((live) => (live.id === projectId ? forRemovedPage(live) : live));
+      await markTaskApplied(task.jobId, task.id);
+    } finally {
+      inFlight.delete(key);
+    }
+    return true;
+  }
   if (!spread || hasBlob(project, task.id, blobId)) {
     await markTaskApplied(task.jobId, task.id);
     return true;
@@ -468,7 +484,7 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
         // it into the live tree as the project owner (single writer).
         const tree = applyIllustrationRender(project.illustrations?.[spread.id], render);
         await useProjectsStore.getState().setIllustration(spread.id, tree);
-      });
+      }, (live) => withRemovedPicture(live, task.id, (kept) => applyIllustrationRender(kept, render)));
       if (!keep) return;
       continue;
     }

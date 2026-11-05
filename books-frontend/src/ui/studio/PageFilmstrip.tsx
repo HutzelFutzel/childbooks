@@ -22,10 +22,9 @@ import {
   RefreshCw,
   Sparkles,
   Trash2,
-  Type,
+  ImageIcon,
+  ImageOff,
 } from "lucide-react";
-import { Button } from "../components/Button";
-import { Modal } from "../components/Modal";
 import { Popover } from "../components/Popover";
 import { ArtworkOrbit } from "../design/ArtworkOrbit";
 import { BlankPagesTile } from "./BlankPagesTile";
@@ -46,8 +45,12 @@ import {
   joinFacingPair,
   moveSpreadBefore,
   removeSpread,
-  setSpreadCompletion,
 } from "./pageOps";
+import { addPicturePage, editPagePicture } from "./pagePlanOps";
+import { useStudioPanelStore } from "./studioPanelStore";
+import { hasNoPicture } from "../../core/book/pagePlan";
+import { RecentlyRemoved } from "./RecentlyRemoved";
+import { useStudio } from "./StudioContext";
 
 const WIDTH_KEY = "childbooks.filmstripWidth";
 const WIDTH_MIN = 140;
@@ -76,7 +79,6 @@ export function PageFilmstrip({
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [width, setWidth] = useState(WIDTH_DEFAULT);
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null);
   const resizing = useRef<{ startX: number; startW: number } | null>(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const statuses = useDisplayStatuses(displays, stale);
@@ -210,7 +212,7 @@ export function PageFilmstrip({
                   setDragId(null);
                   setOverId(null);
                 }}
-                onRequestDelete={(id, label) => setDeleteTarget({ id, label })}
+                onRequestDelete={(id) => removeSpread(id)}
               />
               {disp.cover !== "back" && (
                 <InsertRow at={disp.endInsertIndex} horizontal={isMobile} />
@@ -222,6 +224,7 @@ export function PageFilmstrip({
           <BlankPagesTile horizontal={isMobile} />
         )}
       </div>
+      <RecentlyRemoved horizontal={isMobile} />
     </>
   );
 
@@ -267,31 +270,6 @@ export function PageFilmstrip({
           <span className="w-px bg-transparent transition group-hover:bg-brand-300 group-active:bg-brand-400" />
         </div>
       )}
-      <Modal
-        open={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        title={`Delete ${deleteTarget?.label ?? "page"}?`}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => {
-                if (deleteTarget) removeSpread(deleteTarget.id);
-                setDeleteTarget(null);
-              }}
-            >
-              Delete
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-ink-600">
-          This removes the page and its artwork. You can undo if you change your mind.
-        </p>
-      </Modal>
     </div>
   );
 }
@@ -328,9 +306,13 @@ function InsertRow({ at, horizontal = false }: { at: number; horizontal?: boolea
       />
       <button
         type="button"
-        title="Insert page here"
-        aria-label="Insert page here"
-        onClick={() => insertSpreadAt(at)}
+        title="Add a page here"
+        aria-label="Add a page here"
+        onClick={() => {
+          // A new page is a picture page, and its card opens so the next thing to do is say what happens on it.
+          const id = addPicturePage(at);
+          if (id) useStudioPanelStore.getState().openPageCard(id);
+        }}
         className={cn(
           "relative z-10 flex size-6 items-center justify-center rounded-full border border-ink-200 bg-white text-ink-400 shadow-sm transition hover:border-brand-300 hover:text-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
           !horizontal && "scale-75 opacity-0 group-hover:scale-100 group-hover:opacity-100 focus:scale-100 focus:opacity-100",
@@ -416,7 +398,7 @@ function FilmstripCell({
   onGrabCancel: () => void;
   onMoveEarlier: () => void;
   onMoveLater: () => void;
-  onRequestDelete: (id: string, label: string) => void;
+  onRequestDelete: (id: string) => void;
 }) {
   const statusLabel =
     status === "generating"
@@ -433,7 +415,7 @@ function FilmstripCell({
       ? [{
           id: entry.subject.spread.id,
           label,
-          textOnly: entry.subject.spread.completion === "text",
+          noPicture: hasNoPicture(entry.subject.spread),
         }]
       : [],
   );
@@ -564,24 +546,26 @@ function FilmstripCell({
                       }}
                     />
                     <MoveButton
-                      icon={<Type className="size-3.5" />}
-                      label={page.textOnly ? "Require illustration" : "Text only"}
+                      icon={
+                        page.noPicture ? <ImageIcon className="size-3.5" /> : <ImageOff className="size-3.5" />
+                      }
+                      label={page.noPicture ? "Add a picture" : "Remove picture"}
                       disabled={false}
                       onClick={() => {
-                        setSpreadCompletion(page.id, page.textOnly ? undefined : "text");
+                        editPagePicture(page.id, page.noPicture);
                         close();
                       }}
                     />
                     <button
                       type="button"
                       onClick={() => {
-                        onRequestDelete(page.id, page.label);
+                        onRequestDelete(page.id);
                         close();
                       }}
                       className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-medium text-red-600 transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
                     >
                       <Trash2 className="size-3.5" />
-                      Delete
+                      Remove page
                     </button>
                   </div>
                 ))}

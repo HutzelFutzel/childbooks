@@ -93,6 +93,11 @@ export const GUIDE_LINE_KEYS = [
   "confirmExpired",
   "blocked",
   "lockedBlocked",
+  "styleLockedBlocked",
+  "storyLockedBlocked",
+  "styleIsBookWide",
+  "styleKeptForBook",
+  "askNewPageScene",
   "quoteReady",
   "sparksOffer",
   "notUnderstood",
@@ -322,6 +327,14 @@ export const DEFAULT_GUIDE_COPY: Record<GuideCopyKey, string> = {
   blocked: "That needs something first: {what}",
   lockedBlocked:
     "The pages are already drawn, so the people, the story and the look are fixed now. To change a picture, select its page (or name it) and tell me what should look different.",
+  styleLockedBlocked:
+    "The pages are already drawn in this look, so it stays the same for the whole book. To change a page, select it (or name it) and tell me what should look different there.",
+  storyLockedBlocked:
+    "The pages are already drawn from this story, so I can't rewrite it as a whole now. Name a page and tell me what should change on it: its words, what happens there, or its picture.",
+  styleIsBookWide:
+    "The whole book keeps one look, so a single page can't have its own. Tell me what happens on the page and I'll draw it in the book's look.",
+  styleKeptForBook: "The book's look stays the same on every page, so I left the style part out and kept the rest.",
+  askNewPageScene: "What happens on this page, what should it say, or should it stay blank?",
   quoteReady: "Ready when you are—tap the button to start.",
   sparksOffer: "Here's where you can get more Sparks.",
   notUnderstood: "I didn't quite catch that. Could you say it another way?",
@@ -498,6 +511,11 @@ export const GUIDE_COPY_HELP: Partial<Record<GuideCopyKey, string>> = {
   confirmAsk: "Said above a confirmation card. The card itself lists exactly what changes, in trusted text.",
   blocked: "Said when a request needs something first. {what} is the missing step, written by the app.",
   lockedBlocked: "Said when the reader asks for a change to the people, the story or the look after the pages are drawn.",
+  styleLockedBlocked: "Said when the reader asks for another look after the pages are drawn.",
+  storyLockedBlocked: "Said when the reader asks to rewrite the whole story after the pages are drawn. It points to changing one page.",
+  styleIsBookWide: "Said when a page's description asks for another art style. The look belongs to the whole book.",
+  styleKeptForBook: "Said when a request mixed a style change with a real change: the style part was left out, the rest was kept.",
+  askNewPageScene: "Asked after the reader adds a page or puts a picture on one and has not said what happens on it.",
   notUnderstood: "Said when nothing in a message could be read safely.",
   answerFallback: "Said when a question can't be answered from the help articles or the book.",
   removeMentionsAsk: "Asked when a removed person still appears in the story text.",

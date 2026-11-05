@@ -101,9 +101,15 @@ async function autoStart(
   units: GenerationQuoteUnit[],
   extraKey: string,
   start: (quote: GenerationQuote) => Promise<boolean>,
+  /**
+   * The reader tapped a button that showed a price up to this many Sparks: that is what they agreed to,
+   * so the admin's cap on typed pictures does not apply, and nothing dearer than it starts.
+   */
+  tappedUpTo?: number,
 ): Promise<TypedStart> {
-  const cap = useAppConfigStore.getState().guide.agent.turn.autoSpendSparks;
-  if (cap <= 0 || units.length === 0) return "declined";
+  const tapped = tappedUpTo !== undefined;
+  const cap = tapped ? tappedUpTo : useAppConfigStore.getState().guide.agent.turn.autoSpendSparks;
+  if (units.length === 0 || cap <= 0) return "declined";
   const active = useJobsStore.getState().activeUnitIds;
   if (units.some((unit) => active.has(unit.id))) return "declined";
   const key = quoteKey(purpose, units, extraKey);
@@ -138,13 +144,17 @@ async function whileDeciding<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Start a picture change the reader typed, if it is cheap and affordable. */
-export async function autoStartRedraw(request: RedrawRequest): Promise<TypedStart> {
+/**
+ * Start a picture change the reader typed, if it is cheap and affordable. With `tappedUpTo`, the
+ * reader pressed a button that showed a price up to that many Sparks, so the typed-picture cap
+ * gives way to it; the balance, the quote and "already drawing" still apply.
+ */
+export async function autoStartRedraw(request: RedrawRequest, options: { tappedUpTo?: number } = {}): Promise<TypedStart> {
   const project = useProjectsStore.getState().current();
   if (!project) return "declined";
   const { units, extraKey } = redrawQuoteParts(project, request);
   return whileDeciding(async () => {
-    const outcome = await autoStart("redraw", units, extraKey, (quote) => startRedraw(quote, redrawInstructions(request), request.region));
+    const outcome = await autoStart("redraw", units, extraKey, (quote) => startRedraw(quote, redrawInstructions(request), request.region), options.tappedUpTo);
     if (outcome === "started") {
       markStarted(
         redrawEach(request).flatMap((each) => (each.target.kind === "person" ? [each.target.castId] : [])),

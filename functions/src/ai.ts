@@ -33,6 +33,9 @@ import {
 } from "../../books-frontend/src/core/billing/referencePlan";
 import { standingPriceOverrides } from "./campaigns/pricing";
 import { ensureWithinQuota, incrementQuota, QuotaExceeded } from "./quotas";
+import { storyOf } from "../../books-frontend/src/core/book/pagePlan";
+import { boundedPageSceneRequest, hasSomethingToGoOn, suggestPageScene, type PageSceneRequest } from "../../books-frontend/src/core/book/pageScene";
+import { consumeRateLimit } from "./contact/abuse";
 import { ALL_IMAGE_ACTION_IDS } from "../../books-frontend/src/core/ai/actions";
 import { ProviderError } from "../../books-frontend/src/core/errors";
 import {
@@ -358,6 +361,8 @@ function syncActionFor(path: string, body: { spreadId?: unknown } | undefined): 
       return "guideAnswer";
     case "/guide/extract-cast":
       return "guideExtractCast";
+    case "/page-scene":
+      return "pageScene";
     case "/anchor-image":
       return "anchorImage";
     case "/illustration": {
@@ -443,6 +448,10 @@ function installFailedSpendMetering(app: Express, json: ReturnType<typeof expres
     });
   }
 }
+
+/** Page suggestions a person may ask for in one window. Generous for real use, closed to loops. */
+const PAGE_SCENE_PER_WINDOW = 40;
+const PAGE_SCENE_WINDOW_MS = 10 * 60_000;
 
 export function registerAiRoutes(app: Express): void {
   const json = express.json({ limit: "50mb" });
@@ -852,7 +861,8 @@ export function registerAiRoutes(app: Express): void {
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         generateAnchorDescription({
-          story: project.config.storyText,
+          // The story as it reads now: once drawing has started, what the pages say.
+          story: storyOf(project),
           config: withTextModel(project.config, model),
           creds: { apiKey: apiKeyFor(model.provider) },
           model: model.id,
@@ -1505,6 +1515,60 @@ export function registerAiRoutes(app: Express): void {
         startedAt,
         models: { text: model },
       });
+      res.json(value);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  /**
+   * Suggest what happens on one page, from its words and its neighbors. Free for the
+   * reader (text only, no picture), so it is limited per person instead of priced.
+   * The answer is cleaned in code: a style request is taken out and only the book's
+   * own people can be named.
+   */
+  app.post("/ai/page-scene", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const body = (req.body ?? {}) as { projectId?: unknown; request?: unknown };
+      const request = boundedPageSceneRequest(body.request as Partial<PageSceneRequest> | undefined);
+      if (!hasSomethingToGoOn(request)) {
+        res.status(400).json({ error: { message: "Add the words for this page first, then I can suggest what happens." } });
+        return;
+      }
+      if (await consumeRateLimit(`page_scene_${req.uid}`, PAGE_SCENE_PER_WINDOW, PAGE_SCENE_WINDOW_MS)) {
+        res.status(429).json({
+          error: { message: "That's a lot of suggestions in a short time. Wait a few minutes, or write the description yourself." },
+        });
+        return;
+      }
+      const [model, prompts] = await Promise.all([resolveText("pageScene"), loadPromptContext()]);
+      const startedAt = Date.now();
+      const { value, events, stats } = await withUsage(() =>
+        suggestPageScene({
+          request,
+          creds: { apiKey: apiKeyFor(model.provider) },
+          model: model.id,
+          providerId: model.provider,
+          prompts,
+          signal: requestDeadline(),
+        }),
+        model.params,
+      );
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "pageScene",
+        events,
+        stats,
+        ...(typeof body.projectId === "string" && body.projectId ? { projectId: body.projectId } : {}),
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
+      });
+      if (!value) {
+        res.status(422).json({ error: { message: "I couldn't come up with a description for this page. Try writing a few words about it." } });
+        return;
+      }
       res.json(value);
     } catch (err) {
       sendError(res, err);

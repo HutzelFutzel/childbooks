@@ -108,6 +108,7 @@ const ACTION_TO_COMPONENT: Record<string, BookCostComponentId> = {
   storyDraft: "story",
   storyEdit: "story",
   storyCheck: "story",
+  pageScene: "story",
   storyAnalysis: "story",
   anchorDescription: "story",
   screenplay: "story",

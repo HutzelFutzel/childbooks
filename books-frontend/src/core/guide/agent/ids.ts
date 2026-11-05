@@ -55,6 +55,8 @@ export const GUIDE_COMMAND_IDS = [
   "goToPage",
   "addPage",
   "removePage",
+  "setPagePicture",
+  "restorePage",
   "duplicatePage",
   "movePage",
   "listChanges",

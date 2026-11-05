@@ -52,6 +52,13 @@ export const GUIDE_EVENT_KINDS = [
   "orderOpened",
   /** Something the reader saw go wrong. */
   "error",
+  /**
+   * A request the book could not take yet, with the skill and what it needed
+   * (`skill`, `requirement`). "reviseStory" blocked by "notLocked" is a reader
+   * asking for a book-wide rewrite after the pages were drawn: how often that
+   * happens decides whether it is worth building.
+   */
+  "blocked",
 ] as const;
 
 export type GuideEventKind = (typeof GUIDE_EVENT_KINDS)[number];

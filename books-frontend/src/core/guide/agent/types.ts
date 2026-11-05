@@ -119,6 +119,10 @@ export interface Remedy {
   what: string;
   command?: GuideCommandId;
   view?: BookViewId;
+  /** The line that says it, when this skill has its own words for the refusal instead of the general one. */
+  line?: GuideLineKey;
+  /** The skill that was asked for and could not run, set by the planner. */
+  skill?: GuideCommandId;
 }
 
 // --- Beats ----------------------------------------------------------------------

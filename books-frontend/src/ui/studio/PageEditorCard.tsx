@@ -367,6 +367,7 @@ export function PageStagePanel({
  */
 export function PageControls({
   page,
+  subject,
   label,
 }: {
   page: DesignPage;
@@ -379,6 +380,7 @@ export function PageControls({
   const imageEditSection = useStudioPanelStore((s) => s.imageEditSection);
   const openImageEdit = useStudioPanelStore((s) => s.openImageEdit);
   const closeImageEdit = useStudioPanelStore((s) => s.closeImageEdit);
+  const openToolPanel = useStudioPanelStore((s) => s.openToolPanel);
 
   function toggleIllustrationTools(section: "refine" | "characters" | "scene") {
     const alreadyOpen =
@@ -408,22 +410,33 @@ export function PageControls({
       >
         Open illustration tools
       </Button>
-      <div className="grid grid-cols-2 gap-2">
-        <Button
-          variant="secondary"
-          leftIcon={<Users className="size-4" />}
-          onClick={() => toggleIllustrationTools("characters")}
-        >
-          In this picture
-        </Button>
+      {subject.kind === "spread" ? (
+        // A page is described in one place: its words, what is happening and who is there.
         <Button
           variant="secondary"
           leftIcon={<Sparkles className="size-4" />}
-          onClick={() => toggleIllustrationTools("scene")}
+          onClick={() => openToolPanel("page")}
         >
-          Scene
+          Describe this page
         </Button>
-      </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="secondary"
+            leftIcon={<Users className="size-4" />}
+            onClick={() => toggleIllustrationTools("characters")}
+          >
+            In this picture
+          </Button>
+          <Button
+            variant="secondary"
+            leftIcon={<Sparkles className="size-4" />}
+            onClick={() => toggleIllustrationTools("scene")}
+          >
+            Scene
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -22,6 +22,7 @@ import {
   DEFAULT_PARTIALS,
   PROMPT_ACTIONS,
   PROMPT_TEMPLATE_KEYS,
+  STYLE_LOCK_BLOCK_ID,
   defaultTemplate,
 } from "../prompts/registry";
 
@@ -115,6 +116,11 @@ function mergeTemplate(def: PromptTemplate, stored?: PromptTemplate): PromptTemp
     const overrides = new Map((stored?.[seg] ?? []).map((b) => [b.id, b]));
     out[seg] = defBlocks.map((b) => {
       const o = overrides.get(b.id);
+      // The book's look cannot be switched off or worded away from the dashboard.
+      if (b.id === STYLE_LOCK_BLOCK_ID) {
+        const reworded = typeof o?.text === "string" && o.text.includes("{{artStyle}}");
+        return { ...b, text: reworded ? o!.text : b.text };
+      }
       return {
         ...b,
         text: typeof o?.text === "string" ? o.text : b.text,
@@ -148,6 +154,10 @@ export function lintPromptsConfig(config: PromptsConfig): void {
     const allowed = varsByKey.get(key);
     for (const seg of ["system", "user", "single"] as const) {
       for (const block of tpl[seg] ?? []) {
+        if (block.id === STYLE_LOCK_BLOCK_ID) {
+          if (block.enabled === false) errors.push(`${key} · ${block.id}: the book's look cannot be switched off`);
+          if (!block.text.includes("{{artStyle}}")) errors.push(`${key} · ${block.id}: must name {{artStyle}}`);
+        }
         TOKEN_RE.lastIndex = 0;
         let m: RegExpExecArray | null;
         while ((m = TOKEN_RE.exec(block.text)) !== null) {

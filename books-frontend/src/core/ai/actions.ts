@@ -21,6 +21,7 @@ export type TextActionId =
   | "guideCompose" // composeGuideMessage — one chat message in the persona, from the turn's beats
   | "guideAnswer" // answerGuideQuestion — answer a how-to question from the help articles and the book
   | "guideExtractCast" // extractManuscriptCast — names and ages from a pasted manuscript, no rewrite
+  | "pageScene" // suggestPageScene — a short description of what happens on one page, from its words
   | "extractArtStyle" // extractArtStyleFromImages — vision call: style-only prompt from character artwork
   | "extractArtLook" // extractArtLookFromImages — vision call: who is in the uploaded character artwork
   | "releaseNotes" // summarizeRelease — turn a deploy's code diff into plain-language release notes
@@ -54,6 +55,7 @@ export const TEXT_ACTIONS: ActionInfo<TextActionId>[] = [
   { id: "guideCompose", label: "Guide persona composer", modality: "text", help: "Writes each chat message in the guide's persona and the reader's language, from what the app decided to say. Code checks every message (names, numbers, length, casual address) and falls back to the configured wording, so a lite model with no reasoning is right here. Latency is felt on every turn." },
   { id: "guideAnswer", label: "Guide help answers", modality: "text", help: "Answers how-to questions (\"What are Sparks?\", \"Why can't I draw the pages yet?\") from the help articles and the book's current state, in the language of the question. Never states prices; those come from the app." },
   { id: "guideExtractCast", label: "Own-words cast extraction", modality: "text", help: "Reads a manuscript the reader typed or pasted and returns the named people and their stated ages, without rewriting the story." },
+  { id: "pageScene", label: "Page description", modality: "text", help: "Suggests or tidies what happens on one page from its words and the pages around it. Free for the reader, so it should be a fast, inexpensive model. It never writes a style: the look belongs to the book." },
   { id: "extractArtStyle", label: "Art-style extraction (vision)", modality: "text", help: "Reads uploaded character artwork and writes a style-only prompt (no characters, clothes or scenes) for the rest of the book." },
   { id: "extractArtLook", label: "Character-look extraction (vision)", modality: "text", help: "Reads uploaded character artwork and writes who is in the drawing (species, body, clothes actually shown) so later steps do not invent a different character." },
   { id: "releaseNotes", label: "Release notes (CI/CD)", modality: "text", help: "Reads the code diff between the last shipped commit and the new one, and writes what changed in plain language for the sales/marketing team. Runs once per deploy, not per user — pick a model with a large context window." },

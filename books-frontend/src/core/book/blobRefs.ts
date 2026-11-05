@@ -61,6 +61,13 @@ export function collectProjectImageBlobIds(project: Project): Set<string> {
       if (n.content.blobId) ids.add(n.content.blobId);
     }
   }
+  // A removed page keeps its picture so it can be put back.
+  for (const removed of project.removedPages ?? []) {
+    if (!removed.illustration) continue;
+    for (const n of allVersions(removed.illustration)) {
+      if (n.content.blobId) ids.add(n.content.blobId);
+    }
+  }
   return ids;
 }
 

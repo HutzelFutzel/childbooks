@@ -7,6 +7,7 @@
  * render/result. The caller folds the result into the project's version trees
  * (single writer), exactly like the job-reconcile path does.
  */
+import type { PageSceneRequest, PageSceneResult } from "../core/book/pageScene";
 import { backendFetch } from "./backend";
 import { useAuthStore } from "../state/authStore";
 import { useSparksUiStore } from "../state/sparksUiStore";
@@ -526,4 +527,13 @@ export function guideExtractCastRemote(args: {
   story: string;
 }): Promise<ManuscriptCast> {
   return postAi("/ai/guide/extract-cast", args);
+}
+
+/** Suggest what happens on one page. Free; the server limits how often. */
+export function pageSceneRemote(
+  projectId: string,
+  request: PageSceneRequest,
+  signal?: AbortSignal,
+): Promise<PageSceneResult> {
+  return postAi("/ai/page-scene", { projectId, request }, signal);
 }

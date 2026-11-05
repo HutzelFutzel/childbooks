@@ -23,6 +23,7 @@ import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
 import { visualDescription } from "../book/anchorDescription";
 import { namesOf, restatesLook, withoutLookAsides } from "../book/pictureLook";
+import { withoutStyleAsides } from "../book/styleRequest";
 import type { Anchor, BookConfig, ScreenplaySpread } from "../types";
 import { layoutPromptFacts, type LayoutPlan } from "../book/layouts";
 import { describeSubjectInset } from "../book/subjectInset";
@@ -207,7 +208,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     coverAuthor,
     coverMarginPercent = 12,
     isCover = false,
-    edit,
+    edit: requestedEdit,
     prompts,
     layoutPlan,
     capabilities,
@@ -218,6 +219,9 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     artDirection,
   } = input;
   const styleText = resolveArtStyleText(config.artStyle, prompts);
+  // The look belongs to the book: a page can change what is drawn, never how. Whatever asks for
+  // another look is taken out here, in the one place every picture's prompt is made.
+  const edit = requestedEdit ? withoutStyleAsides(requestedEdit) : requestedEdit;
 
   if (restyle) {
     const restyleLegend = [
@@ -352,17 +356,20 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   const pageWords = freshPage ? clip(spread.text ?? "", PAGE_WORDS_MAX) : "";
   const artDirectionText = freshPage ? clip(artDirection ?? "", 400) : "";
   // A cutout has no place, light or weather of its own to keep consistent.
-  const continuityNote = freshPage && !transparentBackground ? clip(spread.continuity ?? "", 200) : "";
+  const continuityNote =
+    freshPage && !transparentBackground ? clip(withoutStyleAsides(spread.continuity ?? ""), 200) : "";
   const pageAnchors = [...referencedAnchors, ...keptAnchors, ...describedAnchors];
   // A character whose reference is on the page looks like it; a look the brief
   // spells out for them (a plan written before their portrait) only fights it.
   const drawnFromReference = [...referencedAnchors, ...keptAnchors].filter((a) => a.type === "character");
-  const illustrationBrief = withoutLookAsides(spread.illustration.trim(), namesOf(drawnFromReference));
+  const illustrationBrief = withoutStyleAsides(
+    withoutLookAsides(spread.illustration.trim(), namesOf(drawnFromReference)),
+  );
   const wardrobeList = freshPage
     ? (spread.wardrobe ?? [])
         .flatMap((entry) => {
           const who = pageAnchors.find((a) => a.id === entry.anchorId);
-          const outfit = entry.outfit.trim();
+          const outfit = withoutStyleAsides(entry.outfit.trim());
           if (!who || !outfit) return [];
           if (drawnFromReference.includes(who) && restatesLook(outfit, who.description)) return [];
           return [`${who.name} wears ${outfit}`];
@@ -542,7 +549,7 @@ export function buildModifySubjectPrompt(input: {
       anchorName: anchor.name,
       description: visualDescription(anchor.name, anchor.description),
       region,
-      instruction,
+      instruction: withoutStyleAsides(instruction),
       part: part ?? "",
       artStyle: styleText,
     },

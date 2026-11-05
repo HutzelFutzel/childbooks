@@ -52,6 +52,8 @@ import { ProjectConflictError } from "../core/storage/repositories";
 import { StoredValueTooLargeError } from "../core/storage/types";
 import { compactProjectHistory } from "../core/book/compactHistory";
 import { resolveBookConflict } from "../core/guide/merge";
+import { reconcilePageWords, repairPageWords } from "../core/book/pageWordsGate";
+import { reconcileCoverWords } from "../core/book/coverWordsGate";
 import { likenessPhotosOf } from "../core/guide/portrait";
 import { reconcilePendingLooks } from "../core/guide/pending";
 import { getRepos } from "./repos";
@@ -358,7 +360,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     // via `loadSingleProject` and edited while the full library list was in flight.
     const existingById = new Map(get().projects.map((p) => [p.id, p]));
     const merged: Project[] = [];
-    for (const p of list) {
+    for (const stored of list) {
+      // A book saved with a page's words and its text box apart is made whole as it comes in.
+      const p = repairPageWords(stored);
       if (!savedBase.has(p.id)) savedBase.set(p.id, p);
       const existing = existingById.get(p.id);
       if (existing && (existing.updatedAt > p.updatedAt || (existing.rev ?? 0) >= (p.rev ?? 0))) {
@@ -380,8 +384,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     if (existing) return existing;
     const generation = projectLoadGeneration;
     const { projects } = await getRepos();
-    const project = await projects.get(id);
-    if (!project || generation !== projectLoadGeneration) return null;
+    const stored = await projects.get(id);
+    if (!stored || generation !== projectLoadGeneration) return null;
+    const project = repairPageWords(stored);
     savedBase.set(project.id, project);
     set((state) => {
       if (state.projects.some((p) => p.id === project.id)) return {};
@@ -393,7 +398,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   async settleBookConflict(keep) {
     const pending = get().bookConflict;
     if (!pending) return;
-    const settled = resolveBookConflict(pending.merged, pending.mine, pending.theirs, pending.conflicts, keep, Date.now());
+    const settled = repairPageWords(
+      resolveBookConflict(pending.merged, pending.mine, pending.theirs, pending.conflicts, keep, Date.now()),
+    );
     set((state) => ({
       bookConflict: null,
       projects: state.projects.map((p) =>
@@ -420,7 +427,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         };
       }
       return {
-        projects: state.projects.map((p) => (p.id === id ? fresh : p)),
+        projects: state.projects.map((p) => (p.id === id ? repairPageWords(fresh) : p)),
         staleProjectId: state.staleProjectId === id ? null : state.staleProjectId,
       };
     });
@@ -1086,7 +1093,8 @@ async function resolveConflict(get: ProjectsGet, set: ProjectsSet, id: string, m
   if (!outcome) return false;
   savedBase.set(id, theirs);
   if (outcome.kind === "merged") {
-    set((state) => ({ projects: state.projects.map((p) => (p.id === id ? outcome.project : p)) }));
+    const whole = repairPageWords(outcome.project);
+    set((state) => ({ projects: state.projects.map((p) => (p.id === id ? whole : p)) }));
     void persistLatest(get, set, id);
     return true;
   }
@@ -1291,7 +1299,9 @@ function mutateProject(
     const target = state.projects.find((p) => p.id === id);
     if (!target) return {};
     found = true;
-    const updated: Project = { ...reconcileCoverLettering(mutator(target)), updatedAt: Date.now() };
+    // Whoever wrote, a page's words and its text box leave this write saying the same thing.
+    const written = reconcileCoverWords(target, reconcilePageWords(target, mutator(target)));
+    const updated: Project = { ...reconcileCoverLettering(written), updatedAt: Date.now() };
     return {
       projects: state.projects.map((p) => (p.id === id ? updated : p)),
     };

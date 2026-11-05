@@ -27,6 +27,9 @@ export const notify = {
     }
     toast.error(message);
   },
+  /** Something was done that can be taken back: a short message with the one tap that does it. */
+  undoable: (message: string, onUndo: () => void, label = "Undo") =>
+    toast(message, { duration: 8_000, action: { label, onClick: onUndo } }),
   promise: toast.promise,
 };
 

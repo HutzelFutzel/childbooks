@@ -51,13 +51,15 @@ function addRanges(
  * - `setup`: secondary disclosure under page-like refine once art exists —
  *   skips the stale banner (parent refine already shows it) and keeps title /
  *   bake / wrap / matching generate.
+ * - `options`: just the title treatment, the front-and-back choice and the
+ *   buttons that draw both. Used under the cover's card, which has the words.
  */
 export function CoverToolsPanel({
   embedded = false,
   variant = "full",
 }: {
   embedded?: boolean;
-  variant?: "full" | "setup";
+  variant?: "full" | "setup" | "options";
 }) {
   const {
     project,
@@ -309,7 +311,9 @@ export function CoverToolsPanel({
     );
   }
 
-  const setupOnly = variant === "setup";
+  const setupOnly = variant !== "full";
+  // `options`: only the toggles and the draw-both buttons. The words, scene and people are on the cover's card.
+  const optionsOnly = variant === "options";
 
   if (!setupOnly && startedWithoutCoverArt && !customizingFirstCover) {
     return (
@@ -355,7 +359,7 @@ export function CoverToolsPanel({
           </div>
         </div>
       )}
-      {frontDrift && (
+      {frontDrift && !optionsOnly && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
           <div className="flex items-start gap-2">
             <RefreshCw className="mt-0.5 size-3.5 shrink-0 text-amber-700" />
@@ -391,6 +395,7 @@ export function CoverToolsPanel({
         </div>
       )}
 
+      {!optionsOnly && (
       <section className="space-y-2">
         <Field label="Book title" required>
           <Input
@@ -451,6 +456,7 @@ export function CoverToolsPanel({
         {/* Cast lives in the page-like refine body when setup is secondary. */}
         {!setupOnly && <CastPicker illo={coverIllo} defaultOpen={!coverIllo.cursor} />}
       </section>
+      )}
 
       <section className="space-y-2">
         {canBakeText && (

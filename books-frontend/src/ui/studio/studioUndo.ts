@@ -16,7 +16,14 @@ import type { ChangeSource } from "../../core/book/changeLog";
  */
 export function commitStudioProject(
   mutate: (p: Project) => Project,
-  meta: { label?: string; source?: ChangeSource } = {},
+  meta: {
+    label?: string;
+    source?: ChangeSource;
+    /** An edit to a page's words, scene, people or picture: kept property by property. */
+    plan?: boolean;
+    /** An edit to a cover's words, scene or people: the cover it is about. Kept whole, with the book's title. */
+    cover?: string;
+  } = {},
 ): void {
   const store = useProjectsStore.getState();
   const before = store.current();
@@ -25,11 +32,14 @@ export function commitStudioProject(
   void store.patchCurrent(mutate);
   const after = useProjectsStore.getState().current();
   if (!after || after === before) return;
-  useBookHistory.getState().recordStructural({
+  const history = useBookHistory.getState();
+  const record = meta.plan ? history.recordPlan : history.recordStructural;
+  record({
     projectId: before.id,
     source: meta.source ?? "editor",
     label: meta.label ?? "Page change",
     before,
     after,
+    ...(meta.cover ? { pages: [meta.cover], cover: true } : {}),
   });
 }

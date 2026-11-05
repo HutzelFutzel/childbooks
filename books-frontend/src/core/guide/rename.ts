@@ -15,6 +15,7 @@
 import { normalizeAnchorName } from "../book/anchorRefs";
 import { coverLinesOf } from "../book/coverLines";
 import { renameDerivedStyleNames } from "../book/sourceArt";
+import { storyOf } from "../book/pagePlan";
 import { briefOf, isDraftStale, storyBriefSignature } from "../story/brief";
 import type {
   Anchor,
@@ -66,7 +67,7 @@ export interface PersonRename {
 
 /** Everything that says the name: how many mentions a rename will touch in the story. */
 export function renameMentions(project: Project, name: string): number {
-  return countNameMentions(project.config.storyText, name.trim());
+  return countNameMentions(storyOf(project), name.trim());
 }
 
 /** Change a field's text, and leave the object as it was when nothing in it said the name. */
@@ -419,7 +420,7 @@ export function renamePersonEverywhere(
     project: next,
     from,
     to,
-    storyMentions: countNameMentions(storyText, from),
+    storyMentions: countNameMentions(storyOf(project), from),
     title: from && countNameMentions(project.title, from) > 0 ? swap(project.title) : null,
     subtitle: from && countNameMentions(lines.subtitle, from) > 0 ? swap(lines.subtitle) : null,
   };

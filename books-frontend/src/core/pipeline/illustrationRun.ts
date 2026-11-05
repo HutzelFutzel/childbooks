@@ -54,6 +54,7 @@ import {
 } from "./illustration";
 import { embeddedPairsAmong } from "../book/anchorGraph";
 import { artStyleKey } from "../prompts/style";
+import { sceneSignatureOf } from "../book/sceneSignature";
 import { buildRenderRecord } from "./imageProvenance";
 import { paginate } from "./pagination";
 import type { CompositionMode, LayoutPlan, PageSide } from "../book/layouts";
@@ -344,6 +345,8 @@ export interface IllustrationRender {
   compositionMode?: CompositionMode;
   /** Art style these pixels were drawn in (see `artStyleKey`). */
   artStyleKey?: string;
+  /** What the page's "what's happening" text said when these pixels were drawn (see `sceneSignatureOf`). */
+  sceneSignature?: string;
   /** Quality tier used for this render (stamped at the host boundary). */
   imageTier?: IllustrationImage["imageTier"];
   /** Concrete model used for this render (stamped at the host boundary). */
@@ -383,6 +386,7 @@ export function applyIllustrationRender(
     ...(render.layoutId ? { layoutId: render.layoutId } : {}),
     ...(render.compositionMode ? { compositionMode: render.compositionMode } : {}),
     ...(render.artStyleKey ? { artStyleKey: render.artStyleKey } : {}),
+    ...(render.sceneSignature ? { sceneSignature: render.sceneSignature } : {}),
     ...(render.imageTier ? { imageTier: render.imageTier } : {}),
     ...(render.imageModel ? { imageModel: render.imageModel } : {}),
     ...(render.generation ? { generation: render.generation } : {}),
@@ -2419,6 +2423,10 @@ async function renderPage(
     // Only whole-page renders carry the stamp: the surgical paths above leave
     // most pixels in whatever style they were already drawn in.
     artStyleKey: artStyleKey(project.config.artStyle),
+    // A picture drawn from the page's description matches it; a change made to a picture keeps what it matched before.
+    sceneSignature: options.edit || options.restyle || options.mask
+      ? tree?.nodes[sourceNodeId ?? ""]?.content.sceneSignature
+      : sceneSignatureOf(spread.illustration),
     generation: recordedGeneration,
     inputReferenceCount: submittedReferences?.length ?? 0,
     outputSize,

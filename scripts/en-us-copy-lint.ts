@@ -44,6 +44,8 @@ const SKIP = [
   "books-frontend/src/core/pipeline/",
   "books-frontend/src/core/providers/",
   "books-frontend/src/core/book/regionText.ts",
+  // Patterns that read what a person typed: "colour" and "grey" are words to catch, not copy.
+  "books-frontend/src/core/book/styleRequest.ts",
   "books-frontend/src/core/config/options.ts",
   "books-frontend/src/core/guide/agent/compose.ts",
   "books-frontend/src/core/guide/agent/resolve.ts",

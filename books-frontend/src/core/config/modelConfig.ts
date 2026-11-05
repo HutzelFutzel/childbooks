@@ -170,6 +170,7 @@ export const DEFAULT_TEXT_PARAMS: Partial<Record<TextActionId, TextCallParams>> 
   storyCheck: { reasoning: "medium" },
   anchorDescription: { reasoning: "medium" },
   guideExtractCast: { reasoning: "medium" },
+  pageScene: { reasoning: "low" },
   releaseNotes: { reasoning: "medium" },
   logAnalysis: { reasoning: "medium" },
   guideInterpret: { reasoning: "low" },
@@ -318,6 +319,7 @@ export function createDefaultModelConfig(): ModelConfig {
       guideCompose: { provider: "google", speed: "ultrafast" },
       guideAnswer: { provider: "google", speed: "ultrafast" },
       guideExtractCast: { provider: "google", speed: "fast" },
+      pageScene: { provider: "google", speed: "fast" },
       extractArtStyle: { provider: "google", speed: "fast" },
       extractArtLook: { provider: "google", speed: "fast" },
       // Release notes read a whole diff in one call and are written for humans

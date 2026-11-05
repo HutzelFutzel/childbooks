@@ -27,7 +27,12 @@ import { illustrationUnits } from "../../../book/units";
 import { pageNumberOf } from "../../../book/pageRefs";
 import { anchorByName, anchorsNamedIn, castOnPage, withPageCast } from "../../../book/pageCast";
 import { absentFromPage, ambiguousPerson, speaksOfSomeoneUnnamed } from "../../../book/editTarget";
-import { asksForNewPicture } from "../../redrawMode";
+import { asksForNewPicture, isBareRestart } from "../../redrawMode";
+import { cleanScene, hasNoPicture, setPageHasPicture, setPageScene, spreadOf } from "../../../book/pagePlan";
+import { styleRequestIn, withoutStyleAsides } from "../../../book/styleRequest";
+
+/** "Draw page 7", "paint it": a request to draw what the page already describes, with nothing new in it. */
+const BARE_DRAW = /^(?:please\s+|bitte\s+)?(?:draw|illustrate|paint|zeichne|male)(?:\s+(?:it|this|that|this page|the page|page\s+\d+|diese seite|die seite|sie|es))?[.!]?$/iu;
 
 /** How a page is called to a reader: its printed number, or the cover. */
 function pageWord(project: Project, unitId: string): string {
@@ -710,7 +715,7 @@ export const DESIGN_COMMANDS: CommandDef[] = [
     aimsAtPages: true,
     suggest: [{ id: "changePicture", views: ["pages"], duringDrawing: true }],
     summary:
-      "Change something inside the drawn picture of one finished page or cover ('give her an umbrella in her left hand on page 18', 'make the sky pink on the cover', 'remove the boy from this picture', 'take the dog out of page 5'). Not for the color of the page itself: 'the background of the page' means the paper color, unless they speak of something drawn in the scene. Changes only what they ask for and keeps the old picture in the history. 'change' holds only what should look different, in the reader's words. The page comes from the page they name or have selected; never guess it. Set mode 'new' only when they want a completely different picture. Several pages at once (\'the sky pink on pages 3 to 5\') get the same change; at most 8.",
+      "Draw a page that has no picture yet (a new page, or one with its picture taken off): 'change' is then what happens on that page ('page 9: Arthur finds a lantern in the cave'), and the page is drawn in the book's own look, which no page can change. Otherwise change something inside the drawn picture of one finished page or cover ('give her an umbrella in her left hand on page 18', 'make the sky pink on the cover', 'remove the boy from this picture', 'take the dog out of page 5'). Not for the color of the page itself: 'the background of the page' means the paper color, unless they speak of something drawn in the scene. Changes only what they ask for and keeps the old picture in the history. 'change' holds only what should look different, in the reader's words. The page comes from the page they name or have selected; never guess it. Set mode 'new' only when they want a completely different picture. Several pages at once (\'the sky pink on pages 3 to 5\') get the same change; at most 8.",
     args: [
       { name: "change", kind: "text", required: true, hint: "what should look different in the picture, in the reader's words" },
       {
@@ -729,7 +734,7 @@ export const DESIGN_COMMANDS: CommandDef[] = [
       { name: "pages", kind: "text", required: false, hint: "never set this: the app fills it in when it asks which page" },
     ],
     examples: ["Give her an umbrella in her left hand on page 18", "Make the sky pink on page 3", "Add a small dog on the cover", "Redraw page 7"],
-    help: "Changes something in the picture of a page or the cover. Name the page (\"page 18\") or select it in the book. I change the picture that is there and keep the old one in its history. You see the price before anything is drawn unless it's small.",
+    help: "Changes something in the picture of a page or the cover, or draws a page that has no picture yet from what you say happens on it. Name the page (\"page 18\") or select it in the book. I change the picture that is there and keep the old one in its history. The look of the book stays the same on every page. You see the price before anything is drawn unless it's small.",
     requires: ["pagesStarted"],
     paid: true,
     run: (project, args, ctx) => {
@@ -751,7 +756,33 @@ export const DESIGN_COMMANDS: CommandDef[] = [
       const inBook = new Set(illustrationUnits(project).map((unit) => unit.id));
       const present = named.filter((id) => inBook.has(id));
       if (present.length === 0) return { kind: "invalid", reason: "That page isn't in the book any more.", say: true };
-      const drawn = present.filter((id) => Boolean(project.illustrations?.[id]));
+      // The look belongs to the whole book. A request that is only about the look changes nothing;
+      // one that mixes it with a real change keeps the change and says the look was left out.
+      const styleAsked = styleRequestIn(change);
+      if (styleAsked.phrases.length > 0 && styleAsked.onlyStyle) return { kind: "noop", beat: beat("styleIsBookWide") };
+
+      // A page with no picture yet (or one turned off) is drawn, not changed: what the reader says is what
+      // happens on it. One page at a time, because each needs its own description.
+      const needsPicture = (id: string): boolean => {
+        const spread = spreadOf(project, id);
+        return Boolean(spread && (hasNoPicture(spread) || !project.illustrations?.[id]));
+      };
+      if (present.length === 1 && needsPicture(present[0]!)) {
+        const id = present[0]!;
+        const spread = spreadOf(project, id)!;
+        const bare = isBareRestart(change) || BARE_DRAW.test(change.trim());
+        const base = bare ? spread.illustration.trim() : spread.illustration.trim() ? `${spread.illustration.trim()}. ${change}` : change;
+        const scene = cleanScene(base);
+        if (!scene && !spread.text.trim()) return askFor("change", "askNewPageScene");
+        const drawnProject = setPageScene(setPageHasPicture(project, id, true), id, scene);
+        return {
+          kind: "write",
+          project: drawnProject,
+          beat: beat(styleAsked.phrases.length > 0 ? "styleKeptForBook" : "redrawReady", undefined, { priority: "result" }),
+          then: { kind: "redrawPage", unitIds: [id], instruction: "", mode: "new" },
+        };
+      }
+      const drawn = present.filter((id) => Boolean(project.illustrations?.[id]) && !needsPicture(id));
       if (drawn.length === 0) {
         const page = pageNumberOf(project, present[0]!);
         return {
@@ -824,17 +855,23 @@ export const DESIGN_COMMANDS: CommandDef[] = [
         !fresh && wanted.length > 0 && resolved.size > 0 && speaksOfSomeoneUnnamed(project, change)
           ? `${change} (this is about ${[...resolved.values()].map((anchor) => anchor.name.trim()).join(" and ")})`
           : change;
-      const effect: CommandEffect = { kind: "redrawPage", unitIds, instruction, ...(fresh ? { mode: "new" as const } : {}) };
+      const effect: CommandEffect = {
+        kind: "redrawPage",
+        unitIds,
+        instruction: styleAsked.phrases.length > 0 ? withoutStyleAsides(instruction) : instruction,
+        ...(fresh ? { mode: "new" as const } : {}),
+      };
+      const readyBeat = beat(styleAsked.phrases.length > 0 ? "styleKeptForBook" : "redrawReady", undefined, { priority: "result" });
       const added = fresh ? [] : [...resolved.keys()].filter((id) => unitIds.some((unit) => !castOnPage(project, unit).includes(id)));
       if (added.length > 0) {
         return {
           kind: "write",
           project: withPageCast(project, unitIds, added),
-          beat: beat("redrawReady", undefined, { priority: "result" }),
+          beat: readyBeat,
           then: effect,
         };
       }
-      return { kind: "effect", effect, beat: beat("redrawReady", undefined, { priority: "result" }) };
+      return { kind: "effect", effect, beat: readyBeat };
     },
   },
 ];

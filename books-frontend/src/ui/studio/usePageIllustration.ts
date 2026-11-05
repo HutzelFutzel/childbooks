@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import type { Anchor, CoverSpec, Project, ScreenplaySpread } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { effectiveAnchorIds } from "../../core/book/anchorRefs";
+import { cleanScene } from "../../core/book/pagePlan";
 import { allVersions, getCursor, selectVersion, updateNodeContent } from "../../core/versioning";
 import {
   changedAnchorsForSpread,
@@ -153,8 +154,11 @@ export function usePageIllustration(pageId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.anchors, isStale, cursor?.blobId, changedHere]);
 
-  async function patchSubject(patch: Partial<ScreenplaySpread> & Partial<CoverSpec>) {
+  async function patchSubject(raw: Partial<ScreenplaySpread> & Partial<CoverSpec>) {
     if (!subject) return;
+    // A description never carries a style: the look is the book's, wherever the text is typed.
+    const patch =
+      typeof raw.illustration === "string" ? { ...raw, illustration: cleanScene(raw.illustration) } : raw;
     if (subject.kind === "spread") {
       await updateSpread(subject.spread.id, patch);
       return;

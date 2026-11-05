@@ -61,7 +61,7 @@ export function PageFocus({
   showConversationToggle: boolean;
 }) {
   const t = useGuideT("chrome");
-  const { displays, setEditingDisp, editingDispId } = useStudio();
+  const { displays, setEditingDisp, editingDispId, select } = useStudio();
   const chip = useChatStudio((st) => st.chip);
   const setChip = useChatStudio((st) => st.setChip);
   const open = displays.find((d) => d.id === editingDispId) ?? displays[Math.max(0, dispIndexOf(displays, unitId ?? ""))];
@@ -122,7 +122,11 @@ export function PageFocus({
                   <button
                     key={id}
                     type="button"
-                    onClick={() => setChip(active ? null : target)}
+                    onClick={() => {
+                      setChip(active ? null : target);
+                      // The page card beside the book follows the page picked here.
+                      if (!active && target.kind === "page") select({ kind: "page", pageId: id });
+                    }}
                     aria-pressed={active}
                     className={cn(
                       "inline-flex h-7 items-center rounded-md px-2.5 text-xs font-semibold tabular-nums transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
