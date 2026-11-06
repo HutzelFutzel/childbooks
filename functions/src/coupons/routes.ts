@@ -51,6 +51,7 @@ import {
   voidRedemption,
 } from "./redemption";
 import { couponReport, readCounters } from "./stats";
+import { recordCouponAttempt } from "./throttle";
 import {
   generateCodes,
   listCodes,
@@ -85,31 +86,6 @@ const arrivalSchema = z.object({
   referrer: z.string().max(300).optional(),
 });
 
-/**
- * Attempts per account per window. Generous enough that nobody legitimately
- * retyping a code off a crumpled receipt ever sees it, tight enough that
- * enumeration isn't worth starting.
- */
-const PREVIEW_LIMIT = 20;
-const PREVIEW_WINDOW_MS = 10 * 60_000;
-const previewAttempts = new Map<string, { count: number; resetAt: number }>();
-
-function throttled(uid: string): boolean {
-  const now = Date.now();
-  const entry = previewAttempts.get(uid);
-  if (!entry || now > entry.resetAt) {
-    previewAttempts.set(uid, { count: 1, resetAt: now + PREVIEW_WINDOW_MS });
-    return false;
-  }
-  entry.count++;
-  // In-memory, so it resets when the instance recycles. That's an acceptable
-  // ceiling for a throttle whose job is to make enumeration tedious rather than
-  // impossible — a Firestore counter on this path would cost a write per
-  // keystroke-triggered validation.
-  if (previewAttempts.size > 10_000) previewAttempts.clear();
-  return entry.count > PREVIEW_LIMIT;
-}
-
 export function registerCouponUserRoutes(app: Express): void {
   const json = express.json({ limit: "8kb" });
 
@@ -126,7 +102,7 @@ export function registerCouponUserRoutes(app: Express): void {
       res.status(400).json({ error: { message: "Tell us the code and what you're buying." } });
       return;
     }
-    if (throttled(req.uid!)) {
+    if (recordCouponAttempt(req.uid!)) {
       res.status(429).json({
         ok: false,
         reason: "throttled",

@@ -20,6 +20,7 @@ import type {
   ShippingMethod,
 } from "../core/fulfillment/types";
 import type { VariantSelection } from "../core/config/variants";
+import type { DigitalQuoteView, PrintQuoteView } from "../core/billing/printQuote";
 
 export type PaymentStatus =
   | "pending"
@@ -89,6 +90,32 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
   }
 }
 
+/**
+ * The price the customer approved no longer holds (the quote expired, or the
+ * order changed under it). Not a failure to retry: the caller fetches a fresh
+ * quote, shows it, and lets the customer decide again.
+ */
+export class CheckoutPriceChangedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CheckoutPriceChangedError";
+  }
+}
+
+/** Throws the right error for a failed checkout response, keeping `price_changed` distinct. */
+async function checkoutError(res: Response, fallback: string): Promise<Error> {
+  let message = fallback;
+  let code: string | undefined;
+  try {
+    const body = (await res.json()) as { error?: { message?: string; code?: string } };
+    message = body?.error?.message ?? fallback;
+    code = body?.error?.code;
+  } catch {
+    /* keep the fallback */
+  }
+  return code === "price_changed" ? new CheckoutPriceChangedError(message) : new Error(message);
+}
+
 export interface CheckoutInput {
   draft: OrderDraft;
   pageCount: number;
@@ -103,15 +130,12 @@ export interface CheckoutInput {
   /** Which way they answered it. Recorded on the order so support can see what they chose. */
   addressChoice?: "suggested" | "entered";
   /**
-   * A coupon code the customer entered. Sent as typed and re-validated server
-   * side inside the pricing transaction — the client's earlier check was a
-   * preview, and a code that expired or hit its cap in between has to fail here
-   * rather than be honored on the strength of a stale preview.
-   *
-   * An invalid code fails the checkout with an explanation instead of being
-   * dropped: silently charging full price for an order the customer submitted
-   * expecting a discount is the one outcome worse than refusing it.
+   * The quote the customer was shown and is paying. Checkout charges THIS quote
+   * and nothing else; it is refused (see {@link CheckoutPriceChangedError}) if
+   * the order no longer matches it.
    */
+  quoteId: string;
+  /** The code the quote applied (`quote.discount.code`) — part of what the quote was made for. */
   couponCode?: string;
   /** Spine foil lines, for a linen-wrap book. Re-fit to the provider's limits server side. */
   foilStamp?: { title: string; author?: string };
@@ -124,7 +148,7 @@ export interface CheckoutInput {
 export async function startOrderCheckout(
   input: CheckoutInput & { variant?: VariantSelection },
 ): Promise<{ url: string; paymentId: string }> {
-  const { draft, pageCount, variant, fingerprint, addressConfirmed, addressChoice, couponCode, foilStamp } = input;
+  const { draft, pageCount, variant, fingerprint, addressConfirmed, addressChoice, quoteId, couponCode, foilStamp } = input;
   const assets = await Promise.all(draft.assets.map(assetToWire));
   const body = {
     // Format identity (base SKU). The server composes the print SKU from
@@ -142,6 +166,7 @@ export async function startOrderCheckout(
     fingerprint,
     addressConfirmed,
     addressChoice,
+    quoteId,
     couponCode,
     foilStamp,
   };
@@ -150,46 +175,22 @@ export async function startOrderCheckout(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start checkout."));
+  if (!res.ok) throw await checkoutError(res, "We couldn't start checkout.");
   const json = (await res.json()) as { url?: string; paymentId?: string };
   if (!json.url) throw new Error("Checkout did not return a payment URL.");
   return { url: json.url, paymentId: json.paymentId ?? "" };
 }
 
-export interface RetailPricePreview {
-  currency: string;
-  copies: number;
-  /** Per-unit price after any plan discount. */
-  unitPrice: number;
-  /** Per-unit sticker price before the discount. */
-  listUnitPrice: number;
-  discountPct: number;
-  items: number;
-  shipping: number;
-  total: number;
-  /** Break-even at-cost total (Lulu production + Lulu shipping + Stripe fee, ex tax). */
-  atCostTotal?: number;
-  /** "exclusive" when tax is added at payment, so the total is pre-tax. */
-  taxBehavior?: "inclusive" | "exclusive";
-  /**
-   * What the print provider's address validation made of the destination. Null
-   * when it had no comment. Pricing already sends the full address, so this
-   * costs nothing extra and arrives while the customer can still fix it.
-   */
-  addressValidation: AddressValidation | null;
-}
-
 /**
- * Retail price preview for the order dialog. Runs the exact server pricing
- * path used at checkout (retail tiers + plan discount + charged shipping), so
- * the preview always matches what Stripe will charge (before tax).
+ * The server's quote for a print order — every number the dialog shows, and the
+ * thing checkout charges. The browser adds nothing to it and subtracts nothing
+ * from it.
  */
-export async function fetchOrderPrice(input: {
+export async function fetchPrintQuote(input: {
   productSku: string;
   variant?: VariantSelection;
   copies: number;
   pageCount: number;
-  currency: string;
   shippingMethod: ShippingMethod;
   destinationCountry: string;
   line1?: string;
@@ -202,14 +203,16 @@ export async function fetchOrderPrice(input: {
   city: string;
   state?: string;
   postalCode: string;
-}): Promise<RetailPricePreview> {
-  const res = await backendFetch("/checkout/price", {
+  /** A code as typed. The quote says whether it applied. */
+  couponCode?: string;
+}): Promise<PrintQuoteView> {
+  const res = await backendFetch("/checkout/quote", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
   if (!res.ok) throw new Error(await errorMessage(res, "We couldn't price this destination."));
-  return (await res.json()) as RetailPricePreview;
+  return (await res.json()) as PrintQuoteView;
 }
 
 /**
@@ -255,13 +258,23 @@ export interface EbookQuote {
   planName: string | null;
   /** True when the buyer's plan includes the ebook (granted without checkout). */
   included: boolean;
+  /**
+   * The priced quote — what is shown and what checkout charges. Present only when
+   * there is something to pay (not owned, not included, enabled).
+   */
+  priceQuote?: DigitalQuoteView | null;
 }
 
-/** Server-authoritative ebook price + ownership for a project. */
-export async function fetchEbookQuote(projectId: string, currency?: string): Promise<EbookQuote> {
-  const params = new URLSearchParams({ projectId });
-  if (currency) params.set("currency", currency);
-  const res = await backendFetch(`/checkout/ebook/quote?${params.toString()}`);
+/**
+ * Server-authoritative ebook price + ownership for a project, with the quote to
+ * pay. `couponCode` is a code as typed; the quote says whether it applied.
+ */
+export async function fetchEbookQuote(projectId: string, currency?: string, couponCode?: string): Promise<EbookQuote> {
+  const res = await backendFetch("/checkout/ebook/quote", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId, currency, couponCode }),
+  });
   if (!res.ok) throw new Error(await errorMessage(res, "We couldn't price the ebook."));
   return (await res.json()) as EbookQuote;
 }
@@ -282,6 +295,9 @@ export async function startEbookCheckout(input: {
   title: string;
   currency: string;
   fingerprint: string;
+  /** The quote being paid, when there is one (a free grant has none). */
+  quoteId?: string;
+  /** The code that quote applied. */
   couponCode?: string;
 }): Promise<{ url: string } | { granted: true }> {
   const res = await backendFetch("/checkout/ebook", {
@@ -292,10 +308,11 @@ export async function startEbookCheckout(input: {
       title: input.title,
       currency: input.currency,
       fingerprint: input.fingerprint,
+      quoteId: input.quoteId,
       couponCode: input.couponCode,
     }),
   });
-  if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start the ebook checkout."));
+  if (!res.ok) throw await checkoutError(res, "We couldn't start the ebook checkout.");
   const json = (await res.json()) as { url?: string; granted?: boolean };
   if (json.granted) return { granted: true };
   if (!json.url) throw new Error("Checkout did not return a URL.");
@@ -338,16 +355,37 @@ export async function buySparkPack(
   returnProjectId?: string,
   /** The quote this purchase is for: its price is held and it starts on return. */
   resumeQuoteId?: string,
+  /** The price quote the buyer was shown (see {@link fetchPackQuote}); `couponCode` is the code it applied. */
+  priceQuoteId?: string,
 ): Promise<{ url: string; quoteExpiresAt?: number }> {
   const res = await backendFetch("/checkout/sparks-pack", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ packId, currency, couponCode, returnProjectId, resumeQuoteId }),
+    body: JSON.stringify({ packId, currency, couponCode, returnProjectId, resumeQuoteId, quoteId: priceQuoteId }),
   });
-  if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start checkout."));
+  if (!res.ok) throw await checkoutError(res, "We couldn't start checkout.");
   const json = (await res.json()) as { url?: string; quoteExpiresAt?: number };
   if (!json.url) throw new Error("Checkout did not return a URL.");
   return { url: json.url, ...(typeof json.quoteExpiresAt === "number" ? { quoteExpiresAt: json.quoteExpiresAt } : {}) };
+}
+
+/**
+ * The price of a Spark pack, with a code if the buyer typed one: what the wallet
+ * shows, and what checkout charges when handed its id. A gift costs the same.
+ */
+export async function fetchPackQuote(input: {
+  packId: string;
+  currency: string;
+  /** A code as typed; the quote says whether it applied. */
+  couponCode?: string;
+}): Promise<DigitalQuoteView> {
+  const res = await backendFetch("/checkout/sparks-pack/quote", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "We couldn't price this pack."));
+  return (await res.json()) as DigitalQuoteView;
 }
 
 /**
@@ -359,14 +397,17 @@ export async function buySparkGift(input: {
   currency: string;
   recipientEmail?: string;
   message?: string;
+  /** The code the shown quote applied. */
   couponCode?: string;
+  /** The price quote the buyer was shown, when they were shown one. */
+  quoteId?: string;
 }): Promise<{ url: string }> {
   const res = await backendFetch("/checkout/sparks-gift", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start checkout."));
+  if (!res.ok) throw await checkoutError(res, "We couldn't start checkout.");
   const json = (await res.json()) as { url?: string };
   if (!json.url) throw new Error("Checkout did not return a URL.");
   return { url: json.url };

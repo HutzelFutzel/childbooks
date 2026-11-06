@@ -86,6 +86,13 @@ jobs:
       - name: Check saving invariants
         run: yarn check:save
 
+      # What a customer is shown for a print order and what Stripe is asked to
+      # charge are one set of integers: lines that add up to the cent, a discount
+      # rounded once on the line, a Stripe line that multiplies out to the books
+      # charge, and a quote that can only be spent on the order it was made for.
+      - name: Check quote invariants
+        run: yarn check:quote
+
       # App Hosting applies apphosting.yaml's env when it builds; a bare
       # `yarn build:web` here would not, and NEXT_PUBLIC_* are inlined at build
       # time. Load them so this really is the same build production gets.

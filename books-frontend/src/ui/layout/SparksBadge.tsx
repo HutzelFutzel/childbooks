@@ -15,6 +15,7 @@ import { useSparksUiStore } from "../../state/sparksUiStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useAuthStore } from "../../state/authStore";
 import {
+  CheckoutPriceChangedError,
   buySparkGift,
   buySparkPack,
   claimSparkGift,
@@ -24,7 +25,8 @@ import {
 import { fetchReferralOverview, type ReferralOverview } from "../../platform/referrals";
 import { packTotalSparks } from "../../core/config/sparks";
 import { fmtMoney } from "../admin/tabs/products/parts";
-import { CouponField } from "../checkout/CouponField";
+import { PackCouponBox } from "../checkout/PackCouponBox";
+import { fromMinorUnits, type DigitalQuoteView } from "../../core/billing/printQuote";
 import { useImageActionRange } from "./SparkCost";
 import { OffersBlock } from "./OffersBlock";
 import { CouponsBlock } from "./CouponsBlock";
@@ -52,11 +54,17 @@ export function SparksBadge({ walletOnly = false }: { /** Mount just the wallet 
   const accessLevel = useAuthStore((s) => s.accessLevel);
   const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
   const [busy, setBusy] = useState<string | null>(null);
-  // Codes are kept per pack, because a code is checked against the price it
-  // will come off, and the packs are priced far enough apart that a minimum
-  // spend qualifies on one and not the next. The row's code covers its gift
-  // button too: a gift is the same pack purchase, granted to somebody else.
-  const [codes, setCodes] = useState<Record<string, string | null>>({});
+  // The quote a pack's code produced, kept per pack, because a code is quoted
+  // against the price it will come off, and the packs are priced far enough apart
+  // that a minimum spend qualifies on one and not the next. The row's quote covers
+  // its gift button too: a gift is the same pack purchase, granted to somebody
+  // else. A pack with no code has no entry — the server prices it as it's bought.
+  const [quotes, setQuotes] = useState<Record<string, DigitalQuoteView | null>>({});
+  const [resets, setResets] = useState<Record<string, number>>({});
+  const staleQuote = (packId: string) => {
+    setQuotes((prev) => ({ ...prev, [packId]: null }));
+    setResets((prev) => ({ ...prev, [packId]: (prev[packId] ?? 0) + 1 }));
+  };
 
   // Glint the ✦ when Sparks ARRIVE — the little "fairy dust" moment. Spends
   // deliberately pass unannounced: animating every deduction turns the pill
@@ -108,9 +116,18 @@ export function SparksBadge({ walletOnly = false }: { /** Mount just the wallet 
   const buy = async (packId: string) => {
     setBusy(packId);
     try {
-      const { url } = await buySparkPack(packId, baseCurrency, codes[packId] ?? undefined);
+      const quote = quotes[packId] ?? null;
+      const { url } = await buySparkPack(
+        packId,
+        baseCurrency,
+        quote?.discount?.code ?? undefined,
+        undefined,
+        undefined,
+        quote?.quoteId,
+      );
       window.location.href = url;
     } catch (err) {
+      if (err instanceof CheckoutPriceChangedError) staleQuote(packId);
       toast.error(err instanceof Error ? err.message : "Could not start checkout.");
       setBusy(null);
     }
@@ -119,13 +136,16 @@ export function SparksBadge({ walletOnly = false }: { /** Mount just the wallet 
   const buyGift = async (packId: string) => {
     setBusy(`gift-${packId}`);
     try {
+      const quote = quotes[packId] ?? null;
       const { url } = await buySparkGift({
         packId,
         currency: baseCurrency,
-        couponCode: codes[packId] ?? undefined,
+        couponCode: quote?.discount?.code ?? undefined,
+        quoteId: quote?.quoteId,
       });
       window.location.href = url;
     } catch (err) {
+      if (err instanceof CheckoutPriceChangedError) staleQuote(packId);
       toast.error(err instanceof Error ? err.message : "Could not start checkout.");
       setBusy(null);
     }
@@ -287,6 +307,12 @@ export function SparksBadge({ walletOnly = false }: { /** Mount just the wallet 
               {packs.map((pack) => {
                 const raw = pack.prices[baseCurrency];
                 const price = typeof raw === "number" && raw > 0 ? raw : null;
+                const packQuote = quotes[pack.id] ?? null;
+                // What the button says is what is charged: the quote's total when
+                // there is one, the list price otherwise.
+                const shown = packQuote
+                  ? fromMinorUnits(packQuote.lines.totalMinor, packQuote.lines.currency)
+                  : price;
                 const total = packTotalSparks(pack);
                 const suggested = pack.id === suggestedPackId;
                 return (
@@ -331,23 +357,23 @@ export function SparksBadge({ walletOnly = false }: { /** Mount just the wallet 
                           disabled={price === null}
                           onClick={() => buy(pack.id)}
                         >
-                          {price !== null ? fmtMoney(price, baseCurrency) : "—"}
+                          {shown !== null ? fmtMoney(shown, baseCurrency) : "—"}
                         </Button>
                       </div>
                     </div>
                     {price !== null && (
-                      <CouponField
+                      <PackCouponBox
                         className="mt-2"
-                        itemType="pack"
-                        subtotal={price}
+                        packId={pack.id}
                         currency={baseCurrency}
-                        productId={pack.id}
-                        onChange={(code) => setCodes((prev) => ({ ...prev, [pack.id]: code }))}
+                        resetKey={resets[pack.id] ?? 0}
+                        onQuote={(next) => setQuotes((prev) => ({ ...prev, [pack.id]: next }))}
                       />
                     )}
                   </div>
                 );
               })}
+              <p className="text-[11px] text-ink-400">Sales tax, if any, is added at payment.</p>
             </div>
           )}
 

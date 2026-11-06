@@ -18,12 +18,14 @@ import { fetchRenderAvailability, renderBook } from "../../platform/renders";
 import { COVER_FRONT_ID, type BookDesign, type Project } from "../../core/types";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import {
+  CheckoutPriceChangedError,
   fetchEbookQuote,
   startEbookCheckout,
   type EbookQuote,
 } from "../../platform/payments";
+import { fromMinorUnits } from "../../core/billing/printQuote";
 import { fetchDownloadLink } from "../../platform/downloads";
-import { CouponField } from "./CouponField";
+import { QuoteCouponField } from "./QuoteCouponField";
 import { OfferPreviewNote } from "./OfferPreviewNote";
 import { useCheckoutUiStore } from "../../state/checkoutUiStore";
 import { flushProjectSaves } from "../../state/projectsStore";
@@ -69,14 +71,22 @@ export function EbookCheckout({
   const [quote, setQuote] = useState<EbookQuote | null>(initialQuote);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
-  // Re-validated inside the checkout transaction; this is only what the
-  // customer entered and the server accepted a moment ago.
-  const [couponCode, setCouponCode] = useState<string | null>(null);
-  // What that code takes off, so the total (and the button) show what will
-  // actually be charged rather than the list price with a promise beside it.
-  const [couponDiscount, setCouponDiscount] = useState(0);
-  const discount = couponCode ? couponDiscount : 0;
-  const due = quote ? Math.max(0, quote.price - discount) : 0;
+  // The code the customer asked us to try. Only ever a REQUEST: it goes to the
+  // server with the quote request, and whether it applied — and for how much — is
+  // whatever the quote says. Nothing about a discount is worked out here.
+  const codeRef = useRef("");
+  const [codeVersion, setCodeVersion] = useState(0);
+  const [codeMessage, setCodeMessage] = useState<string | null>(null);
+  // Bumped to fetch a fresh quote when the one being paid was refused as stale.
+  const [refresh, setRefresh] = useState(0);
+  const [pricing, setPricing] = useState(false);
+  // Something to pay for at all: not owned, not covered by the plan, not free.
+  const payable = Boolean(quote && quote.enabled && !quote.owned && !quote.included && quote.price > 0);
+  const priceQuote = quote?.priceQuote ?? null;
+  // What is charged is the server's quote — the browser adds and subtracts nothing.
+  const due = priceQuote ? fromMinorUnits(priceQuote.lines.totalMinor, priceQuote.lines.currency) : (quote?.price ?? 0);
+  // Until the quote is in, the list price is a guess about what will be charged.
+  const priceReady = !payable || (priceQuote != null && !pricing);
   // Bumped when the customer leaves (Back, or the dialog unmounting). `buy()`
   // is a chain of awaits ending in a redirect to payment; without this, going
   // back mid-render still carried on and sent them to Stripe from a screen
@@ -122,15 +132,21 @@ export function EbookCheckout({
     // A seeded quote already answers the question this phase exists to
     // answer ("owned, included, or priced at X?") — skip straight to "ready"
     // instead of flashing a spinner over an answer the caller already has.
-    setQuote(initialQuote ?? null);
-    setPhase(initialQuote ? "ready" : "quote");
+    setQuote((prev) => (codeVersion > 0 || refresh > 0 ? prev : (initialQuote ?? null)));
+    setPhase((prev) => (codeVersion > 0 || refresh > 0 ? prev : initialQuote ? "ready" : "quote"));
     setError(null);
+    setPricing(true);
     let cancelled = false;
-    void fetchEbookQuote(project.id, baseCurrency)
+    void fetchEbookQuote(project.id, baseCurrency, codeRef.current || undefined)
       .then((q) => {
         if (cancelled) return;
         setQuote(q);
         setPhase("ready");
+        setPricing(false);
+        // A code the server didn't apply is dropped, so it isn't re-sent (and
+        // counted against the guessing limit) with every later quote.
+        setCodeMessage(q.priceQuote?.couponRejection?.message ?? null);
+        codeRef.current = q.priceQuote?.discount?.code ?? "";
       })
       .catch((err) => {
         if (cancelled) return;
@@ -141,12 +157,13 @@ export function EbookCheckout({
           setError(err instanceof Error ? err.message : "We couldn't price the ebook.");
         }
         setPhase("ready");
+        setPricing(false);
       });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id, baseCurrency, initialQuote]);
+  }, [project.id, baseCurrency, initialQuote, codeVersion, refresh]);
 
   /**
    * A book that hasn't changed since it was last rendered doesn't need to be
@@ -195,7 +212,9 @@ export function EbookCheckout({
         title: project.title,
         currency: quote?.currency ?? baseCurrency,
         fingerprint,
-        couponCode: couponCode ?? undefined,
+        // The quote being paid, and the code it applied. A free grant has neither.
+        quoteId: free ? undefined : priceQuote?.quoteId,
+        couponCode: free ? undefined : (priceQuote?.discount?.code ?? undefined),
       });
       if (runRef.current !== run) return;
       if ("granted" in result) {
@@ -214,6 +233,9 @@ export function EbookCheckout({
       if (runRef.current !== run) return;
       setPhase("ready");
       setError(err instanceof Error ? err.message : "We couldn't start checkout.");
+      // The price the customer approved no longer holds: show the new one before
+      // anything is charged.
+      if (err instanceof CheckoutPriceChangedError) setRefresh((n) => n + 1);
     }
   }
 
@@ -322,7 +344,7 @@ export function EbookCheckout({
                       {quote.owned ? "Your copy" : "Total"}
                     </span>
                     <span className="text-right">
-                      {!quote.owned && due < quote.listPrice && (
+                      {!quote.owned && priceReady && due < quote.listPrice && (
                         <span className="mr-2 text-xs text-ink-400 line-through">
                           {money(quote.listPrice, quote.currency)}
                         </span>
@@ -332,7 +354,9 @@ export function EbookCheckout({
                           ? "Purchased"
                           : quote.included
                             ? "Included"
-                            : money(due, quote.currency)}
+                            : priceReady
+                              ? money(due, quote.currency)
+                              : "…"}
                       </span>
                     </span>
                   </div>
@@ -360,15 +384,35 @@ export function EbookCheckout({
               {/* Nothing to discount when it's already owned or included in the
                   plan — a code box next to a €0 total is an invitation to waste
                   a single-use code. */}
-              {quote && quote.enabled && !quote.owned && !quote.included && quote.price > 0 && (
-                <CouponField
-                  itemType="ebook"
-                  subtotal={quote.price}
-                  currency={quote.currency}
-                  productId="ebook"
-                  onChange={setCouponCode}
-                  onDiscount={setCouponDiscount}
+              {payable && (
+                <QuoteCouponField
+                  applied={
+                    priceQuote?.discount?.code
+                      ? {
+                          code: priceQuote.discount.code,
+                          summary: priceQuote.discount.summary,
+                          amountMinor: priceQuote.discount.amountMinor,
+                          notes: priceQuote.discount.notes,
+                        }
+                      : null
+                  }
+                  rejection={codeMessage}
+                  currency={quote?.currency ?? baseCurrency}
+                  pending={pricing}
+                  onApply={(code) => {
+                    codeRef.current = code;
+                    setCodeMessage(null);
+                    setCodeVersion((v) => v + 1);
+                  }}
+                  onRemove={() => {
+                    codeRef.current = "";
+                    setCodeMessage(null);
+                    setCodeVersion((v) => v + 1);
+                  }}
                 />
+              )}
+              {payable && priceQuote && (
+                <p className="text-[11px] text-ink-400">Sales tax, if any, is added at payment.</p>
               )}
 
               {quote && quote.enabled && !quote.owned && !quote.included && (
@@ -398,12 +442,20 @@ export function EbookCheckout({
                   Download your ebook
                 </Button>
               ) : quote?.enabled ? (
-                <Button className="w-full" size="lg" loading={busy} onClick={() => void buy()}>
+                <Button
+                  className="w-full"
+                  size="lg"
+                  loading={busy}
+                  disabled={!priceReady}
+                  onClick={() => void buy()}
+                >
                   {busy
                     ? "Preparing your ebook…"
                     : quote.included
                       ? "Add to Downloads"
-                      : `Continue to payment · ${money(due, quote.currency)}`}
+                      : priceReady
+                        ? `Continue to payment · ${money(due, quote.currency)}`
+                        : "Updating price…"}
                 </Button>
               ) : (
                 <Button className="w-full" size="lg" disabled>

@@ -225,6 +225,13 @@ export function FinancialTab() {
             onChange={(e) => set({ tax: { ...draft.tax, bookTaxCode: e.target.value || undefined } })}
           />
         </Field>
+        <Field label="Stripe product tax code (Spark packs and gifts)" className="w-full sm:w-80">
+          <Input
+            value={draft.tax.sparkTaxCode ?? ""}
+            placeholder="Not set — packs are sold without Stripe Tax"
+            onChange={(e) => set({ tax: { ...draft.tax, sparkTaxCode: e.target.value || undefined } })}
+          />
+        </Field>
       </Section>
 
       <Section

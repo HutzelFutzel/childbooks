@@ -355,6 +355,13 @@ export interface PricingSettings {
   tax: {
     /** Stripe product tax code for physical books (drives zero/reduced rating). */
     bookTaxCode?: string;
+    /**
+     * Stripe product tax code for Spark packs and gifts. Unset by default on
+     * purpose: which code describes them is a decision for whoever answers for
+     * the tax, and guessing one would collect the wrong tax. While it is unset,
+     * packs are sold without Stripe Tax, as they always were.
+     */
+    sparkTaxCode?: string;
     perCurrency: Record<CurrencyCode, TaxCurrencyPolicy>;
   };
   /** Digital-edition sales (disabled by default). */
@@ -940,6 +947,7 @@ export function normalizePricingSettings(input: unknown): PricingSettings {
         : def.sparkUtilizationPct,
     tax: {
       bookTaxCode: p.tax?.bookTaxCode ?? def.tax.bookTaxCode,
+      sparkTaxCode: p.tax?.sparkTaxCode || undefined,
       perCurrency: { ...def.tax.perCurrency, ...p.tax?.perCurrency },
     },
     ebook: normalizeEbookSettings(p.ebook),
@@ -1356,6 +1364,7 @@ export const pricingSettingsSchema = z.object({
   sparkUtilizationPct: z.number().min(0).max(100).optional(),
   tax: z.object({
     bookTaxCode: z.string().optional(),
+    sparkTaxCode: z.string().optional(),
     perCurrency: z.record(
       z.string(),
       z.object({ behavior: z.enum(["inclusive", "exclusive"]), assumedRatePct: z.number().min(0).max(100) }),

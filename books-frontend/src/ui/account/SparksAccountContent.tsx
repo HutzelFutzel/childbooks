@@ -5,12 +5,13 @@ import Link from "next/link";
 import { ArrowDownRight, ArrowUpRight, Loader2, Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { packTotalSparks } from "../../core/config/sparks";
-import { buySparkPack } from "../../platform/payments";
+import { CheckoutPriceChangedError, buySparkPack } from "../../platform/payments";
+import { fromMinorUnits, type DigitalQuoteView } from "../../core/billing/printQuote";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useAuthStore } from "../../state/authStore";
 import { useSparksStore } from "../../state/sparksStore";
 import { Button } from "../components/Button";
-import { CouponField } from "../checkout/CouponField";
+import { PackCouponBox } from "../checkout/PackCouponBox";
 import { OffersBlock } from "../layout/OffersBlock";
 import { CouponsBlock } from "../layout/CouponsBlock";
 import { fmtMoney } from "../admin/tabs/products/parts";
@@ -29,18 +30,33 @@ export function SparksAccountContent() {
     .slice()
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
-  // Per pack, because a code is checked against the price it will come off:
+  // Per pack, because a code is quoted against the price it will come off:
   // packs are priced far apart, so a code with a minimum spend qualifies on the
   // big one and not the small one, and one shared box would quote the wrong
-  // saving for every row but the one it was typed under.
-  const [codes, setCodes] = useState<Record<string, string | null>>({});
+  // saving for every row but the one it was typed under. A pack with no code has
+  // no entry: it is priced by the server the moment it is bought.
+  const [quotes, setQuotes] = useState<Record<string, DigitalQuoteView | null>>({});
+  const [resets, setResets] = useState<Record<string, number>>({});
 
   const buy = async (packId: string) => {
     setBusy(packId);
+    const quote = quotes[packId] ?? null;
     try {
-      const { url } = await buySparkPack(packId, currency, codes[packId] ?? undefined);
+      const { url } = await buySparkPack(
+        packId,
+        currency,
+        quote?.discount?.code ?? undefined,
+        undefined,
+        undefined,
+        quote?.quoteId,
+      );
       window.location.href = url;
     } catch (error) {
+      if (error instanceof CheckoutPriceChangedError) {
+        // The price that was shown no longer holds; drop it so the next one is fresh.
+        setQuotes((prev) => ({ ...prev, [packId]: null }));
+        setResets((prev) => ({ ...prev, [packId]: (prev[packId] ?? 0) + 1 }));
+      }
       toast.error(error instanceof Error ? error.message : "Could not start checkout.");
       setBusy(null);
     }
@@ -81,10 +97,15 @@ export function SparksAccountContent() {
         ) : packs.length === 0 ? (
           <p className="mt-4 text-sm text-ink-500">No top-up packs are available right now.</p>
         ) : (
+          <>
           <div className="mt-4 divide-y divide-ink-100 border-y border-ink-100">
             {packs.map((pack) => {
               const raw = pack.prices[currency];
               const price = typeof raw === "number" && raw > 0 ? raw : null;
+              const quote = quotes[pack.id] ?? null;
+              // What the button says is what is charged: the quote's total when
+              // there is one, the list price otherwise.
+              const shown = quote ? fromMinorUnits(quote.lines.totalMinor, quote.lines.currency) : price;
               return (
                 <div key={pack.id} className="flex flex-wrap items-center justify-between gap-3 py-4">
                   <div>
@@ -98,13 +119,12 @@ export function SparksAccountContent() {
                     </p>
                     <p className="mt-0.5 text-xs text-ink-500">{pack.label}</p>
                     {price !== null && (
-                      <CouponField
+                      <PackCouponBox
                         className="mt-2"
-                        itemType="pack"
-                        subtotal={price}
+                        packId={pack.id}
                         currency={currency}
-                        productId={pack.id}
-                        onChange={(code) => setCodes((prev) => ({ ...prev, [pack.id]: code }))}
+                        resetKey={resets[pack.id] ?? 0}
+                        onQuote={(next) => setQuotes((prev) => ({ ...prev, [pack.id]: next }))}
                       />
                     )}
                   </div>
@@ -115,12 +135,14 @@ export function SparksAccountContent() {
                     disabled={busy !== null || price === null}
                     onClick={() => void buy(pack.id)}
                   >
-                    {price !== null ? fmtMoney(price, currency) : "Unavailable"}
+                    {shown !== null ? fmtMoney(shown, currency) : "Unavailable"}
                   </Button>
                 </div>
               );
             })}
           </div>
+          <p className="mt-2 text-[11px] text-ink-400">Sales tax, if any, is added at payment.</p>
+          </>
         )}
       </section>
 

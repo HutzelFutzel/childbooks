@@ -261,6 +261,27 @@ export interface CreatePendingPaymentArgs {
    */
   device?: string | null;
   deviceOs?: string | null;
+  /**
+   * The quote this payment was priced from, in minor units. Stored on the admin
+   * record so the webhook can prove Stripe took exactly what the customer was
+   * shown — and raise an alert, rather than say nothing, when it did not.
+   */
+  quote?: PaymentQuoteRecord | null;
+}
+
+/**
+ * The quote a payment was priced from, as the webhook later checks it. For a
+ * print order the total and tax are exact. For a digital purchase whose tax is
+ * left to Stripe's payment page (`taxDeferred`), only the part before tax is.
+ */
+export interface PaymentQuoteRecord {
+  id: string;
+  totalMinor: number;
+  taxMinor: number;
+  discountMinor: number;
+  subtotalMinor?: number;
+  taxBehavior?: "inclusive" | "exclusive";
+  taxDeferred?: boolean;
 }
 
 /** Write the pending admin + user records for a freshly-created Checkout Session. */
@@ -299,6 +320,7 @@ export async function createPendingPayment(args: CreatePendingPaymentArgs): Prom
     netAmount: null,
     fulfillment: args.fulfillment ?? null,
     ebook: args.ebook ?? null,
+    ...(args.quote ? { quote: args.quote } : {}),
     // Omitted rather than nulled when unreadable, so "no device recorded" and
     // "recorded as unknown" stay distinguishable in the device analytics.
     ...(args.device && args.device !== "unknown"
@@ -740,6 +762,47 @@ export async function listPendingOrderCheckouts(
     out.push({ id: doc.id, ownerUid: (d.ownerUid as string) ?? "", stripeSessionId: sessionId, createdAt });
   }
   return out;
+}
+
+/**
+ * This buyer's still-open checkouts for one book — what a new checkout of the
+ * same book replaces. Filtered in memory on a single equality, like its
+ * neighbours, so it needs no composite index.
+ */
+export async function listOpenCheckoutsForBook(
+  uid: string,
+  merchantReference: string,
+): Promise<{ paymentId: string; stripeSessionId: string }[]> {
+  const q = await db().collection("payments").where("ownerUid", "==", uid).limit(300).get();
+  const out: { paymentId: string; stripeSessionId: string }[] = [];
+  for (const doc of q.docs) {
+    const d = doc.data() as Record<string, unknown>;
+    if (d.kind !== "order" || d.status !== "pending") continue;
+    const plan = d.fulfillment as { merchantReference?: string | null } | null;
+    if (plan?.merchantReference !== merchantReference) continue;
+    const sessionId = d.stripeSessionId;
+    if (typeof sessionId !== "string" || !sessionId) continue;
+    out.push({ paymentId: doc.id, stripeSessionId: sessionId });
+  }
+  return out;
+}
+
+/** The quote a payment was priced from, if it carries one. */
+export async function getPaymentQuote(paymentId: string): Promise<PaymentQuoteRecord | null> {
+  const snap = await db().doc(`payments/${paymentId}`).get();
+  const q = snap.exists ? (snap.data() as { quote?: unknown }).quote : null;
+  if (!q || typeof q !== "object") return null;
+  const r = q as Record<string, unknown>;
+  if (typeof r.id !== "string" || typeof r.totalMinor !== "number") return null;
+  return {
+    id: r.id,
+    totalMinor: r.totalMinor,
+    taxMinor: typeof r.taxMinor === "number" ? r.taxMinor : 0,
+    discountMinor: typeof r.discountMinor === "number" ? r.discountMinor : 0,
+    ...(typeof r.subtotalMinor === "number" ? { subtotalMinor: r.subtotalMinor } : {}),
+    ...(r.taxBehavior === "inclusive" || r.taxBehavior === "exclusive" ? { taxBehavior: r.taxBehavior } : {}),
+    ...(r.taxDeferred === true ? { taxDeferred: true } : {}),
+  };
 }
 
 /**

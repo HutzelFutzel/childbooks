@@ -74,10 +74,11 @@ import { COVER_FRONT_ID, type BookDesign, type Project } from "../../core/types"
 import { addressSummary, type SavedAddress } from "../../core/profile/types";
 import { createFulfillment } from "../../platform/fulfillment";
 import {
-  fetchOrderPrice,
+  CheckoutPriceChangedError,
+  fetchPrintQuote,
   startOrderCheckout,
-  type RetailPricePreview,
 } from "../../platform/payments";
+import { fromMinorUnits, type PrintQuoteView } from "../../core/billing/printQuote";
 import { isDev } from "../../platform/runtime";
 import { activeSubscription } from "../../platform/subscriptions";
 import { useAuthStore } from "../../state/authStore";
@@ -86,7 +87,7 @@ import { flushProjectSaves, useProjectsStore } from "../../state/projectsStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
-import { CouponField } from "./CouponField";
+import { QuoteCouponField } from "./QuoteCouponField";
 import { OfferPreviewNote } from "./OfferPreviewNote";
 import { useShipCountry } from "../hooks/useShipCountry";
 import { Button } from "../components/Button";
@@ -368,12 +369,15 @@ export function OrderCheckout({
   // countries — the printer runs a different set of services in each — and the
   // customer only found out when the first quote failed.
   const [shipping, setShipping] = useState<ShippingMethod>("Budget");
-  // A coupon code the customer entered and the server accepted for THIS order.
-  // Held here rather than in the draft because it isn't part of the book — it's
-  // re-validated inside the checkout transaction and can be refused there.
-  const [couponCode, setCouponCode] = useState<string | null>(null);
-  // What that code takes off, so the totals show what will actually be charged.
-  const [couponDiscount, setCouponDiscount] = useState(0);
+  // The code the customer asked us to try. It is only ever a REQUEST: it goes to
+  // the server with the quote, and whether it applied — and for how much — is
+  // whatever the quote says. Nothing about a discount is worked out here.
+  // A ref plus a counter, rather than state, so that dropping a rejected code
+  // doesn't itself trigger a second quote.
+  const codeRef = useRef("");
+  const [codeVersion, setCodeVersion] = useState(0);
+  // Why the last code didn't apply, as the server worded it.
+  const [codeMessage, setCodeMessage] = useState<string | null>(null);
   // Bumped when the customer leaves, or the dialog unmounts. Preparing the print
   // files is a chain of awaits that ends in a redirect to payment; without this,
   // pressing Back part-way through still carried on and sent them to Stripe from
@@ -402,7 +406,7 @@ export function OrderCheckout({
   // customers don't retype. Skipped in dev (the DEV_PREFILL already fills it).
   const prefilledRef = useRef(false);
 
-  const [quote, setQuote] = useState<RetailPricePreview | null>(null);
+  const [quote, setQuote] = useState<PrintQuoteView | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [quoteRetry, setQuoteRetry] = useState(0);
@@ -410,16 +414,19 @@ export function OrderCheckout({
   // verdict on that exact address; once a field changes it describes something
   // else, and offering its "correction" would overwrite what was just typed.
   const [quotedFor, setQuotedFor] = useState("");
+  // Everything that can change the price, as it was when the current quote was
+  // asked for. A quote is only the price for exactly these inputs.
+  const [quotedPriceFor, setQuotedPriceFor] = useState("");
   const quoteSeq = useRef(0);
 
   // The code box only exists while there's a quote, and takes what it knew with it
-  // when it goes. Without this the parent kept holding the code (and sending it
-  // to checkout) after the field showing it had unmounted.
+  // when it goes — otherwise a code typed for an address that stopped quoting would
+  // silently ride along on the next one.
   const hasQuote = quote != null;
   useEffect(() => {
     if (hasQuote) return;
-    setCouponCode(null);
-    setCouponDiscount(0);
+    codeRef.current = "";
+    setCodeMessage(null);
   }, [hasQuote]);
 
   // Which address the customer settled on when the carrier suggested a different
@@ -541,6 +548,24 @@ export function OrderCheckout({
   const showRegion =
     regionRequired || regionOptions.length > 0 || region.trim() !== "" || showOptionalRegion;
   const quoteIsCurrent = quote != null && quotedFor === addressSig;
+  // Whether the quote on screen is the price for what is in the form RIGHT NOW.
+  // Only then may it be shown as the total or paid; while it isn't, the dialog is
+  // waiting for the server and says so.
+  const priceSig = JSON.stringify([
+    product.sku,
+    variant,
+    copies,
+    pageCount,
+    shipping,
+    country,
+    line1.trim(),
+    line2.trim(),
+    city.trim(),
+    region.trim(),
+    postal.trim(),
+    codeVersion,
+  ]);
+  const priceIsCurrent = quote != null && quotedPriceFor === priceSig;
   const validation = quoteIsCurrent ? (quote?.addressValidation ?? null) : null;
   const pendingSuggestion = suggestionKey(validation);
   const pendingKey = pendingSuggestion ? `${pendingSuggestion}|${addressSig}` : "";
@@ -708,18 +733,18 @@ export function OrderCheckout({
     }
     setQuoting(true);
     const sigAtRequest = addressSignature({ line1, line2, city, region, postal, country });
+    const priceSigAtRequest = priceSig;
     const t = setTimeout(async () => {
       try {
-        // Retail pricing from the backend — the SAME path used at checkout
-        // (tiered retail price + plan discount + charged shipping), so this is
-        // what the customer will actually pay (before tax), not the print
-        // provider's wholesale quote.
-        const priced = await fetchOrderPrice({
+        // The server's quote: books, shipping, every discount and the tax, as
+        // integers that add up. It is shown as it is and charged by its id, so
+        // this is — to the cent — what Stripe will take.
+        const priced = await fetchPrintQuote({
           productSku: product.sku,
           variant,
           copies,
           pageCount,
-          currency,
+          couponCode: codeRef.current || undefined,
           shippingMethod: shipping,
           destinationCountry: country,
           line1,
@@ -733,7 +758,13 @@ export function OrderCheckout({
         if (seq !== quoteSeq.current) return;
         setQuote(priced);
         setQuotedFor(sigAtRequest);
+        setQuotedPriceFor(priceSigAtRequest);
         setQuoteError(null);
+        // A code the server didn't apply is dropped here, so it is neither
+        // re-sent with every later quote nor counted against the guessing limit.
+        setCodeMessage(priced.couponRejection?.message ?? null);
+        if (!priced.discount?.code) codeRef.current = "";
+        else codeRef.current = priced.discount.code;
       } catch (err) {
         if (seq === quoteSeq.current) {
           setQuote(null);
@@ -768,6 +799,7 @@ export function OrderCheckout({
     canQuote,
     pageCount,
     quoteRetry,
+    codeVersion,
   ]);
 
   function recipient(): Recipient {
@@ -863,6 +895,7 @@ export function OrderCheckout({
     shippingChoices.some((option) => option.value === shipping) &&
     quote != null &&
     quoteIsCurrent &&
+    priceIsCurrent &&
     !quoting &&
     !quoteError &&
     addressComplete &&
@@ -901,10 +934,9 @@ export function OrderCheckout({
                           ? "Add the city and postal code to calculate the total."
                           : null;
 
-  // What the customer will actually be asked to pay, before tax. The code's
-  // discount is only trusted while the code is; the server re-prices at payment.
-  const discount = couponCode && quote ? Math.min(couponDiscount, quote.total) : 0;
-  const totalDue = quote ? Math.max(0, quote.total - discount) : 0;
+  // What the customer will be charged is `quote.lines.totalMinor` and nothing the
+  // browser works out: no discount subtraction, no tax estimate, no rounding here.
+  // Converted to major units only to be formatted.
   const locale = typeof navigator === "undefined" ? "en" : navigator.language;
   const cover = pages.find((p) => p.id === COVER_FRONT_ID) ?? pages[0];
 
@@ -1056,6 +1088,8 @@ export function OrderCheckout({
 
   async function placeOrder(run: number) {
     try {
+      // Nothing is charged without a quote the customer was shown.
+      if (!quote || !priceIsCurrent) throw new Error("We're still working out your price. Please try again in a moment.");
       setPhase("submitting");
       setStatus("Redirecting to secure checkout…");
       const draft = buildOrderDraft({
@@ -1100,7 +1134,11 @@ export function OrderCheckout({
         addressConfirmed:
           !validation?.suggested || addressChoiceForSuggestion !== "unreviewed",
         addressChoice: recordedAddressChoice,
-        couponCode: couponCode ?? undefined,
+        // The quote being paid — and the code it applied, which is part of what
+        // it was made for. The server charges THIS quote and refuses it if the
+        // order no longer matches.
+        quoteId: quote.quoteId,
+        couponCode: quote.discount?.code ?? undefined,
         foilStamp: foilStamp ?? undefined,
       });
       if (runRef.current !== run) return;
@@ -1109,6 +1147,14 @@ export function OrderCheckout({
       if (runRef.current !== run) return;
       setPhase("form");
       setCoverDims(null);
+      if (err instanceof CheckoutPriceChangedError) {
+        // The price the customer approved no longer holds (expired, or something
+        // under it moved). Fetch the new one and make them look at it: paying a
+        // number they haven't seen is the one thing this dialog must never do.
+        setQuoteRetry((n) => n + 1);
+        notify.error(err);
+        return;
+      }
       notify.error(err);
     }
   }
@@ -1125,14 +1171,14 @@ export function OrderCheckout({
             ? "Confirm your address"
             : "Continue to secure payment";
   const bindingLabel = bindingNoun(product.binding);
-  const quoteCurrency = quote?.currency || currency;
+  const quoteCurrency = quote?.lines.currency || currency;
 
   // ---- The overview: what's settled and what's left, in the customer's words ----
   const reduceMotion = useReducedMotion();
   const bookDone = !requirementError && accessGate.ok && !drawing.busy;
   const addressDone = addressComplete && !unserviced && !regionUnrecognised && !addressNeedsReview;
   const speedDone = shippingChoices.some((o) => o.value === shipping);
-  const priceDone = quote != null && quoteIsCurrent && !quoting && !quoteError;
+  const priceDone = quote != null && quoteIsCurrent && priceIsCurrent && !quoting && !quoteError;
   const deliveryDone = addressDone && speedDone;
   const ready = canOrder && accessGate.ok;
   const checklist = [
@@ -1274,8 +1320,8 @@ export function OrderCheckout({
             <div className="min-w-0 flex-1 pl-1">
               <p className="text-[11px] font-medium text-ink-500">{totalLabel(quote)}</p>
               <p className="truncate text-sm font-bold text-ink-900">
-                {quote && quoteIsCurrent && !drawing.busy ? (
-                  <AnimatedMoney value={totalDue} currency={quoteCurrency} />
+                {quote && quoteIsCurrent && priceIsCurrent && !drawing.busy ? (
+                  <AnimatedMoney value={fromMinorUnits(quote.lines.totalMinor, quoteCurrency)} currency={quoteCurrency} />
                 ) : (
                   checkoutBlockReason
                 )}
@@ -1953,7 +1999,7 @@ export function OrderCheckout({
                           quoting && "opacity-45",
                         )}
                       >
-                        <QuoteLines quote={quote} discount={discount} total={totalDue} />
+                        <QuoteLines quote={quote} />
                       </div>
                       <AnimatePresence initial={false}>
                         {quoting && (
@@ -1996,16 +2042,30 @@ export function OrderCheckout({
                     {quote && (
                       <Collapse key="coupon" stacked>
                         <fieldset disabled={busy} className="m-0 mt-3 min-w-0 border-0 p-0">
-                          <CouponField
-                            itemType="print"
-                            subtotal={quote.items}
-                            orderTotal={quote.total}
-                            atCostTotal={quote.atCostTotal}
+                          <QuoteCouponField
+                            applied={
+                              quote.discount?.code
+                                ? {
+                                    code: quote.discount.code,
+                                    summary: quote.discount.summary,
+                                    amountMinor: quote.discount.amountMinor,
+                                    notes: quote.discount.notes,
+                                  }
+                                : null
+                            }
+                            rejection={codeMessage}
                             currency={quoteCurrency}
-                            productId={offerableCatalog.get(product.sku)?.id}
-                            country={country}
-                            onChange={setCouponCode}
-                            onDiscount={setCouponDiscount}
+                            pending={quoting}
+                            onApply={(code) => {
+                              codeRef.current = code;
+                              setCodeMessage(null);
+                              setCodeVersion((v) => v + 1);
+                            }}
+                            onRemove={() => {
+                              codeRef.current = "";
+                              setCodeMessage(null);
+                              setCodeVersion((v) => v + 1);
+                            }}
                           />
                         </fieldset>
                       </Collapse>
@@ -2013,11 +2073,15 @@ export function OrderCheckout({
                   </AnimatePresence>
                   {/* What else this order earns — shown before the button, because
                       a reward discovered in a receipt changed nobody's mind. */}
-                  {quote && quoteIsCurrent && (
+                  {quote && quoteIsCurrent && priceIsCurrent && (
                     <OfferPreviewNote
                       className="mt-3"
                       itemType="print"
-                      amount={quoteCurrency === pricingSettings.baseCurrency ? totalDue : undefined}
+                      amount={
+                        quoteCurrency === pricingSettings.baseCurrency
+                          ? fromMinorUnits(quote.lines.totalMinor, quoteCurrency)
+                          : undefined
+                      }
                       productId={offerableCatalog.get(product.sku)?.id}
                       projectId={project.id}
                     />
@@ -2434,58 +2498,67 @@ function money(amount: string, currency: string): string {
   }
 }
 
-function QuoteLines({
-  quote,
-  discount,
-  total,
-}: {
-  quote: RetailPricePreview;
-  /** What an accepted coupon takes off, 0 when none. */
-  discount: number;
-  /** The total after that discount. */
-  total: number;
-}) {
-  const currency = quote.currency || "USD";
-  const hasDiscount = quote.discountPct > 0 && quote.listUnitPrice > quote.unitPrice;
+function QuoteLines({ quote }: { quote: PrintQuoteView }) {
+  const { lines } = quote;
+  const currency = lines.currency || "USD";
+  // Display only: every figure below is an integer the server already settled, and
+  // none of them is added to, subtracted from or compared with another here.
+  const major = (minor: number) => fromMinorUnits(minor, currency);
+  const hasPlanPerk = quote.planDiscountPct > 0 && quote.listUnitBeforePlanMinor > lines.listUnitMinor;
+  const exclusive = lines.taxBehavior === "exclusive";
   return (
     <div className="space-y-1.5 text-ink-700">
       <Row
-        label={`Books (${quote.copies} × ${money(String(quote.unitPrice), currency)})`}
-        value={<AnimatedMoney value={quote.items} currency={currency} />}
+        label={`Books (${lines.copies} × ${money(String(major(lines.listUnitMinor)), currency)})`}
+        value={<AnimatedMoney value={major(lines.listItemsMinor)} currency={currency} />}
       />
-      {hasDiscount && (
+      {hasPlanPerk && (
         <p className="text-xs text-emerald-600">
-          Your plan saves you {quote.discountPct}% (was {money(String(quote.listUnitPrice), currency)}{" "}
-          per copy).
+          Your plan saves you {quote.planDiscountPct}% (was{" "}
+          {money(String(major(quote.listUnitBeforePlanMinor)), currency)} per copy).
         </p>
       )}
       <AnimatePresence initial={false}>
-        {discount > 0 && (
+        {lines.discountMinor > 0 && (
           <Collapse key="discount">
             <div className="flex items-center justify-between text-emerald-700">
-              <span>Discount code</span>
+              <span>{quote.discount?.atCost ? "Printed at cost" : quote.discount?.code ? "Discount code" : "Discount"}</span>
               <span>
-                −<AnimatedMoney value={discount} currency={currency} />
+                −<AnimatedMoney value={major(lines.discountMinor)} currency={currency} />
               </span>
             </div>
           </Collapse>
         )}
       </AnimatePresence>
-      <Row label="Shipping" value={<AnimatedMoney value={quote.shipping} currency={currency} />} />
+      {/* The sticker postage, always: the discount row above already carries any
+          at-cost reduction, so books + shipping − discount (+ tax) is the total. */}
+      <Row label="Shipping" value={<AnimatedMoney value={major(lines.listShippingMinor)} currency={currency} />} />
+      {exclusive && lines.taxMinor > 0 && (
+        <Row label="Tax" value={<AnimatedMoney value={major(lines.taxMinor)} currency={currency} />} />
+      )}
       <div className="!my-3 h-px bg-ink-100" />
       <div className="flex items-baseline justify-between gap-3">
         <span className="font-semibold text-ink-800">{totalLabel(quote)}</span>
-        <AnimatedMoney value={total} currency={currency} className="font-display text-xl font-semibold text-ink-900" />
+        <AnimatedMoney
+          value={major(lines.totalMinor)}
+          currency={currency}
+          className="font-display text-xl font-semibold text-ink-900"
+        />
       </div>
-      {quote.taxBehavior !== "inclusive" && (
-        <p className="text-[11px] text-ink-400">Any sales tax is added at payment.</p>
+      {!exclusive && lines.taxMinor > 0 && (
+        <p className="text-[11px] text-ink-400">Includes {money(String(major(lines.taxMinor)), currency)} tax.</p>
+      )}
+      {/* Said as what the buyer pays, not as a claim about how tax was treated: with no tax in the
+          total, the total is all there is. */}
+      {lines.taxMinor === 0 && (
+        <p className="text-[11px] text-ink-400">No tax is added to this order. The price you see is the price you pay.</p>
       )}
     </div>
   );
 }
 
-function totalLabel(quote: RetailPricePreview | null): string {
-  return quote?.taxBehavior === "inclusive" ? "Estimated total (incl. tax)" : "Estimated total (before tax)";
+function totalLabel(quote: PrintQuoteView | null): string {
+  return quote ? "Total" : "Estimated total";
 }
 
 function Row({ label, value }: { label: string; value: ReactNode }) {

@@ -104,8 +104,10 @@ import {
   findUidByCustomerId,
   forgetStripeCustomerId,
   getAdminPayment,
+  getPaymentQuote,
   getStripeCustomerId,
   listFailedFulfillments,
+  listOpenCheckoutsForBook,
   listPendingOrderCheckouts,
   listPayments,
   listStrandedPaidOrders,
@@ -147,6 +149,7 @@ import {
 } from "../../books-frontend/src/core/analytics/markets";
 import { affiliateChargeMetadata, stampCustomerAttribution } from "./affiliates";
 import { raiseAlert } from "./alerts";
+import { couponAttemptsExhausted, recordCouponAttempt } from "./coupons/throttle";
 import {
   notifySlack,
   money,
@@ -183,9 +186,43 @@ import {
   reserveCoupon,
   restoreCouponsForRefund,
   settleCoupons,
+  type CouponCandidate,
 } from "./coupons";
 import {
+  bookChargeLine,
+  composeQuoteLines,
+  fromMinorUnits,
+  quoteProblems,
+  toMinorUnits,
+  type DigitalQuoteInputs,
+  type QuoteDiscountPlan,
+  type QuoteInputs,
+  type QuoteLines,
+  type QuoteTaxBehavior,
+  type QuoteTaxStatus,
+} from "../../books-frontend/src/core/billing/printQuote";
+import {
+  QUOTE_REFUSAL_MESSAGE,
+  QUOTE_TTL_MS,
+  claimQuote,
+  hashQuoteInputs,
+  loadQuoteForCheckout,
+  newQuoteId,
+  quoteView,
+  saveQuote,
+  unclaimQuote,
+  type PrintQuoteRecord,
+} from "./printQuote";
+import {
+  digitalQuoteView,
+  hashDigitalInputs,
+  loadDigitalQuote,
+  saveDigitalQuote,
+  type DigitalQuoteRecord,
+} from "./digitalQuote";
+import {
   describeRejection,
+  normalizeCouponCode,
   resolveBestDiscount,
   type CouponRejectionReason,
   type DiscountCandidate,
@@ -198,7 +235,7 @@ import {
   resolvePlanByPriceId,
   type BillingInterval,
 } from "../../books-frontend/src/core/config/plans";
-import { packTotalSparks } from "../../books-frontend/src/core/config/sparks";
+import { packTotalSparks, type SparkPack } from "../../books-frontend/src/core/config/sparks";
 import {
   sendCouponRedeemedEmail,
   sendGiftPurchasedEmail,
@@ -212,39 +249,18 @@ import {
 
 // ---- Money helpers ---------------------------------------------------------
 
-const ZERO_DECIMAL = new Set([
-  "BIF",
-  "CLP",
-  "DJF",
-  "GNF",
-  "JPY",
-  "KMF",
-  "KRW",
-  "MGA",
-  "PYG",
-  "RWF",
-  "VND",
-  "VUV",
-  "XAF",
-  "XOF",
-  "XPF",
-]);
-// Stripe retains two-decimal API amounts for these currencies even though
-// their economies no longer use fractional units. The amount must end in 00.
-const COMPAT_TWO_DECIMAL = new Set(["ISK", "UGX"]);
-
-/** Convert a major-unit amount to Stripe's minor units for the currency. */
+/**
+ * Major ↔ minor units. One definition, shared with the quote arithmetic
+ * (`core/billing/printQuote`), so the amount a quote promises and the amount
+ * sent to Stripe can never be converted two different ways.
+ */
 function toMinor(amount: number, currency: string): number {
-  const code = currency.toUpperCase();
-  if (COMPAT_TWO_DECIMAL.has(code)) return Math.round(amount) * 100;
-  const factor = ZERO_DECIMAL.has(code) ? 1 : 100;
-  return Math.round(amount * factor);
+  return toMinorUnits(amount, currency);
 }
 
 /** Convert Stripe minor units back to a major-unit number. */
 function toMajor(amount: number, currency: string): number {
-  const factor = ZERO_DECIMAL.has(currency.toUpperCase()) ? 1 : 100;
-  return Math.round((amount / factor) * 100) / 100;
+  return fromMinorUnits(amount, currency);
 }
 
 /** Print asset as it arrives over the wire (Blob serialized as base64). */
@@ -278,7 +294,13 @@ interface CheckoutBody {
    * absent — a reorder of an unchanged book uploads nothing at all.
    */
   fingerprint?: string;
-  /** A coupon code the customer typed. Validated server-side; never trusted. */
+  /**
+   * The quote the customer was shown and approved. Checkout charges THIS quote —
+   * it is refused unless it is theirs, unexpired, and was made for exactly this
+   * order — and never prices the order again.
+   */
+  quoteId?: string;
+  /** The coupon code that quote APPLIED (not whatever was last typed). Must match the quote. */
   couponCode?: string;
   /** Spine foil lines for a linen-wrap book. Re-fit server side; ignored on other bindings. */
   foilStamp?: { title?: unknown; author?: unknown };
@@ -286,6 +308,15 @@ interface CheckoutBody {
 
 function clientError(res: Response, message: string, status = 400): void {
   res.status(status).json({ error: { message } });
+}
+
+/**
+ * The price the customer approved no longer holds. A 409 with a stable `code`,
+ * which the order dialog answers by fetching and showing a fresh quote — never
+ * by retrying the same payment.
+ */
+function priceChanged(res: Response, message: string): void {
+  res.status(409).json({ error: { message, code: "price_changed" } });
 }
 
 /**
@@ -323,6 +354,12 @@ interface AppliedDiscount {
    * at-cost figures (Lulu cost + Stripe fee).
    */
   atCost?: boolean;
+  /** A sole coupon's "up to" amount (major units), so the discount can never exceed it. */
+  capAmount?: number | null;
+  /** The typed code that earned (part of) it, when one did. */
+  code?: string | null;
+  /** Conditions of the winning coupon, in the customer's words. */
+  notes?: string[];
 }
 
 interface DiscountOutcome {
@@ -383,6 +420,14 @@ async function earnedDiscount(args: {
   productId?: string | null;
   /** Destination or billing country, when known. */
   country?: string | null;
+  /**
+   * Decide WITHOUT reserving anything. Used to build a quote: the customer is
+   * being shown a price, not buying, so no single-use code or reward may be held
+   * for them yet. Everything else — the sources compared, the ceilings applied,
+   * the arithmetic — is identical, which is the point: the quote and the
+   * checkout that follows it cannot disagree about what was won.
+   */
+  dryRun?: boolean;
 }): Promise<DiscountOutcome> {
   try {
     const currency = (args.currency ?? "").toUpperCase();
@@ -483,6 +528,8 @@ async function earnedDiscount(args: {
     const summaries: string[] = [];
     let reservedPct = 0;
     let wonAtCost = false;
+    const appliedCoupons: CouponCandidate[] = [];
+    let appliedCode: string | null = null;
     for (const candidate of resolution.applied) {
       const share =
         total > 0
@@ -493,10 +540,10 @@ async function earnedDiscount(args: {
       let ok = false;
       switch (candidate.source) {
         case "referral":
-          ok = await reserveDiscount(candidate.handle, args.paymentId, discount);
+          ok = args.dryRun ? true : await reserveDiscount(candidate.handle, args.paymentId, discount);
           break;
         case "campaign":
-          ok = await reserveCampaignDiscount(candidate.handle, args.paymentId, discount);
+          ok = args.dryRun ? true : await reserveCampaignDiscount(candidate.handle, args.paymentId, discount);
           break;
         case "coupon": {
           const coupon = coupons.candidates.find((c) => c.couponId === candidate.handle);
@@ -507,16 +554,22 @@ async function earnedDiscount(args: {
             isAtCost && typeof args.orderTotal === "number" && args.orderTotal > 0
               ? args.orderTotal
               : args.amount;
-          ok = await reserveCoupon({
-            uid: args.uid,
-            candidate: coupon,
-            paymentRef: args.paymentId,
-            itemType: args.itemType,
-            percentOff: share,
-            discountAmount: couponDiscount,
-            originalSubtotal: couponSubtotal,
-            currency,
-          });
+          ok = args.dryRun
+            ? true
+            : await reserveCoupon({
+                uid: args.uid,
+                candidate: coupon,
+                paymentRef: args.paymentId,
+                itemType: args.itemType,
+                percentOff: share,
+                discountAmount: couponDiscount,
+                originalSubtotal: couponSubtotal,
+                currency,
+              });
+          if (ok) {
+            appliedCoupons.push(coupon);
+            if (coupon.code) appliedCode = coupon.code;
+          }
           if (ok && isAtCost) wonAtCost = true;
           // Losing the reservation race means somebody else is mid-checkout with
           // the same single-use code. The buyer needs to hear that rather than
@@ -537,11 +590,23 @@ async function earnedDiscount(args: {
     }
 
     if (reservedPct <= 0) return { applied: null, codeRejection };
+
+    // A coupon's "up to" amount only binds as a cap when the coupon is the SOLE
+    // winner: its percentage was derived from that amount, so a stack's
+    // combined percentage is not something one coupon's cap speaks for.
+    const sole = resolution.applied.length === 1 && appliedCoupons.length === 1 ? appliedCoupons[0] : null;
+    const capAmount =
+      sole && sole.terms.mechanic.kind === "percentOff" && sole.terms.mechanic.maxDiscountAmount > 0
+        ? sole.terms.mechanic.maxDiscountAmount
+        : null;
     return {
       applied: {
         percentOff: Math.round(reservedPct * 10) / 10,
         summary: summaries.join(" + "),
         ...(wonAtCost ? { atCost: true } : {}),
+        capAmount,
+        code: appliedCode,
+        notes: appliedCoupons.flatMap((c) => c.notes),
       },
       codeRejection,
     };
@@ -701,7 +766,14 @@ async function restoreMembershipCoupons(invoiceId: string): Promise<void> {
 async function createCheckoutSession(
   params: Stripe.Checkout.SessionCreateParams,
 ): Promise<Stripe.Checkout.Session> {
-  return getStripe().checkout.sessions.create(params);
+  // Stripe's "Adaptive Pricing" is an account-level default, and it is ON unless somebody turned it
+  // off in the Dashboard: the payment page then offers the buyer a converted amount in their own
+  // currency (a second price nobody here calculated, at Stripe's rate of the day) and selects it
+  // by default. A sale is made at the quoted amount in the quoted currency, so every one-time
+  // payment says so itself rather than depending on a setting. (Subscriptions aren't eligible.)
+  return getStripe().checkout.sessions.create(
+    params.mode === "payment" ? { adaptive_pricing: { enabled: false }, ...params } : params,
+  );
 }
 
 /**
@@ -859,7 +931,12 @@ interface PrintCheckoutArgs {
   /** Provider package id that actually prints (base SKU ⊕ variant). */
   printSku: string;
   settings: PricingSettings;
-  activePlan: Awaited<ReturnType<typeof resolveActivePlan>>;
+  /**
+   * The quote being paid. Checkout charges THIS — it never prices the order
+   * again — so the amount Stripe takes is, by construction, the amount the
+   * customer was shown. Its inputs have already been proven to match the order.
+   */
+  quote: PrintQuoteRecord;
   copies: number;
   pages: number;
   currency: CurrencyCode;
@@ -874,15 +951,14 @@ interface PrintCheckoutArgs {
   /** How to rebuild the files at print resolution after payment (see `FulfillmentPlan.printPrep`). */
   printPrep?: FulfillmentPlan["printPrep"];
   merchantReference: string | null;
-  /** A coupon code the customer typed in the order dialog. */
-  couponCode?: string | null;
   /** Spine foil lines, kept only when the print SKU is foil stamped. */
   foilStamp?: { title?: unknown; author?: unknown } | null;
 }
 
 type PrintCheckoutResult =
   | { ok: true; url: string | null; paymentId: string }
-  | { ok: false; error: string };
+  /** `priceChanged`: the quote no longer holds; the client must fetch and show a new one. */
+  | { ok: false; error: string; priceChanged?: boolean; inProgress?: boolean };
 
 /**
  * Price a print order server-side (live shipping quote → retail tiers → plan
@@ -1099,6 +1175,515 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
   };
 }
 
+// ---- The quote ---------------------------------------------------------------
+
+/**
+ * Tax could not be worked out, so the order can't be priced. Refused rather than
+ * guessed: a total shown without tax, or with tax invented by us, is exactly the
+ * wrong-price-on-screen this module exists to prevent.
+ */
+class TaxUnavailableError extends Error {}
+
+/** What Stripe Tax says this order owes at its delivery address. */
+async function calculateOrderTax(args: {
+  currency: string;
+  taxBehavior: QuoteTaxBehavior;
+  taxCode: string;
+  itemsMinor: number;
+  shippingMinor: number;
+  address: {
+    line1: string;
+    line2?: string | null;
+    city: string;
+    state?: string | null;
+    postalCode: string;
+    country: string;
+  };
+}): Promise<{ taxMinor: number; status: QuoteTaxStatus; reasons: string[] }> {
+  if (args.itemsMinor + args.shippingMinor <= 0) return { taxMinor: 0, status: "calculated", reasons: [] };
+  try {
+    const calc = await getStripe().tax.calculations.create({
+      currency: args.currency.toLowerCase(),
+      // Taxed where the parcel is going, not at whatever billing address is
+      // typed on the payment page: VAT on a physical book follows delivery.
+      customer_details: {
+        address: {
+          line1: args.address.line1,
+          line2: args.address.line2 || undefined,
+          city: args.address.city,
+          state: args.address.state || undefined,
+          postal_code: args.address.postalCode,
+          country: args.address.country,
+        },
+        address_source: "shipping",
+      },
+      line_items:
+        args.itemsMinor > 0
+          ? [
+              {
+                amount: args.itemsMinor,
+                quantity: 1,
+                reference: "books",
+                tax_behavior: args.taxBehavior,
+                tax_code: args.taxCode,
+              },
+            ]
+          : [],
+      // Left without a tax code on purpose: Stripe rates shipping with the
+      // account's shipping tax code, which is the right one for postage.
+      ...(args.shippingMinor > 0
+        ? { shipping_cost: { amount: args.shippingMinor, tax_behavior: args.taxBehavior } }
+        : {}),
+    });
+    const expectedTotal =
+      args.itemsMinor +
+      args.shippingMinor +
+      (args.taxBehavior === "exclusive" ? calc.tax_amount_exclusive : 0);
+    if (calc.amount_total !== expectedTotal) {
+      throw new Error(`Stripe Tax total ${calc.amount_total} disagrees with ${expectedTotal}`);
+    }
+    const reasons = (calc.tax_breakdown ?? []).map((b) => String(b.taxability_reason));
+    return {
+      taxMinor: args.taxBehavior === "inclusive" ? calc.tax_amount_inclusive : calc.tax_amount_exclusive,
+      status: reasons.includes("not_collecting") ? "not_collecting" : "calculated",
+      reasons,
+    };
+  } catch (err) {
+    console.error("[stripe] tax calculation failed", (err as Error)?.message ?? err);
+    throw new TaxUnavailableError((err as Error)?.message ?? "tax calculation failed");
+  }
+}
+
+/** How a resolved discount becomes arithmetic. The one translation, used to quote AND to re-check. */
+function discountPlanFor(
+  earned: AppliedDiscount | null,
+  atCost: { itemsMinor: number; shippingMinor: number },
+  currency: string,
+): QuoteDiscountPlan | null {
+  if (!earned) return null;
+  if (earned.atCost) return { kind: "atCost", itemsMinor: atCost.itemsMinor, shippingMinor: atCost.shippingMinor };
+  return {
+    kind: "percent",
+    percentOff: earned.percentOff,
+    capMinor: earned.capAmount != null ? toMinor(earned.capAmount, currency) : null,
+  };
+}
+
+/** At-cost orders are quoted ex-tax and let Stripe Tax add any destination tax on top. */
+function taxBehaviorFor(
+  earned: AppliedDiscount | null,
+  settings: PricingSettings,
+  currency: string,
+): QuoteTaxBehavior {
+  return earned?.atCost ? "exclusive" : (settings.tax.perCurrency[currency]?.behavior ?? "exclusive");
+}
+
+interface BuildQuoteArgs {
+  uid: string;
+  product: ProductDefinition;
+  variant: VariantSelection;
+  printSku: string;
+  settings: PricingSettings;
+  activePlan: Awaited<ReturnType<typeof resolveActivePlan>>;
+  copies: number;
+  pages: number;
+  currency: CurrencyCode;
+  shippingMethod: ShippingMethod;
+  destinationCountry: string;
+  address: {
+    line1?: string;
+    line2?: string | null;
+    townOrCity: string;
+    stateOrCounty?: string | null;
+    postalOrZipCode: string;
+  };
+  /** A code the customer typed, as typed. Applied only if the engine accepts it. */
+  couponCode: string | null;
+}
+
+/**
+ * Decide what this order costs — once — and write it down.
+ *
+ * Everything a customer can be shown or charged for a print order comes from
+ * here: the books at the buyer's sticker price, shipping, every discount the one
+ * resolver awards (a typed code, a referral perk, a campaign offer, the plan),
+ * and the tax Stripe Tax computes for the delivery address. The result is
+ * integers in minor units that add up exactly, and checkout charges those
+ * integers rather than working anything out again.
+ *
+ * Nothing is reserved here: a quote is a price, not a purchase.
+ */
+async function buildPrintQuote(args: BuildQuoteArgs): Promise<PrintQuoteRecord> {
+  const { uid, product, settings, copies, pages, currency, printSku } = args;
+  const destinationCountry = args.destinationCountry.trim().toUpperCase();
+  const priced = await priceRetailOrder({
+    product,
+    variant: args.variant,
+    printSku,
+    settings,
+    activePlan: args.activePlan,
+    copies,
+    pages,
+    currency,
+    shippingMethod: args.shippingMethod,
+    destinationCountry,
+    address: args.address,
+  });
+  if (priced.unitPrice <= 0) throw new PricingUnavailableError(`${printSku} has no retail price`, "This product isn't priced for ordering yet.");
+
+  const listUnitMinor = toMinor(priced.unitPrice, currency);
+  const listShippingMinor = toMinor(priced.shippingCharged, currency);
+  const atCostItemsMinor = toMinor(priced.atCost.unitPrice, currency) * copies;
+  const atCostShippingMinor = toMinor(priced.atCost.shipping, currency);
+  const listItemsMajor = toMajor(listUnitMinor * copies, currency);
+  const listTotalMajor = toMajor(listUnitMinor * copies + listShippingMinor, currency);
+
+  const quoteId = newQuoteId();
+  const typedCode = args.couponCode?.trim() ? normalizeCouponCode(args.couponCode) : null;
+  const { applied: earned, codeRejection } = await earnedDiscount({
+    uid,
+    itemType: "print",
+    paymentId: `quote:${quoteId}`,
+    settings,
+    amount: listItemsMajor,
+    orderTotal: listTotalMajor,
+    atCostTotal: priced.atCost.total,
+    appliedPct: priced.discountPct,
+    breakEvenPct: priced.breakEvenDiscountPct,
+    couponCode: typedCode,
+    currency,
+    productId: product.id,
+    country: destinationCountry,
+    dryRun: true,
+  });
+
+  const taxBehavior = taxBehaviorFor(earned, settings, currency);
+  const plan = discountPlanFor(earned, { itemsMinor: atCostItemsMinor, shippingMinor: atCostShippingMinor }, currency);
+  const base = {
+    currency,
+    copies,
+    listUnitMinor,
+    listShippingMinor,
+    discount: plan,
+    taxBehavior,
+  };
+  let lines = composeQuoteLines({ ...base, taxMinor: 0 });
+
+  const taxCode = settings.tax.bookTaxCode;
+  let taxStatus: QuoteTaxStatus = "off";
+  let taxabilityReasons: string[] = [];
+  if (taxCode) {
+    const tax = await calculateOrderTax({
+      currency,
+      taxBehavior,
+      taxCode,
+      itemsMinor: lines.itemsMinor,
+      shippingMinor: lines.shippingMinor,
+      address: {
+        line1: args.address.line1 ?? "",
+        line2: args.address.line2,
+        city: args.address.townOrCity,
+        state: args.address.stateOrCounty,
+        postalCode: args.address.postalOrZipCode,
+        country: destinationCountry,
+      },
+    });
+    lines = composeQuoteLines({ ...base, taxMinor: tax.taxMinor });
+    taxStatus = tax.status;
+    taxabilityReasons = tax.reasons;
+  }
+
+  // A discount that rounds to nothing isn't one: don't advertise it, and don't
+  // let it burn a single-use code at checkout.
+  const effective = earned && lines.discountMinor > 0 ? earned : null;
+  const appliedCode = effective?.code ?? null;
+  const inputs: QuoteInputs = {
+    printSku,
+    copies,
+    pages,
+    shippingMethod: args.shippingMethod,
+    destinationCountry,
+    address: {
+      line1: args.address.line1 ?? "",
+      line2: args.address.line2 ?? "",
+      city: args.address.townOrCity,
+      state: args.address.stateOrCounty ?? "",
+      postalCode: args.address.postalOrZipCode,
+    },
+    // Normalised, because checkout compares this against the code the browser
+    // sends back — which is normalised the same way — and a display form with a
+    // dash in it would never match its own quote.
+    couponCode: appliedCode ? normalizeCouponCode(appliedCode) : null,
+  };
+  const now = Date.now();
+  return {
+    id: quoteId,
+    uid,
+    createdAt: now,
+    expiresAt: now + QUOTE_TTL_MS,
+    expireAt: new Date(now + QUOTE_TTL_MS),
+    inputHash: hashQuoteInputs(inputs),
+    inputs,
+    currency,
+    productId: product.id,
+    printSku,
+    lines,
+    planDiscountPct: priced.discountPct,
+    listUnitBeforePlanMinor: toMinor(priced.listUnitPrice, currency),
+    breakEvenDiscountPct: priced.breakEvenDiscountPct,
+    atCostTotal: priced.atCost.total,
+    atCostItemsMinor,
+    atCostShippingMinor,
+    discount: effective
+      ? {
+          percentOff: effective.percentOff,
+          amountMinor: lines.discountMinor,
+          summary: effective.summary,
+          notes: effective.notes ?? [],
+          code: appliedCode,
+          atCost: Boolean(effective.atCost),
+          capMinor: effective.capAmount != null ? toMinor(effective.capAmount, currency) : null,
+        }
+      : null,
+    couponRejection: typedCode && codeRejection ? { reason: codeRejection.reason, message: codeRejection.message } : null,
+    taxStatus,
+    taxabilityReasons,
+    addressValidation: priced.addressValidation ?? null,
+    estimatedCost: priced.estimatedCost,
+  };
+}
+
+// ---- Digital quotes (ebook, Spark packs) -----------------------------------------
+
+/** What is being sold, before any code or perk. Everything else about its price is decided from this. */
+interface DigitalPurchase {
+  uid: string;
+  kind: "ebook" | "pack";
+  /** The project id (ebook) or the pack id — what the quote is identified by. */
+  subject: string;
+  /** The key the discount engine scopes offers by. */
+  productId: string;
+  settings: PricingSettings;
+  currency: CurrencyCode;
+  /** The sticker price in major units, with any member or print-owner price already in it. */
+  listPrice: number;
+}
+
+function digitalInputs(p: DigitalPurchase, code: string | null): DigitalQuoteInputs {
+  return {
+    kind: p.kind,
+    subject: p.subject,
+    currency: p.currency,
+    couponCode: code?.trim() ? normalizeCouponCode(code) : null,
+  };
+}
+
+/**
+ * Decide what a digital purchase costs — once — and write it down.
+ *
+ * Same resolver, same integer arithmetic as the print quote. Nothing is reserved
+ * (a quote is a price, not a purchase), and tax is left to Stripe Tax on the
+ * payment page, so `taxMinor` is 0 and the lines are the charge before tax.
+ */
+async function buildDigitalQuote(p: DigitalPurchase, couponCode: string | null): Promise<DigitalQuoteRecord> {
+  const listUnitMinor = toMinor(p.listPrice, p.currency);
+  const id = newQuoteId();
+  const typed = couponCode?.trim() ? normalizeCouponCode(couponCode) : null;
+  const { applied: earned, codeRejection } = await earnedDiscount({
+    uid: p.uid,
+    itemType: p.kind,
+    paymentId: `quote:${id}`,
+    settings: p.settings,
+    amount: fromMinorUnits(listUnitMinor, p.currency),
+    couponCode: typed,
+    currency: p.currency,
+    productId: p.productId,
+    dryRun: true,
+  });
+  const taxBehavior = taxBehaviorFor(null, p.settings, p.currency);
+  const lines = composeQuoteLines({
+    currency: p.currency,
+    copies: 1,
+    listUnitMinor,
+    listShippingMinor: 0,
+    discount: discountPlanFor(earned, { itemsMinor: 0, shippingMinor: 0 }, p.currency),
+    taxBehavior,
+    taxMinor: 0,
+  });
+  // A discount that rounds to nothing isn't one: don't advertise it, and don't
+  // let it burn a single-use code at checkout.
+  const effective = earned && lines.discountMinor > 0 ? earned : null;
+  const now = Date.now();
+  const inputs = digitalInputs(p, effective?.code ?? null);
+  return {
+    id,
+    uid: p.uid,
+    createdAt: now,
+    expiresAt: now + QUOTE_TTL_MS,
+    expireAt: new Date(now + QUOTE_TTL_MS),
+    inputHash: hashDigitalInputs(inputs),
+    inputs,
+    currency: p.currency,
+    lines,
+    discount: effective
+      ? {
+          percentOff: effective.percentOff,
+          amountMinor: lines.discountMinor,
+          summary: effective.summary,
+          notes: effective.notes ?? [],
+          code: inputs.couponCode,
+          atCost: false,
+          capMinor: effective.capAmount != null ? toMinor(effective.capAmount, p.currency) : null,
+        }
+      : null,
+    couponRejection: typed && codeRejection ? { reason: codeRejection.reason, message: codeRejection.message } : null,
+  };
+}
+
+type DigitalFailure = { ok: false; error: string; priceChanged?: boolean; status?: number };
+
+/**
+ * The quote a digital checkout will charge: the one the customer was shown (by
+ * id), or — for the one-click buttons that never showed a quote — one made now,
+ * by the same code. Checked cheaply, before anything is reserved or uploaded.
+ */
+async function resolveDigitalQuote(
+  p: DigitalPurchase,
+  quoteId: string | undefined,
+  couponCode: string | null,
+): Promise<{ ok: true; quote: DigitalQuoteRecord } | DigitalFailure> {
+  if (quoteId) {
+    const loaded = await loadDigitalQuote({ quoteId, uid: p.uid, inputs: digitalInputs(p, couponCode) });
+    if (!loaded.ok) return { ok: false, error: QUOTE_REFUSAL_MESSAGE[loaded.reason], priceChanged: true };
+    // The price itself can move under a quote (a member price, a print purchase
+    // that cheapens the ebook): then the quote is for a price that no longer exists.
+    if (loaded.quote.lines.listUnitMinor !== toMinor(p.listPrice, p.currency)) {
+      return { ok: false, error: QUOTE_REFUSAL_MESSAGE.different_order, priceChanged: true };
+    }
+    return { ok: true, quote: loaded.quote };
+  }
+  const quote = await buildDigitalQuote(p, couponCode);
+  // A code the customer typed must work or say why — never be quietly dropped.
+  if (couponCode?.trim() && quote.couponRejection) return { ok: false, error: quote.couponRejection.message };
+  await saveDigitalQuote(quote);
+  return { ok: true, quote };
+}
+
+/**
+ * Take the quote for one checkout and reserve what it promised. The discount is
+ * decided again with the reservation actually taken, and must come to the SAME
+ * money as the quote — anything else is a price the customer hasn't seen.
+ */
+async function reserveDigitalQuote(
+  p: DigitalPurchase,
+  quote: DigitalQuoteRecord,
+  paymentId: string,
+): Promise<{ ok: true; earned: AppliedDiscount | null } | DigitalFailure> {
+  if (!(await claimQuote(quote.id, paymentId))) {
+    return { ok: false, error: QUOTE_REFUSAL_MESSAGE.in_progress, status: 409 };
+  }
+  try {
+    const { applied: earned, codeRejection } = await earnedDiscount({
+      uid: p.uid,
+      itemType: p.kind,
+      paymentId,
+      settings: p.settings,
+      amount: fromMinorUnits(quote.lines.listUnitMinor, p.currency),
+      couponCode: quote.inputs.couponCode,
+      currency: p.currency,
+      productId: p.productId,
+    });
+    const rebuilt = composeQuoteLines({
+      currency: p.currency,
+      copies: 1,
+      listUnitMinor: quote.lines.listUnitMinor,
+      listShippingMinor: 0,
+      discount: discountPlanFor(earned, { itemsMinor: 0, shippingMinor: 0 }, p.currency),
+      taxBehavior: quote.lines.taxBehavior,
+      taxMinor: 0,
+    });
+    if (codeRejection || rebuilt.itemsMinor !== quote.lines.itemsMinor) {
+      await releaseCoupons(paymentId, "price changed since the quote");
+      await unclaimQuote(quote.id);
+      return {
+        ok: false,
+        error: codeRejection?.message ?? QUOTE_REFUSAL_MESSAGE.different_order,
+        priceChanged: true,
+      };
+    }
+    return { ok: true, earned };
+  } catch (err) {
+    await releaseCoupons(paymentId, "checkout failed before payment");
+    await unclaimQuote(quote.id);
+    throw err;
+  }
+}
+
+/** Hand back everything a failed digital checkout was holding. */
+async function abandonDigitalCheckout(paymentId: string, quoteId: string): Promise<void> {
+  await releaseCoupons(paymentId, "checkout failed before payment").catch(() => undefined);
+  await unclaimQuote(quoteId);
+}
+
+/**
+ * Stripe has priced the session itself; it must agree with the quote. The tax is
+ * Stripe's to add, so what is compared is the part we decided: the items line
+ * (before any tax), and the whole total when no tax is being collected at all.
+ * On a difference the session is closed, nothing has been charged, someone is told.
+ */
+/**
+ * The payment page sells in the currency the buyer was quoted, with no converted second price on it.
+ * `adaptive_pricing` is switched off on every session we create; this is the check that it held.
+ */
+function sessionSellsInQuotedCurrency(session: Stripe.Checkout.Session, currency: string): boolean {
+  return session.currency === currency.toLowerCase() && session.adaptive_pricing?.enabled !== true;
+}
+
+async function sessionMatchesDigitalQuote(
+  session: Stripe.Checkout.Session,
+  quote: DigitalQuoteRecord,
+  hasTax: boolean,
+  paymentId: string,
+): Promise<boolean> {
+  const lines = quote.lines;
+  const ok =
+    session.amount_subtotal === lines.itemsMinor &&
+    (hasTax || session.amount_total === lines.totalMinor) &&
+    sessionSellsInQuotedCurrency(session, lines.currency);
+  if (ok) return true;
+  await getStripe()
+    .checkout.sessions.expire(session.id)
+    .catch(() => undefined);
+  void raiseAlert({
+    severity: "critical",
+    kind: "checkout_price_mismatch",
+    ref: paymentId,
+    message:
+      `A ${quote.inputs.kind} checkout was refused before payment: Stripe priced it at ` +
+      `${session.amount_subtotal} before tax (${session.amount_total} total) but the quote was ${lines.itemsMinor} ${lines.currency}.`,
+    meta: { uid: quote.uid, quoteId: quote.id, paymentId, sessionId: session.id, quoted: lines },
+  }).catch(() => undefined);
+  return false;
+}
+
+/** What the payment record keeps of a digital quote, for the webhook to check against. */
+function digitalQuoteRecordMeta(quote: DigitalQuoteRecord, hasTax: boolean) {
+  return {
+    id: quote.id,
+    totalMinor: quote.lines.totalMinor,
+    taxMinor: 0,
+    discountMinor: quote.lines.discountMinor,
+    subtotalMinor: quote.lines.subtotalMinor,
+    taxBehavior: quote.lines.taxBehavior,
+    taxDeferred: hasTax,
+  };
+}
+
+function respondDigitalFailure(res: Response, f: DigitalFailure): void {
+  if (f.priceChanged) priceChanged(res, f.error);
+  else clientError(res, f.error, f.status ?? 400);
+}
+
 /**
  * Why this order can't ship, or `null` if it can.
  *
@@ -1196,8 +1781,36 @@ async function previewShippingMethod(
   return offered[0] ?? defaultShippingMethod(settings);
 }
 
+/**
+ * Retire this buyer's earlier, still-open checkout of the same book.
+ *
+ * Coming back from the payment page and trying again used to leave the first
+ * attempt holding the buyer's single-use code until its session expired a day
+ * later, so the retry was refused with "already used". One live checkout per
+ * book is also what a customer expects.
+ *
+ * Returns false when an earlier session turns out to be PAID already (its
+ * webhook just hasn't landed): the new checkout must not go ahead, and nothing
+ * of the paid one may be released.
+ */
+async function retireEarlierCheckouts(uid: string, merchantReference: string | null): Promise<boolean> {
+  if (!merchantReference) return true;
+  const open = await listOpenCheckoutsForBook(uid, merchantReference);
+  for (const { paymentId, stripeSessionId } of open) {
+    try {
+      await getStripe().checkout.sessions.expire(stripeSessionId);
+    } catch {
+      const session = await getStripe().checkout.sessions.retrieve(stripeSessionId).catch(() => null);
+      if (session?.status === "complete") return false;
+      if (session && session.status !== "expired") continue;
+    }
+    await releaseCoupons(paymentId, "superseded by a newer checkout");
+  }
+  return true;
+}
+
 async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintCheckoutResult> {
-  const { uid, product, variant, printSku, settings, copies, pages, currency, recipient } = args;
+  const { uid, product, variant, printSku, settings, quote, copies, pages, currency, recipient } = args;
   const destinationCountry = args.destinationCountry.trim().toUpperCase();
   const recipientCountry = recipient.address.countryCode.trim().toUpperCase();
   if (
@@ -1242,27 +1855,19 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
   });
   if (refusal) return { ok: false, error: refusal };
 
-  const {
-    unitPrice: planPrice,
-    shippingCharged,
-    atCost,
-    estimatedCost,
-    addressValidation,
-    discountPct,
-    breakEvenDiscountPct,
-  } = await priceRetailOrder({
-    product,
-    variant,
-    printSku,
-    settings,
-    activePlan: args.activePlan,
-    copies,
-    pages,
-    currency,
-    shippingMethod: args.shippingMethod,
-    destinationCountry,
-    address: recipient.address,
-  });
+  // The quote is the price. Prove it is for THIS order and still sound before a
+  // cent of it is used — the route already matched its inputs, this is the
+  // belt to that pair of braces.
+  const lines = quote.lines;
+  if (
+    quote.printSku !== printSku ||
+    lines.copies !== copies ||
+    lines.currency !== currency.toUpperCase() ||
+    quoteProblems(lines).length > 0
+  ) {
+    return { ok: false, error: QUOTE_REFUSAL_MESSAGE.unsound, priceChanged: true };
+  }
+  const addressValidation = quote.addressValidation;
   if (addressValidation?.severity === "error") {
     return {
       ok: false,
@@ -1275,53 +1880,21 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
       error: "Review the carrier's suggested address correction before paying.",
     };
   }
-
-  if (planPrice <= 0) {
+  if (lines.listUnitMinor <= 0) {
     return { ok: false, error: "This product isn't priced for ordering yet." };
   }
-
-  const retailItems = Math.round(planPrice * copies * 100) / 100;
-  const retailTotal = Math.round((retailItems + shippingCharged) * 100) / 100;
-
-  // The payment id is minted here (rather than just before the session) because
-  // an earned discount is RESERVED against it — the reservation is what makes the
-  // reward single-use across an abandoned checkout.
-  const paymentId = randomUUID();
-  const { applied: earned, codeRejection } = await earnedDiscount({
-    uid,
-    itemType: "print",
-    paymentId,
-    settings,
-    amount: retailItems,
-    orderTotal: retailTotal,
-    atCostTotal: atCost.total,
-    appliedPct: discountPct,
-    breakEvenPct: breakEvenDiscountPct,
-    couponCode: args.couponCode,
-    currency,
-    productId: product.id,
-    country: destinationCountry,
-  });
-  // A code the customer typed that didn't apply STOPS the checkout. Charging
-  // them full price and letting them discover it on the receipt is the one
-  // outcome guaranteed to become a support ticket — and any reservation taken a
-  // moment ago is released, since this session will never exist.
-  if (codeRejection) {
-    await releaseCoupons(paymentId, `code refused: ${codeRejection.reason}`);
-    return { ok: false, error: codeRejection.message };
+  if (lines.totalMinor <= 0) {
+    return { ok: false, error: "This order can't be paid for online. Please contact us." };
   }
-  const unitPrice = earned?.atCost
-    ? atCost.unitPrice
-    : earned
-      ? discountedAmount(planPrice, earned.percentOff)
-      : planPrice;
-  const finalShippingCharged = earned?.atCost ? atCost.shipping : shippingCharged;
 
   // The provider downloads the print files LATER, on its own schedule, so a URL
   // it can't fetch comes back as a rejected job with the customer already
   // charged. Both callers funnel through here — a fresh checkout and a reorder
   // reusing files from months ago — and both are still pre-payment at this
   // point, so an unreachable file is a retryable error instead of a refund.
+  //
+  // Done BEFORE anything is reserved: a refusal after a single-use code was
+  // taken used to leave that code held until its session would have expired.
   const unreachable = (
     await Promise.all(
       (["interior", "cover"] as const).map(async (part) => {
@@ -1344,124 +1917,260 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     };
   }
 
-  const customerId = await ensureCustomer(uid, args.email);
+  if (!(await retireEarlierCheckouts(uid, args.merchantReference))) {
+    return {
+      ok: false,
+      error: "A payment for this book is already in progress. Check your email or your orders before trying again.",
+    };
+  }
 
-  // At-cost orders quote ex-tax (Lulu cost + Stripe fee) and let Stripe Tax add
-  // any destination tax on top, so VAT in inclusive markets is never backed out
-  // of the provider's cost.
-  const taxBehavior = earned?.atCost
-    ? "exclusive"
-    : (settings.tax.perCurrency[currency]?.behavior ?? "exclusive");
-  const taxCode = settings.tax.bookTaxCode;
-  const hasTax = Boolean(taxCode);
+  // The payment id is minted here (rather than just before the session) because
+  // an earned discount is RESERVED against it — the reservation is what makes the
+  // reward single-use across an abandoned checkout.
+  const paymentId = randomUUID();
+  if (!(await claimQuote(quote.id, paymentId))) {
+    return { ok: false, error: QUOTE_REFUSAL_MESSAGE.in_progress, inProgress: true };
+  }
 
-  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
-    {
-      quantity: copies,
-      price_data: {
-        currency: currency.toLowerCase(),
-        unit_amount: toMinor(unitPrice, currency),
-        tax_behavior: hasTax ? taxBehavior : undefined,
-        product_data: {
-          name: product.presentation.name,
-          // The reward is spelled out on the line item, because a price that's
-          // quietly lower than the storefront's reads as a bug to the buyer.
-          description:
-            [product.presentation.tagline || null, earned ? `Discount applied: ${earned.summary}` : null]
-              .filter(Boolean)
-              .join(" · ") || undefined,
-          tax_code: taxCode,
-          metadata: { sku: printSku },
+  // Everything from the reservation on is undone if anything fails, so a refused
+  // or broken checkout can never leave a single-use code held for somebody who
+  // was never charged.
+  let reserved = false;
+  try {
+    const { applied: earned, codeRejection } = await earnedDiscount({
+      uid,
+      itemType: "print",
+      paymentId,
+      settings,
+      amount: fromMinorUnits(lines.listItemsMinor, currency),
+      orderTotal: fromMinorUnits(lines.listItemsMinor + lines.listShippingMinor, currency),
+      atCostTotal: quote.atCostTotal,
+      appliedPct: quote.planDiscountPct,
+      breakEvenPct: quote.breakEvenDiscountPct,
+      couponCode: quote.inputs.couponCode,
+      currency,
+      productId: product.id,
+      country: destinationCountry,
+    });
+    reserved = true;
+
+    // Re-decide the discount with the reservation actually taken, and require the
+    // SAME money as the quote. A code someone else just used, a reward that
+    // lapsed, a referral that arrived — any of it moves the price, and the
+    // customer has to see the new price before it is charged.
+    const rebuilt = composeQuoteLines({
+      currency,
+      copies,
+      listUnitMinor: lines.listUnitMinor,
+      listShippingMinor: lines.listShippingMinor,
+      discount: discountPlanFor(
+        earned,
+        { itemsMinor: quote.atCostItemsMinor, shippingMinor: quote.atCostShippingMinor },
+        currency,
+      ),
+      taxBehavior: taxBehaviorFor(earned, settings, currency),
+      taxMinor: lines.taxMinor,
+    });
+    if (
+      codeRejection ||
+      rebuilt.itemsMinor !== lines.itemsMinor ||
+      rebuilt.shippingMinor !== lines.shippingMinor ||
+      rebuilt.taxBehavior !== lines.taxBehavior
+    ) {
+      await releaseCoupons(paymentId, "price changed since the quote");
+      reserved = false;
+      await unclaimQuote(quote.id);
+      return {
+        ok: false,
+        error: codeRejection?.message ?? QUOTE_REFUSAL_MESSAGE.different_order,
+        priceChanged: true,
+      };
+    }
+
+    const customerId = await ensureCustomer(uid, args.email);
+
+    const taxCode = settings.tax.bookTaxCode;
+    const hasTax = Boolean(taxCode);
+    const taxBehavior = lines.taxBehavior;
+    const stripeCurrency = currency.toLowerCase();
+    const bookLine = bookChargeLine(lines.itemsMinor, copies);
+    const discountNote = quote.discount && lines.discountMinor > 0 ? `Discount applied: ${quote.discount.summary}` : null;
+
+    // The books are charged as exactly `itemsMinor`: equal whole-cent units when
+    // the copies divide it evenly, otherwise one line for the lot. Never a
+    // rounded per-copy price, which is how a Stripe total drifts from a quote.
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+      {
+        quantity: bookLine.quantity,
+        price_data: {
+          currency: stripeCurrency,
+          unit_amount: bookLine.unitAmountMinor,
+          tax_behavior: hasTax ? taxBehavior : undefined,
+          product_data: {
+            name: bookLine.collapsed ? `${product.presentation.name} × ${copies}` : product.presentation.name,
+            // The reward is spelled out on the line item, because a price that's
+            // quietly lower than the storefront's reads as a bug to the buyer.
+            description:
+              [product.presentation.tagline || null, discountNote].filter(Boolean).join(" · ") || undefined,
+            tax_code: taxCode,
+            metadata: { sku: printSku },
+          },
         },
       },
-    },
-  ];
-  if (finalShippingCharged > 0) {
-    lineItems.push({
-      quantity: 1,
-      price_data: {
-        currency: currency.toLowerCase(),
-        unit_amount: toMinor(finalShippingCharged, currency),
-        tax_behavior: hasTax ? taxBehavior : undefined,
-        product_data: { name: "Shipping & handling" },
-      },
+    ];
+
+    // Where the tax is worked out. Stripe Tax takes the customer's saved
+    // SHIPPING address ahead of the billing address typed on its page, so putting
+    // the delivery address there makes Checkout tax the same place the quote did.
+    if (hasTax) {
+      await getStripe().customers.update(customerId, {
+        shipping: {
+          name: recipient.name.trim(),
+          phone: recipient.phoneNumber?.trim() || undefined,
+          address: {
+            line1: recipient.address.line1.trim(),
+            line2: recipient.address.line2?.trim() || undefined,
+            city: recipient.address.townOrCity.trim(),
+            state: recipient.address.stateOrCounty?.trim() || undefined,
+            postal_code: recipient.address.postalOrZipCode.trim(),
+            country: destinationCountry,
+          },
+        },
+      });
+    }
+
+    const fulfillment: FulfillmentPlan = {
+      productSku: printSku,
+      variant,
+      copies,
+      shippingMethod: args.shippingMethod,
+      destinationCountry,
+      currency,
+      pageCount: pages,
+      merchantReference: args.merchantReference,
+      recipient: planRecipient(recipient),
+      sourceFileUrls: args.sourceFileUrls,
+      printPrep: args.printPrep ?? null,
+      // What the customer told us when the carrier offered a correction. It is
+      // NOT derived from the live re-validation above: once they take the
+      // suggestion the address is already corrected, so the carrier has nothing
+      // left to suggest and the only record of the decision is what they sent.
+      addressChoice: args.addressChoice ?? null,
+      estimatedCost: quote.estimatedCost,
+      foilStamp: variant.foil && variant.foil !== NO_OPTION ? foilStampText(args.foilStamp) : null,
+    };
+
+    // `rewardful: "false"` when a print order is outside the referring campaign's
+    // scope — Rewardful reads it off the charge and creates no commission.
+    const affiliateMeta = await affiliateChargeMetadata(uid, "order");
+    const studioReturnPath = args.merchantReference
+      ? `/studio/${encodeURIComponent(args.merchantReference)}/order`
+      : "/studio";
+    const projectParam = args.merchantReference
+      ? `&project=${encodeURIComponent(args.merchantReference)}`
+      : "";
+    const session = await createCheckoutSession({
+      mode: "payment",
+      customer: customerId,
+      customer_update: { address: "auto", name: "auto" },
+      billing_address_collection: hasTax ? "required" : "auto",
+      automatic_tax: { enabled: hasTax },
+      line_items: lineItems,
+      // Postage is a shipping rate, not a line item, so Stripe Tax rates it as
+      // shipping instead of as whatever the account's default product code is.
+      ...(lines.shippingMinor > 0
+        ? {
+            shipping_options: [
+              {
+                shipping_rate_data: {
+                  type: "fixed_amount" as const,
+                  display_name: "Shipping & handling",
+                  fixed_amount: { amount: lines.shippingMinor, currency: stripeCurrency },
+                  tax_behavior: hasTax ? taxBehavior : undefined,
+                },
+              },
+            ],
+          }
+        : {}),
+      client_reference_id: paymentId,
+      metadata: { paymentId, uid, kind: "order", quoteId: quote.id },
+      payment_intent_data: { metadata: { paymentId, uid, kind: "order", quoteId: quote.id, ...affiliateMeta } },
+      // `payment` is what the confirmation screen keys on: it opens on our own
+      // payment id (not the Stripe session) so it can follow the record live —
+      // including the fulfillment leg, which happens after this redirect.
+      success_url: `${appBaseUrl()}${studioReturnPath}?checkout=success&payment=${paymentId}${projectParam}&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appBaseUrl()}${studioReturnPath}?checkout=cancel`,
     });
+
+    // The last line of defence: Stripe has now priced the session itself. If its
+    // total is not exactly the quote, the customer must not be sent to pay it —
+    // the session is closed, nothing was charged, and someone is told.
+    const taxLocated = !hasTax || session.automatic_tax?.status === "complete";
+    if (session.amount_total !== lines.totalMinor || !taxLocated || !sessionSellsInQuotedCurrency(session, lines.currency)) {
+      await getStripe()
+        .checkout.sessions.expire(session.id)
+        .catch(() => undefined);
+      void raiseAlert({
+        severity: "critical",
+        kind: "checkout_price_mismatch",
+        ref: paymentId,
+        message:
+          `A checkout was refused before payment: Stripe priced it at ${session.amount_total} ` +
+          `(tax status ${session.automatic_tax?.status ?? "n/a"}) but the quote was ${lines.totalMinor} ${lines.currency}.`,
+        meta: { uid, quoteId: quote.id, paymentId, sessionId: session.id, quoted: lines, stripeTotal: session.amount_total },
+      }).catch(() => undefined);
+      await releaseCoupons(paymentId, "stripe priced the session differently");
+      reserved = false;
+      await unclaimQuote(quote.id);
+      return {
+        ok: false,
+        error: "We couldn't confirm your final price just now. Nothing has been charged — please try again.",
+        priceChanged: true,
+      };
+    }
+
+    await createPendingPayment({
+      paymentId,
+      uid,
+      kind: "order",
+      // The exact amount Stripe will take, tax included — not an estimate.
+      amount: fromMinorUnits(lines.totalMinor, currency),
+      currency,
+      description: `${product.presentation.name} ×${copies}`,
+      stripeSessionId: session.id,
+      stripeCustomerId: customerId,
+      fulfillment,
+      ...args.device,
+      quote: {
+        id: quote.id,
+        totalMinor: lines.totalMinor,
+        taxMinor: lines.taxMinor,
+        discountMinor: lines.discountMinor,
+      },
+      items: [
+        {
+          label: product.presentation.name,
+          amount: fromMinorUnits(bookLine.unitAmountMinor, currency),
+          quantity: bookLine.quantity,
+        },
+        ...(lines.shippingMinor > 0
+          ? [{ label: "Shipping & handling", amount: fromMinorUnits(lines.shippingMinor, currency), quantity: 1 }]
+          : []),
+      ],
+    });
+
+    // The checkout is real from here: stamp the book so abandonment can be read per
+    // studio flow. Best-effort and first-write-wins, like every milestone.
+    if (args.merchantReference) {
+      await stampMilestone(uid, args.merchantReference, "checkoutStarted").catch(() => {});
+    }
+
+    return { ok: true, url: session.url, paymentId };
+  } catch (err) {
+    if (reserved) await releaseCoupons(paymentId, "checkout failed before payment");
+    await unclaimQuote(quote.id);
+    throw err;
   }
-
-  const fulfillment: FulfillmentPlan = {
-    productSku: printSku,
-    variant,
-    copies,
-    shippingMethod: args.shippingMethod,
-    destinationCountry,
-    currency,
-    pageCount: pages,
-    merchantReference: args.merchantReference,
-    recipient: planRecipient(recipient),
-    sourceFileUrls: args.sourceFileUrls,
-    printPrep: args.printPrep ?? null,
-    // What the customer told us when the carrier offered a correction. It is
-    // NOT derived from the live re-validation above: once they take the
-    // suggestion the address is already corrected, so the carrier has nothing
-    // left to suggest and the only record of the decision is what they sent.
-    addressChoice: args.addressChoice ?? null,
-    estimatedCost,
-    foilStamp: variant.foil && variant.foil !== NO_OPTION ? foilStampText(args.foilStamp) : null,
-  };
-
-  const estimatedTotal = unitPrice * copies + finalShippingCharged;
-  // `rewardful: "false"` when a print order is outside the referring campaign's
-  // scope — Rewardful reads it off the charge and creates no commission.
-  const affiliateMeta = await affiliateChargeMetadata(uid, "order");
-  const studioReturnPath = args.merchantReference
-    ? `/studio/${encodeURIComponent(args.merchantReference)}/order`
-    : "/studio";
-  const projectParam = args.merchantReference
-    ? `&project=${encodeURIComponent(args.merchantReference)}`
-    : "";
-  const session = await createCheckoutSession({
-    mode: "payment",
-    customer: customerId,
-    customer_update: { address: "auto", name: "auto" },
-    billing_address_collection: hasTax ? "required" : "auto",
-    automatic_tax: { enabled: hasTax },
-    line_items: lineItems,
-    client_reference_id: paymentId,
-    metadata: { paymentId, uid, kind: "order" },
-    payment_intent_data: { metadata: { paymentId, uid, kind: "order", ...affiliateMeta } },
-    // `payment` is what the confirmation screen keys on: it opens on our own
-    // payment id (not the Stripe session) so it can follow the record live —
-    // including the fulfillment leg, which happens after this redirect.
-    success_url: `${appBaseUrl()}${studioReturnPath}?checkout=success&payment=${paymentId}${projectParam}&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${appBaseUrl()}${studioReturnPath}?checkout=cancel`,
-  });
-
-  await createPendingPayment({
-    paymentId,
-    uid,
-    kind: "order",
-    amount: Math.round(estimatedTotal * 100) / 100,
-    currency,
-    description: `${product.presentation.name} ×${copies}`,
-    stripeSessionId: session.id,
-    stripeCustomerId: customerId,
-    fulfillment,
-    ...args.device,
-    items: [
-      { label: product.presentation.name, amount: unitPrice, quantity: copies },
-      ...(finalShippingCharged > 0
-        ? [{ label: "Shipping & handling", amount: finalShippingCharged, quantity: 1 }]
-        : []),
-    ],
-  });
-
-  // The checkout is real from here: stamp the book so abandonment can be read per
-  // studio flow. Best-effort and first-write-wins, like every milestone.
-  if (args.merchantReference) {
-    await stampMilestone(uid, args.merchantReference, "checkoutStarted").catch(() => {});
-  }
-
-  return { ok: true, url: session.url, paymentId };
 }
 
 // ---- Authenticated user routes ---------------------------------------------
@@ -1628,6 +2337,37 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
 
+      // The price is a quote the customer was shown. Prove this order is the one
+      // it was made for BEFORE the expensive part (hosting the print files): a
+      // stale or foreign quote is a 409 that makes the dialog show a fresh price,
+      // not a payment page for an amount nobody approved.
+      const quoteInputs: QuoteInputs = {
+        printSku,
+        copies,
+        pages,
+        shippingMethod: body.shippingMethod,
+        destinationCountry,
+        address: {
+          line1: recipient.address.line1,
+          line2: recipient.address.line2 ?? "",
+          city: recipient.address.townOrCity,
+          state: recipient.address.stateOrCounty ?? "",
+          postalCode: recipient.address.postalOrZipCode,
+        },
+        couponCode: body.couponCode?.trim() ? normalizeCouponCode(body.couponCode) : null,
+      };
+      const loaded = await loadQuoteForCheckout({
+        quoteId: typeof body.quoteId === "string" ? body.quoteId : "",
+        uid,
+        inputs: quoteInputs,
+      });
+      if (!loaded.ok) {
+        // A double-click, not a price problem: say so without sending the dialog off to re-quote.
+        if (loaded.reason === "in_progress") clientError(res, QUOTE_REFUSAL_MESSAGE.in_progress, 409);
+        else priceChanged(res, QUOTE_REFUSAL_MESSAGE[loaded.reason]);
+        return;
+      }
+
       // Print files must be hosted BEFORE payment; the webhook places the order
       // from these URLs (it has no access to the blobs).
       //
@@ -1722,7 +2462,7 @@ export function registerStripeUserRoutes(app: Express): void {
         variant,
         printSku,
         settings,
-        activePlan,
+        quote: loaded.quote,
         copies,
         pages,
         currency,
@@ -1737,11 +2477,11 @@ export function registerStripeUserRoutes(app: Express): void {
         sourceFileUrls,
         printPrep,
         merchantReference: body.merchantReference ?? null,
-        couponCode: body.couponCode ?? null,
         foilStamp: body.foilStamp ?? null,
       });
       if (!result.ok) {
-        clientError(res, result.error);
+        if (result.priceChanged) priceChanged(res, result.error);
+        else clientError(res, result.error, result.inProgress ? 409 : 400);
         return;
       }
       res.json({ url: result.url, paymentId: result.paymentId });
@@ -1755,11 +2495,14 @@ export function registerStripeUserRoutes(app: Express): void {
     }
   });
 
-  // Retail price preview for the order dialog. Runs the SAME pricing path as
-  // checkout (live shipping → retail tiers → plan discount), so what the user
-  // sees before "Continue to payment" is exactly what Stripe will charge
-  // (before tax). Never exposes wholesale/production costs to the client.
-  app.post("/checkout/price", json, async (req: AuthedRequest, res: Response) => {
+  // The quote for the order dialog: the ONE place a print order's price is worked
+  // out. Books, shipping, every discount (a typed code, referral, campaign, plan)
+  // and the tax Stripe Tax computes for the delivery address — as integers that
+  // add up — saved under an id. The dialog shows it verbatim and `/checkout`
+  // charges it by that id, so the amount shown and the amount charged are the
+  // same record rather than two calculations that must agree. Never exposes
+  // wholesale/production costs to the client.
+  app.post("/checkout/quote", json, async (req: AuthedRequest, res: Response) => {
     try {
       const uid = req.uid!;
       const body = (req.body ?? {}) as {
@@ -1767,7 +2510,6 @@ export function registerStripeUserRoutes(app: Express): void {
         variant?: VariantSelection;
         copies?: number;
         pageCount?: number;
-        currency?: string;
         shippingMethod?: ShippingMethod;
         destinationCountry?: string;
         line1?: string;
@@ -1775,11 +2517,13 @@ export function registerStripeUserRoutes(app: Express): void {
         city?: string;
         state?: string;
         postalCode?: string;
+        couponCode?: string;
       };
       if (!body.productSku || !body.city || !body.postalCode || !body.destinationCountry) {
         clientError(res, "A destination (city, postal code, country) is required.");
         return;
       }
+      const destinationCountry = body.destinationCountry.trim().toUpperCase();
       const [config, settings] = await Promise.all([getProductsConfig(), getPricingSettings()]);
       const resolved = resolvePrintOrder({
         products: config.products,
@@ -1792,29 +2536,21 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
       const { product, variant, printSku } = resolved;
-      // Derived from the DESTINATION, not taken from the client. Both sides run
-      // the same function on the same settings doc, so the previewed price and
-      // the charged one can't be denominated differently — and a client can't
-      // pick the currency its book happens to be cheapest in.
+      // Derived from the DESTINATION, not taken from the client. Checkout charges
+      // this quote, so the currency can't differ — and a client can't pick the
+      // currency its book happens to be cheapest in.
       const currency = currencyForMarket(
-        body.destinationCountry,
+        destinationCountry,
         settings.currencies,
         settings.baseCurrency,
       ) as CurrencyCode;
-      // The client always sends a method; when it doesn't, preview the cheapest
-      // tier that actually reaches THIS destination. Defaulting to a fixed one
-      // previewed a price for a speed the customer would then be unable to
-      // select — and if that tier isn't sold to their country, the preview fails
-      // on a product that would have quoted perfectly well.
-      const shippingMethod =
-        body.shippingMethod ?? (await previewShippingMethod(product, body.destinationCountry));
-      // The preview goes through the same refusal as checkout. Without this it
-      // would price whatever the print provider happens to quote — the provider
-      // ships to far more countries than we sell to — so a customer in a closed
-      // market saw a real total and was only turned away at "Continue to
-      // payment", after entering a full address.
+      // The client always sends a method; when it doesn't, quote the cheapest
+      // tier that actually reaches THIS destination.
+      const shippingMethod = body.shippingMethod ?? (await previewShippingMethod(product, destinationCountry));
+      // The same refusal as checkout, so a customer in a closed market isn't shown
+      // a real total and only turned away at "Continue to payment".
       const refusal = await shippingRefusal(product, {
-        country: body.destinationCountry,
+        country: destinationCountry,
         region: body.state,
         method: shippingMethod,
         stage: "quote",
@@ -1823,7 +2559,6 @@ export function registerStripeUserRoutes(app: Express): void {
         clientError(res, refusal);
         return;
       }
-      const activePlan = await resolveActivePlan(uid);
       const copies = Math.max(1, Math.floor(body.copies || 1));
       // The same normalisation checkout applies, so the quote is for the length
       // that will actually be printed and charged.
@@ -1838,18 +2573,22 @@ export function registerStripeUserRoutes(app: Express): void {
         );
         return;
       }
-      const pages = quotePlan.printed;
-      const priced = await priceRetailOrder({
+      const typedCode = body.couponCode?.trim() ? body.couponCode.trim() : null;
+      // Typing codes is guessing codes: past the limit the code is simply not
+      // looked at, and the price comes back without it.
+      const codeThrottled = typedCode != null && couponAttemptsExhausted(uid);
+      const quote = await buildPrintQuote({
+        uid,
         product,
         variant,
         printSku,
         settings,
-        activePlan,
+        activePlan: await resolveActivePlan(uid),
         copies,
-        pages,
+        pages: quotePlan.printed,
         currency,
         shippingMethod,
-        destinationCountry: body.destinationCountry,
+        destinationCountry,
         address: {
           line1: body.line1,
           line2: body.line2 ?? null,
@@ -1857,30 +2596,56 @@ export function registerStripeUserRoutes(app: Express): void {
           stateOrCounty: body.state ?? null,
           postalOrZipCode: body.postalCode,
         },
+        couponCode: codeThrottled ? null : typedCode,
       });
-      res.json({
-        currency,
-        copies,
-        unitPrice: priced.unitPrice,
-        listUnitPrice: priced.listUnitPrice,
-        discountPct: priced.discountPct,
-        items: Math.round(priced.unitPrice * copies * 100) / 100,
-        shipping: priced.shippingCharged,
-        total: Math.round((priced.unitPrice * copies + priced.shippingCharged) * 100) / 100,
-        atCostTotal: priced.atCost.total,
-        // So the total can say "before tax" where tax is added at payment.
-        taxBehavior: settings.tax.perCurrency[currency]?.behavior ?? "exclusive",
-        // The carrier's normalization of this address, so checkout can offer the
-        // correction while it's still free to make.
-        addressValidation: priced.addressValidation ?? null,
-      });
+      // Only a REJECTED code counts against the throttle: re-quoting because the
+      // address or copies changed, with a good code still in the box, is shopping.
+      if (typedCode && !codeThrottled && quote.couponRejection && recordCouponAttempt(uid)) {
+        quote.couponRejection = {
+          reason: "throttled",
+          message: "Too many attempts. Wait a few minutes and try again.",
+        };
+      }
+      if (codeThrottled) {
+        quote.couponRejection = {
+          reason: "throttled",
+          message: "Too many attempts. Wait a few minutes and try again.",
+        };
+      }
+      if (quote.taxStatus === "not_collecting") {
+        // Not an error for the customer — there is genuinely no tax to collect —
+        // but it is for us if we're meant to be collecting here. One alert per
+        // country per day, not one per keystroke.
+        void raiseAlert({
+          severity: "warning",
+          kind: "tax_not_collecting",
+          ref: `${destinationCountry}_${new Date().toISOString().slice(0, 10)}`,
+          message:
+            `An order to ${destinationCountry} was quoted with no tax because Stripe Tax holds no ` +
+            `registration there. If tax is due, add the registration in Stripe.`,
+          meta: { country: destinationCountry, reasons: quote.taxabilityReasons },
+        }).catch(() => undefined);
+      }
+      await saveQuote(quote);
+      res.json(quoteView(quote));
     } catch (err) {
       if (err instanceof PricingUnavailableError) {
-        console.error("[stripe] price preview blocked — order is unpriceable:", err.message);
+        console.error("[stripe] quote blocked — order is unpriceable:", err.message);
         clientError(res, err.clientMessage, 409);
         return;
       }
-      console.error("[stripe] price preview failed", err);
+      if (err instanceof TaxUnavailableError) {
+        // Fail closed: a total with the tax missing is a wrong total.
+        void raiseAlert({
+          severity: "critical",
+          kind: "tax_unavailable",
+          ref: new Date().toISOString().slice(0, 13),
+          message: `Print orders can't be priced: the tax calculation failed (${err.message}).`,
+        }).catch(() => undefined);
+        clientError(res, "We couldn't work out the tax for this address just now. Please try again in a moment.", 503);
+        return;
+      }
+      console.error("[stripe] quote failed", err);
       clientError(res, "We couldn't price this destination.", 500);
     }
   });
@@ -1909,6 +2674,50 @@ export function registerStripeUserRoutes(app: Express): void {
     }
   });
 
+  // The same answer, plus the priced quote the dialog shows and checkout charges.
+  // POST so a code the customer typed isn't written into a URL (and a log line).
+  app.post("/checkout/ebook/quote", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const uid = req.uid!;
+      const body = (req.body ?? {}) as { projectId?: string; currency?: string; couponCode?: string };
+      const projectId = String(body.projectId ?? "").trim();
+      if (!projectId) {
+        clientError(res, "A project is required.");
+        return;
+      }
+      const settings = await getPricingSettings();
+      const currency = String(body.currency || settings.baseCurrency).toUpperCase() as CurrencyCode;
+      if (!settings.currencies.includes(currency)) {
+        clientError(res, `Currency ${currency} isn't supported.`);
+        return;
+      }
+      const activePlan = await resolveActivePlan(uid);
+      const ebook = await priceEbook(uid, projectId, currency, settings, activePlan);
+      // Only something that can actually be paid for has a price to quote.
+      let priceQuote = null;
+      if (ebook.enabled && !ebook.owned && !ebook.included && ebook.price > 0) {
+        const typed = body.couponCode?.trim() ? body.couponCode.trim() : null;
+        const codeThrottled = typed != null && couponAttemptsExhausted(uid);
+        const record = await buildDigitalQuote(
+          { uid, kind: "ebook", subject: projectId, productId: "ebook", settings, currency, listPrice: ebook.price },
+          codeThrottled ? null : typed,
+        );
+        const rejected = codeThrottled
+          ? { reason: "throttled", message: "Too many attempts. Wait a few minutes and try again." }
+          : typed && record.couponRejection && recordCouponAttempt(uid)
+            ? { reason: "throttled", message: "Too many attempts. Wait a few minutes and try again." }
+            : record.couponRejection;
+        record.couponRejection = rejected;
+        await saveDigitalQuote(record);
+        priceQuote = digitalQuoteView(record);
+      }
+      res.json({ ...ebook, downloadUrl: null, priceQuote });
+    } catch (err) {
+      console.error("[stripe] ebook price quote failed", err);
+      clientError(res, "We couldn't price the ebook.", 500);
+    }
+  });
+
   // Buy the digital edition: the client uploads the rendered PDF NOW (hosted
   // before payment, like print files); the webhook grants the download only
   // after Stripe confirms payment. Price is server-authoritative. Also
@@ -1929,7 +2738,9 @@ export function registerStripeUserRoutes(app: Express): void {
         contentType?: string;
         /** Content fingerprint of an already-assembled render, if there is one. */
         fingerprint?: string;
-        /** A coupon code the customer typed. Validated server-side; never trusted. */
+        /** The quote the customer was shown. Charged as it is, or refused with `price_changed`. */
+        quoteId?: string;
+        /** The code that quote applied (or, with no quote, one the customer typed). Never trusted. */
         couponCode?: string;
       };
       if (!body.projectId || !(body.pdfBase64 || body.fingerprint)) {
@@ -1963,6 +2774,29 @@ export function registerStripeUserRoutes(app: Express): void {
       }
 
       const title = (body.title ?? "").trim() || "Your book";
+
+      // Anything that has to be paid for is paid for at a quote. Settled BEFORE the
+      // upload below, so a stale or foreign quote costs the customer a refreshed
+      // price rather than a hosted PDF first.
+      const payable = !(quote.included || quote.price <= 0 || quote.owned);
+      const purchase: DigitalPurchase = {
+        uid,
+        kind: "ebook",
+        subject: body.projectId,
+        productId: "ebook",
+        settings,
+        currency,
+        listPrice: quote.price,
+      };
+      let digital: DigitalQuoteRecord | null = null;
+      if (payable) {
+        const resolved = await resolveDigitalQuote(purchase, body.quoteId, body.couponCode ?? null);
+        if (!resolved.ok) {
+          respondDigitalFailure(res, resolved);
+          return;
+        }
+        digital = resolved.quote;
+      }
 
       // Prefer the cached render. A second purchase of an unchanged book (a
       // gift, a re-download after a plan change) then costs nothing to prepare
@@ -2030,91 +2864,101 @@ export function registerStripeUserRoutes(app: Express): void {
         res.json({ granted: true, paymentId });
         return;
       }
-      const customerId = await ensureCustomer(uid, req.authToken?.email ?? null);
-      const taxBehavior = settings.tax.perCurrency[currency]?.behavior ?? "exclusive";
-      const taxCode = settings.ebook.taxCode;
-      const hasTax = Boolean(taxCode);
-
-      // The digital edition has no unit cost to protect, so the only clamp that
-      // matters is the catalog-wide maximum discount.
-      const { applied: earned, codeRejection } = await earnedDiscount({
-        uid,
-        itemType: "ebook",
-        paymentId,
-        settings,
-        amount: quote.price,
-        couponCode: body.couponCode ?? null,
-        currency,
-        productId: "ebook",
-      });
-      if (codeRejection) {
-        await releaseCoupons(paymentId, `code refused: ${codeRejection.reason}`);
-        clientError(res, codeRejection.message);
+      // `digital` is set whenever the purchase is payable, which is the only way to be here.
+      if (!digital) throw new Error("payable ebook without a quote");
+      const reserved = await reserveDigitalQuote(purchase, digital, paymentId);
+      if (!reserved.ok) {
+        respondDigitalFailure(res, reserved);
         return;
       }
-      const price = earned ? discountedAmount(quote.price, earned.percentOff) : quote.price;
+      const earned = reserved.earned;
+      const lines = digital.lines;
+      try {
+        const customerId = await ensureCustomer(uid, req.authToken?.email ?? null);
+        const taxCode = settings.ebook.taxCode;
+        const hasTax = Boolean(taxCode);
 
-      const session = await createCheckoutSession({
-        mode: "payment",
-        customer: customerId,
-        customer_update: { address: "auto", name: "auto" },
-        billing_address_collection: hasTax ? "required" : "auto",
-        automatic_tax: { enabled: hasTax },
-        line_items: [
-          {
-            quantity: 1,
-            price_data: {
-              currency: currency.toLowerCase(),
-              unit_amount: toMinor(price, currency),
-              tax_behavior: hasTax ? taxBehavior : undefined,
-              product_data: {
-                name: `${title} — digital edition (PDF)`,
-                description:
-                  [
-                    quote.planName ? `${quote.planName} member price.` : null,
-                    quote.discountPct > 0
-                      ? `Includes your ${quote.discountPct}% print-owner discount.`
-                      : null,
-                    earned ? `Discount applied: ${earned.summary}.` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" ") || undefined,
-                tax_code: taxCode,
+        const session = await createCheckoutSession({
+          mode: "payment",
+          customer: customerId,
+          customer_update: { address: "auto", name: "auto" },
+          billing_address_collection: hasTax ? "required" : "auto",
+          automatic_tax: { enabled: hasTax },
+          line_items: [
+            {
+              quantity: 1,
+              price_data: {
+                currency: currency.toLowerCase(),
+                // Exactly the quote's books line — never worked out again here.
+                unit_amount: lines.itemsMinor,
+                tax_behavior: hasTax ? lines.taxBehavior : undefined,
+                product_data: {
+                  name: `${title} — digital edition (PDF)`,
+                  description:
+                    [
+                      quote.planName ? `${quote.planName} member price.` : null,
+                      quote.discountPct > 0
+                        ? `Includes your ${quote.discountPct}% print-owner discount.`
+                        : null,
+                      earned ? `Discount applied: ${earned.summary}.` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" ") || undefined,
+                  tax_code: taxCode,
+                },
               },
             },
+          ],
+          client_reference_id: paymentId,
+          metadata: { paymentId, uid, kind: "ebook", quoteId: digital.id },
+          payment_intent_data: {
+            metadata: {
+              paymentId,
+              uid,
+              kind: "ebook",
+              quoteId: digital.id,
+              ...(await affiliateChargeMetadata(uid, "ebook")),
+            },
           },
-        ],
-        client_reference_id: paymentId,
-        metadata: { paymentId, uid, kind: "ebook" },
-        payment_intent_data: {
-          metadata: { paymentId, uid, kind: "ebook", ...(await affiliateChargeMetadata(uid, "ebook")) },
-        },
-        success_url: `${appBaseUrl()}/studio/${encodeURIComponent(body.projectId)}/order?ebook=success&payment=${paymentId}&project=${encodeURIComponent(body.projectId)}`,
-        cancel_url: `${appBaseUrl()}/studio/${encodeURIComponent(body.projectId)}/order?ebook=cancel`,
-      });
+          success_url: `${appBaseUrl()}/studio/${encodeURIComponent(body.projectId)}/order?ebook=success&payment=${paymentId}&project=${encodeURIComponent(body.projectId)}`,
+          cancel_url: `${appBaseUrl()}/studio/${encodeURIComponent(body.projectId)}/order?ebook=cancel`,
+        });
+        if (!(await sessionMatchesDigitalQuote(session, digital, hasTax, paymentId))) {
+          await abandonDigitalCheckout(paymentId, digital.id);
+          priceChanged(res, "We couldn't confirm your final price just now. Nothing has been charged — please try again.");
+          return;
+        }
 
-      const ebook: EbookFulfillment = {
-        projectId: body.projectId,
-        title,
-        filePath,
-        fingerprint: body.fingerprint ?? null,
-      };
-      await createPendingPayment({
-        paymentId,
-        uid,
-        kind: "ebook",
-        amount: price,
-        currency,
-        description: `${title} — digital edition`,
-        stripeSessionId: session.id,
-        stripeCustomerId: customerId,
-        ebook,
-        ...checkoutDevice(req),
-        items: [{ label: `${title} — digital edition (PDF)`, amount: price, quantity: 1 }],
-      });
-      await stampMilestone(uid, body.projectId, "checkoutStarted").catch(() => {});
+        const ebook: EbookFulfillment = {
+          projectId: body.projectId,
+          title,
+          filePath,
+          fingerprint: body.fingerprint ?? null,
+        };
+        await createPendingPayment({
+          paymentId,
+          uid,
+          kind: "ebook",
+          amount: fromMinorUnits(lines.totalMinor, currency),
+          currency,
+          description: `${title} — digital edition`,
+          stripeSessionId: session.id,
+          stripeCustomerId: customerId,
+          ebook,
+          ...checkoutDevice(req),
+          quote: digitalQuoteRecordMeta(digital, hasTax),
+          items: [
+            { label: `${title} — digital edition (PDF)`, amount: fromMinorUnits(lines.itemsMinor, currency), quantity: 1 },
+          ],
+        });
+        await stampMilestone(uid, body.projectId, "checkoutStarted").catch(() => {});
 
-      res.json({ url: session.url, paymentId });
+        res.json({ url: session.url, paymentId });
+        return;
+      } catch (err) {
+        await abandonDigitalCheckout(paymentId, digital.id);
+        throw err;
+      }
     } catch (err) {
       await checkoutFailed(res, err, "ebook", "We couldn't start the ebook checkout. Please try again.");
     }
@@ -2185,6 +3029,40 @@ export function registerStripeUserRoutes(app: Express): void {
         !reusePrinted && plan.printPrep && plan.printPrep.printSku === printSku && plan.printPrep.pages === plan.pageCount
           ? plan.printPrep
           : null;
+      // Re-derived rather than replayed: the stored currency can be one the
+      // catalog has since stopped supporting, which would fail the reorder on
+      // a price the customer never chose in the first place.
+      const currency = currencyForMarket(
+        plan.destinationCountry,
+        settings.currencies,
+        settings.baseCurrency,
+      ) as CurrencyCode;
+      const recipient = draftRecipient(plan.recipient);
+      // A reorder has no price screen before the payment page, so its quote is
+      // made and charged in one step: today's price, with no code. The payment
+      // page then shows exactly that, tax included.
+      const quote = await buildPrintQuote({
+        uid,
+        product,
+        variant,
+        printSku,
+        settings,
+        activePlan,
+        copies,
+        pages: plan.pageCount,
+        currency,
+        shippingMethod: plan.shippingMethod as ShippingMethod,
+        destinationCountry: plan.destinationCountry,
+        address: {
+          line1: recipient.address.line1,
+          line2: recipient.address.line2 ?? null,
+          townOrCity: recipient.address.townOrCity,
+          stateOrCounty: recipient.address.stateOrCounty ?? null,
+          postalOrZipCode: recipient.address.postalOrZipCode,
+        },
+        couponCode: null,
+      });
+      await saveQuote(quote);
       const result = await createPrintCheckout({
         uid,
         email: plan.recipient.email ?? req.authToken?.email ?? null,
@@ -2193,20 +3071,13 @@ export function registerStripeUserRoutes(app: Express): void {
         variant,
         printSku,
         settings,
-        activePlan,
+        quote,
         copies,
         pages: plan.pageCount,
-        // Re-derived rather than replayed: the stored currency can be one the
-        // catalog has since stopped supporting, which would fail the reorder on
-        // a price the customer never chose in the first place.
-        currency: currencyForMarket(
-          plan.destinationCountry,
-          settings.currencies,
-          settings.baseCurrency,
-        ) as CurrencyCode,
+        currency,
         shippingMethod: plan.shippingMethod as ShippingMethod,
         destinationCountry: plan.destinationCountry,
-        recipient: draftRecipient(plan.recipient),
+        recipient,
         sourceFileUrls: reorderFiles,
         printPrep: reorderPrep,
         merchantReference: plan.merchantReference ?? null,
@@ -2223,6 +3094,10 @@ export function registerStripeUserRoutes(app: Express): void {
       }
       res.json({ url: result.url, paymentId: result.paymentId });
     } catch (err) {
+      if (err instanceof TaxUnavailableError) {
+        clientError(res, "We couldn't work out the tax for this address just now. Please try again in a moment.", 503);
+        return;
+      }
       await checkoutFailed(res, err, "reorder");
     }
   });
@@ -2377,9 +3252,102 @@ export function registerStripeUserRoutes(app: Express): void {
         success_url: `${appBaseUrl()}/studio?subscription=success`,
         cancel_url: `${appBaseUrl()}/studio?subscription=cancel`,
       });
+      // Stripe prices a membership (and every renewal) itself, so there is no quote
+      // to charge here. What we CAN do is hold Stripe to what we decided — the
+      // plan's price and the discount we resolved — and say so loudly if it
+      // disagrees. Alert-only: refusing a membership over a one-cent rounding
+      // difference would cost more than it protects.
+      if (priced && session.amount_subtotal != null) {
+        try {
+          const listMinor = toMinor(priced.point.amount, priced.currency);
+          const expected = composeQuoteLines({
+            currency: priced.currency,
+            copies: 1,
+            listUnitMinor: listMinor,
+            listShippingMinor: 0,
+            discount: discounted && earned ? { kind: "percent", percentOff: earned.percentOff } : null,
+            taxBehavior: "exclusive",
+            taxMinor: 0,
+          });
+          const stripeDiscount = session.total_details?.amount_discount ?? 0;
+          if (session.amount_subtotal !== listMinor || Math.abs(stripeDiscount - expected.discountMinor) > 1) {
+            void raiseAlert({
+              severity: "warning",
+              kind: "subscription_price_mismatch",
+              ref: subscriptionRef,
+              message:
+                `A membership checkout was priced by Stripe at ${session.amount_subtotal} with ${stripeDiscount} off, ` +
+                `but we expected ${listMinor} with ${expected.discountMinor} off (${priced.currency}).`,
+              meta: { uid, planId: plan?.id ?? null, sessionId: session.id },
+            }).catch(() => undefined);
+          }
+        } catch (err) {
+          console.warn("[stripe] subscription price check failed", err);
+        }
+      }
       res.json({ url: session.url });
     } catch (err) {
       await checkoutFailed(res, err, "subscription");
+    }
+  });
+
+  // What a Spark pack is being sold for, from the Sparks config — never from the
+  // client, which only names a pack and a currency the pack is priced in.
+  async function packSale(
+    uid: string,
+    rawPackId: unknown,
+    rawCurrency: unknown,
+  ): Promise<
+    | { ok: true; pack: SparkPack; currency: CurrencyCode; purchase: DigitalPurchase; settings: PricingSettings }
+    | { ok: false; error: string; status: number }
+  > {
+    const config = await getSparksConfig();
+    if (!config.enabled) return { ok: false, error: "Spark purchases aren't available right now.", status: 503 };
+    const pack = config.packs.find((p) => p.id === rawPackId && p.active);
+    if (!pack) return { ok: false, error: "That Spark pack isn't available.", status: 400 };
+    const currency = (String(rawCurrency || "USD")).toUpperCase() as CurrencyCode;
+    const price = pack.prices[currency];
+    if (typeof price !== "number" || price <= 0) {
+      return { ok: false, error: `This pack isn't priced in ${currency}.`, status: 400 };
+    }
+    const settings = await getPricingSettings();
+    return {
+      ok: true,
+      pack,
+      currency,
+      settings,
+      // A gift prices exactly like the pack itself — the buyer could apply the
+      // identical discount to a pack for themselves — so both share one quote.
+      purchase: { uid, kind: "pack", subject: pack.id, productId: pack.id, settings, currency, listPrice: price },
+    };
+  }
+
+  // The price of a Spark pack for this buyer, with any code they typed: the quote
+  // the wallet shows, and the one `/checkout/sparks-pack` and `/checkout/sparks-gift`
+  // charge by id.
+  app.post("/checkout/sparks-pack/quote", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const uid = req.uid!;
+      const body = (req.body ?? {}) as { packId?: string; currency?: string; couponCode?: string };
+      const sale = await packSale(uid, body.packId, body.currency);
+      if (!sale.ok) {
+        clientError(res, sale.error, sale.status);
+        return;
+      }
+      const typed = body.couponCode?.trim() ? body.couponCode.trim() : null;
+      const codeThrottled = typed != null && couponAttemptsExhausted(uid);
+      const record = await buildDigitalQuote(sale.purchase, codeThrottled ? null : typed);
+      if (codeThrottled || (typed && record.couponRejection && recordCouponAttempt(uid))) {
+        record.couponRejection = {
+          reason: "throttled",
+          message: "Too many attempts. Wait a few minutes and try again.",
+        };
+      }
+      await saveDigitalQuote(record);
+      res.json(digitalQuoteView(record));
+    } catch (err) {
+      console.error("[stripe] pack quote failed", err);
+      clientError(res, "We couldn't price this pack.", 500);
     }
   });
 
@@ -2392,95 +3360,124 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
       const uid = req.uid!;
-      const { packId, currency: rawCurrency } = (req.body ?? {}) as { packId?: string; currency?: string };
-      const config = await getSparksConfig();
-      if (!config.enabled) {
-        clientError(res, "Spark purchases aren't available right now.", 503);
+      const body = (req.body ?? {}) as {
+        packId?: string;
+        currency?: string;
+        /** The quote the buyer was shown, when they were shown one. */
+        quoteId?: string;
+        couponCode?: string;
+      };
+      const sale = await packSale(uid, body.packId, body.currency);
+      if (!sale.ok) {
+        clientError(res, sale.error, sale.status);
         return;
       }
-      const pack = config.packs.find((p) => p.id === packId && p.active);
-      if (!pack) {
-        clientError(res, "That Spark pack isn't available.");
-        return;
-      }
-      const currency = (rawCurrency || "USD").toUpperCase();
-      const price = pack.prices[currency];
-      if (typeof price !== "number" || price <= 0) {
-        clientError(res, `This pack isn't priced in ${currency}.`);
-        return;
-      }
+      const { pack, currency, purchase, settings } = sale;
       const totalSparks = packTotalSparks(pack);
-      const paymentId = randomUUID();
-      const customerId = await ensureCustomer(uid, req.authToken?.email);
-      const { applied: earned, codeRejection } = await earnedDiscount({
-        uid,
-        itemType: "pack",
-        paymentId,
-        settings: await getPricingSettings(),
-        amount: price,
-        couponCode: (req.body as { couponCode?: string })?.couponCode ?? null,
-        currency,
-        productId: pack.id,
-      });
-      if (codeRejection) {
-        await releaseCoupons(paymentId, `code refused: ${codeRejection.reason}`);
-        clientError(res, codeRejection.message);
+      // The quote they were shown — or, from the one-click buttons that never show
+      // one, a quote made right now by the very same code.
+      const resolved = await resolveDigitalQuote(purchase, body.quoteId, body.couponCode ?? null);
+      if (!resolved.ok) {
+        respondDigitalFailure(res, resolved);
         return;
       }
-      const chargedPrice = earned ? discountedAmount(price, earned.percentOff) : price;
-      // Buying for a specific action: hold its price, and come back ready to start it.
-      const resumeQuoteId = (req.body as { resumeQuoteId?: unknown })?.resumeQuoteId;
-      const quoteExpiresAt =
-        typeof resumeQuoteId === "string"
-          ? await holdQuoteForCheckout(uid, resumeQuoteId).catch(() => null)
-          : null;
-      const resume = quoteExpiresAt ? `&draw=${encodeURIComponent(resumeQuoteId as string)}` : "";
-      const session = await createCheckoutSession({
-        mode: "payment",
-        customer: customerId,
-        line_items: [
-          {
-            quantity: 1,
-            price_data: {
-              currency: currency.toLowerCase(),
-              unit_amount: toMinor(chargedPrice, currency),
-              product_data: {
-                name: `${totalSparks} Sparks (${pack.label})`,
-                description: earned ? `Discount applied: ${earned.summary}.` : undefined,
+      const digital = resolved.quote;
+      const lines = digital.lines;
+      const paymentId = randomUUID();
+      const reserved = await reserveDigitalQuote(purchase, digital, paymentId);
+      if (!reserved.ok) {
+        respondDigitalFailure(res, reserved);
+        return;
+      }
+      const earned = reserved.earned;
+      try {
+        const customerId = await ensureCustomer(uid, req.authToken?.email);
+        const taxCode = settings.tax.sparkTaxCode;
+        const hasTax = Boolean(taxCode);
+        // Buying for a specific action: hold its price, and come back ready to start it.
+        const resumeQuoteId = (req.body as { resumeQuoteId?: unknown })?.resumeQuoteId;
+        const quoteExpiresAt =
+          typeof resumeQuoteId === "string"
+            ? await holdQuoteForCheckout(uid, resumeQuoteId).catch(() => null)
+            : null;
+        const resume = quoteExpiresAt ? `&draw=${encodeURIComponent(resumeQuoteId as string)}` : "";
+        const session = await createCheckoutSession({
+          mode: "payment",
+          customer: customerId,
+          // Stripe Tax needs the buyer's address to rate a digital sale; it asks
+          // for it on its own page. Without a configured tax code nothing changes.
+          ...(hasTax
+            ? {
+                customer_update: { address: "auto" as const, name: "auto" as const },
+                billing_address_collection: "required" as const,
+                automatic_tax: { enabled: true },
+              }
+            : {}),
+          line_items: [
+            {
+              quantity: 1,
+              price_data: {
+                currency: currency.toLowerCase(),
+                unit_amount: lines.itemsMinor,
+                tax_behavior: hasTax ? lines.taxBehavior : undefined,
+                product_data: {
+                  name: `${totalSparks} Sparks (${pack.label})`,
+                  description: earned ? `Discount applied: ${earned.summary}.` : undefined,
+                  tax_code: taxCode,
+                },
               },
             },
-          },
-        ],
-        client_reference_id: paymentId,
-        metadata: { paymentId, uid, kind: "sparkPack", packId: pack.id, sparks: String(totalSparks) },
-        payment_intent_data: {
+          ],
+          client_reference_id: paymentId,
           metadata: {
             paymentId,
             uid,
             kind: "sparkPack",
             packId: pack.id,
             sparks: String(totalSparks),
-            ...(await affiliateChargeMetadata(uid, "sparkPack")),
+            quoteId: digital.id,
           },
-        },
-        // A purchase started from a book returns to that book, where the action
-        // the reader was about to take is still waiting.
-        success_url: `${appBaseUrl()}${sparkReturnPath(req.body)}?sparks=success&payment=${paymentId}${resume}`,
-        cancel_url: `${appBaseUrl()}${sparkReturnPath(req.body)}?sparks=cancel`,
-      });
-      await createPendingPayment({
-        paymentId,
-        uid,
-        kind: "sparkPack",
-        amount: chargedPrice,
-        currency,
-        description: `${totalSparks} Sparks`,
-        stripeSessionId: session.id,
-        stripeCustomerId: customerId,
-        ...checkoutDevice(req),
-        items: [{ label: `${totalSparks} Sparks`, amount: chargedPrice, quantity: 1 }],
-      });
-      res.json({ url: session.url, paymentId, ...(quoteExpiresAt ? { quoteExpiresAt } : {}) });
+          payment_intent_data: {
+            metadata: {
+              paymentId,
+              uid,
+              kind: "sparkPack",
+              packId: pack.id,
+              sparks: String(totalSparks),
+              quoteId: digital.id,
+              ...(await affiliateChargeMetadata(uid, "sparkPack")),
+            },
+          },
+          // A purchase started from a book returns to that book, where the action
+          // the reader was about to take is still waiting.
+          success_url: `${appBaseUrl()}${sparkReturnPath(req.body)}?sparks=success&payment=${paymentId}${resume}`,
+          cancel_url: `${appBaseUrl()}${sparkReturnPath(req.body)}?sparks=cancel`,
+        });
+        if (!(await sessionMatchesDigitalQuote(session, digital, hasTax, paymentId))) {
+          await abandonDigitalCheckout(paymentId, digital.id);
+          priceChanged(res, "We couldn't confirm your final price just now. Nothing has been charged — please try again.");
+          return;
+        }
+        await createPendingPayment({
+          paymentId,
+          uid,
+          kind: "sparkPack",
+          amount: fromMinorUnits(lines.totalMinor, currency),
+          currency,
+          description: `${totalSparks} Sparks`,
+          stripeSessionId: session.id,
+          stripeCustomerId: customerId,
+          ...checkoutDevice(req),
+          quote: digitalQuoteRecordMeta(digital, hasTax),
+          items: [
+            { label: `${totalSparks} Sparks`, amount: fromMinorUnits(lines.itemsMinor, currency), quantity: 1 },
+          ],
+        });
+        res.json({ url: session.url, paymentId, ...(quoteExpiresAt ? { quoteExpiresAt } : {}) });
+      } catch (err) {
+        await abandonDigitalCheckout(paymentId, digital.id);
+        throw err;
+      }
     } catch (err) {
       await checkoutFailed(res, err, "sparks pack");
     }
@@ -2500,94 +3497,107 @@ export function registerStripeUserRoutes(app: Express): void {
         currency?: string;
         recipientEmail?: string;
         message?: string;
+        quoteId?: string;
+        couponCode?: string;
       };
-      const config = await getSparksConfig();
-      if (!config.enabled) {
-        clientError(res, "Spark purchases aren't available right now.", 503);
-        return;
-      }
-      const pack = config.packs.find((p) => p.id === body.packId && p.active);
-      if (!pack) {
-        clientError(res, "That Spark pack isn't available.");
-        return;
-      }
-      const currency = (body.currency || "USD").toUpperCase();
-      const price = pack.prices[currency];
-      if (typeof price !== "number" || price <= 0) {
-        clientError(res, `This pack isn't priced in ${currency}.`);
-        return;
-      }
-      const totalSparks = packTotalSparks(pack);
-      const paymentId = randomUUID();
-      const giftCode = newGiftCode();
-      const customerId = await ensureCustomer(uid, req.authToken?.email);
       // Same `pack` scope the direct top-up uses: a gift is still a Spark pack
       // purchase, and the wallet promises earned discounts "apply automatically
-      // at checkout" without carving out gifts. Nothing new is exploitable — the
-      // buyer could apply the identical discount to a pack for themselves.
-      const { applied: earned, codeRejection } = await earnedDiscount({
-        uid,
-        itemType: "pack",
-        paymentId,
-        settings: await getPricingSettings(),
-        amount: price,
-        couponCode: (body as { couponCode?: string }).couponCode ?? null,
-        currency,
-        productId: pack.id,
-      });
-      if (codeRejection) {
-        await releaseCoupons(paymentId, `code refused: ${codeRejection.reason}`);
-        clientError(res, codeRejection.message);
+      // at checkout" without carving out gifts.
+      const sale = await packSale(uid, body.packId, body.currency);
+      if (!sale.ok) {
+        clientError(res, sale.error, sale.status);
         return;
       }
-      const chargedPrice = earned ? discountedAmount(price, earned.percentOff) : price;
-      const meta = {
-        paymentId,
-        uid,
-        kind: "sparkGift",
-        packId: pack.id,
-        sparks: String(totalSparks),
-        giftCode,
-        recipientEmail: (body.recipientEmail ?? "").slice(0, 200),
-        giftMessage: (body.message ?? "").slice(0, 300),
-      };
-      const session = await createCheckoutSession({
-        mode: "payment",
-        customer: customerId,
-        line_items: [
-          {
-            quantity: 1,
-            price_data: {
-              currency: currency.toLowerCase(),
-              unit_amount: toMinor(chargedPrice, currency),
-              product_data: {
-                name: `Gift: ${totalSparks} Sparks (${pack.label})`,
-                description: earned ? `Discount applied: ${earned.summary}.` : undefined,
+      const { pack, currency, purchase, settings } = sale;
+      const totalSparks = packTotalSparks(pack);
+      const resolved = await resolveDigitalQuote(purchase, body.quoteId, body.couponCode ?? null);
+      if (!resolved.ok) {
+        respondDigitalFailure(res, resolved);
+        return;
+      }
+      const digital = resolved.quote;
+      const lines = digital.lines;
+      const paymentId = randomUUID();
+      const giftCode = newGiftCode();
+      const reserved = await reserveDigitalQuote(purchase, digital, paymentId);
+      if (!reserved.ok) {
+        respondDigitalFailure(res, reserved);
+        return;
+      }
+      const earned = reserved.earned;
+      try {
+        const customerId = await ensureCustomer(uid, req.authToken?.email);
+        const taxCode = settings.tax.sparkTaxCode;
+        const hasTax = Boolean(taxCode);
+        const meta = {
+          paymentId,
+          uid,
+          kind: "sparkGift",
+          packId: pack.id,
+          sparks: String(totalSparks),
+          giftCode,
+          recipientEmail: (body.recipientEmail ?? "").slice(0, 200),
+          giftMessage: (body.message ?? "").slice(0, 300),
+          quoteId: digital.id,
+        };
+        const session = await createCheckoutSession({
+          mode: "payment",
+          customer: customerId,
+          ...(hasTax
+            ? {
+                customer_update: { address: "auto" as const, name: "auto" as const },
+                billing_address_collection: "required" as const,
+                automatic_tax: { enabled: true },
+              }
+            : {}),
+          line_items: [
+            {
+              quantity: 1,
+              price_data: {
+                currency: currency.toLowerCase(),
+                unit_amount: lines.itemsMinor,
+                tax_behavior: hasTax ? lines.taxBehavior : undefined,
+                product_data: {
+                  name: `Gift: ${totalSparks} Sparks (${pack.label})`,
+                  description: earned ? `Discount applied: ${earned.summary}.` : undefined,
+                  tax_code: taxCode,
+                },
               },
             },
+          ],
+          client_reference_id: paymentId,
+          metadata: meta,
+          payment_intent_data: {
+            metadata: { ...meta, ...(await affiliateChargeMetadata(uid, "sparkGift")) },
           },
-        ],
-        client_reference_id: paymentId,
-        metadata: meta,
-        payment_intent_data: {
-          metadata: { ...meta, ...(await affiliateChargeMetadata(uid, "sparkGift")) },
-        },
-        success_url: `${appBaseUrl()}/studio?gift=success&payment=${paymentId}`,
-        cancel_url: `${appBaseUrl()}/studio?gift=cancel`,
-      });
-      await createPendingPayment({
-        paymentId,
-        uid,
-        kind: "sparkGift",
-        amount: chargedPrice,
-        currency,
-        description: `Gift: ${totalSparks} Sparks`,
-        stripeSessionId: session.id,
-        stripeCustomerId: customerId,
-        ...checkoutDevice(req),
-        items: [{ label: `Gift: ${totalSparks} Sparks`, amount: chargedPrice, quantity: 1 }],
-      });
-      res.json({ url: session.url, paymentId, giftCode });
+          success_url: `${appBaseUrl()}/studio?gift=success&payment=${paymentId}`,
+          cancel_url: `${appBaseUrl()}/studio?gift=cancel`,
+        });
+        if (!(await sessionMatchesDigitalQuote(session, digital, hasTax, paymentId))) {
+          await abandonDigitalCheckout(paymentId, digital.id);
+          priceChanged(res, "We couldn't confirm your final price just now. Nothing has been charged — please try again.");
+          return;
+        }
+        await createPendingPayment({
+          paymentId,
+          uid,
+          kind: "sparkGift",
+          amount: fromMinorUnits(lines.totalMinor, currency),
+          currency,
+          description: `Gift: ${totalSparks} Sparks`,
+          stripeSessionId: session.id,
+          stripeCustomerId: customerId,
+          ...checkoutDevice(req),
+          quote: digitalQuoteRecordMeta(digital, hasTax),
+          items: [
+            { label: `Gift: ${totalSparks} Sparks`, amount: fromMinorUnits(lines.itemsMinor, currency), quantity: 1 },
+          ],
+        });
+        res.json({ url: session.url, paymentId, giftCode });
+      } catch (err) {
+        await abandonDigitalCheckout(paymentId, digital.id);
+        throw err;
+      }
     } catch (err) {
       await checkoutFailed(res, err, "sparks gift");
     }
@@ -3477,6 +4487,34 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           stripePaymentIntentId: piId,
           event: "checkout.session.completed",
         });
+        // Prove Stripe took what the customer was quoted. Creation already checks
+        // the session's total, so a difference here means something changed it in
+        // between — which has to be loud, not silent, because the customer has paid.
+        if (kind === "order" || kind === "ebook" || kind === "sparkPack" || kind === "sparkGift") {
+          const quoted = await getPaymentQuote(paymentId);
+          if (quoted) {
+            const tax = session.total_details?.amount_tax ?? 0;
+            const total = session.amount_total ?? 0;
+            // Where Stripe Tax rates the sale on its own page, the tax is Stripe's
+            // to add and what we can hold it to is the part before tax. Elsewhere
+            // the total and the tax are both ours.
+            const differs =
+              quoted.taxDeferred && quoted.subtotalMinor != null
+                ? (quoted.taxBehavior === "inclusive" ? total : total - tax) !== quoted.subtotalMinor
+                : total !== quoted.totalMinor || tax !== quoted.taxMinor;
+            if (differs) {
+              await raiseAlert({
+                severity: "critical",
+                kind: "payment_differs_from_quote",
+                ref: paymentId,
+                message:
+                  `A ${kind} payment was ${total} (tax ${tax}) ` +
+                  `but the customer was quoted ${quoted.totalMinor} (tax ${quoted.taxMinor}) ${(session.currency ?? "").toUpperCase()}.`,
+                meta: { paymentId, uid, quoteId: quoted.id, sessionId: session.id, taxDeferred: quoted.taxDeferred ?? false },
+              });
+            }
+          }
+        }
         // The session's `amount_total` (and the PI gross recorded as revenue on
         // payment_intent.succeeded) includes the tax Stripe Tax collected —
         // owed to the authority, not revenue. Book it as a cost line here, the
@@ -4290,12 +5328,29 @@ export async function stripeHealth(): Promise<StripeHealthReport> {
   try {
     const settings = await getStripe().tax.settings.retrieve();
     if (settings.status === "active") {
-      checks.push({
-        id: "tax",
-        label: "Stripe Tax",
-        status: "pass",
-        message: "Stripe Tax is active; tax will be calculated automatically at checkout.",
-      });
+      // Active is not the same as collecting: with no registration Stripe Tax
+      // computes zero everywhere, which is how a customer ends up charged no tax
+      // on an order that owed some.
+      const registrations = await getStripe()
+        .tax.registrations.list({ status: "active", limit: 1 })
+        .catch(() => null);
+      if (registrations && registrations.data.length === 0) {
+        checks.push({
+          id: "tax",
+          label: "Stripe Tax",
+          status: "warn",
+          message:
+            "Stripe Tax is active but has no registrations, so it collects NO tax anywhere — every order is charged without tax.",
+          fix: "Add a tax registration for each place you must collect tax (Stripe Dashboard → Tax → Registrations).",
+        });
+      } else {
+        checks.push({
+          id: "tax",
+          label: "Stripe Tax",
+          status: "pass",
+          message: "Stripe Tax is active with registrations; tax will be calculated at checkout.",
+        });
+      }
     } else {
       checks.push({
         id: "tax",
@@ -4343,6 +5398,37 @@ export async function stripeHealth(): Promise<StripeHealthReport> {
       status: "fail",
       message: `The configured book tax code is invalid: ${(err as Error)?.message ?? "error"}.`,
       fix: "Set a valid Stripe tax code in Pricing settings.",
+    });
+  }
+
+  // 7b. The other tax codes: digital goods are taxed too, and a missing or
+  // invalid code means they are sold without Stripe Tax.
+  try {
+    const pricing = await getPricingSettings();
+    for (const [id, label, code, where] of [
+      ["tax-code-ebook", "Ebook tax code", pricing.ebook.taxCode, "Ebook settings"],
+      ["tax-code-sparks", "Spark pack tax code", pricing.tax.sparkTaxCode, "Pricing settings → Tax"],
+    ] as const) {
+      if (!code) {
+        checks.push({
+          id,
+          label,
+          status: "warn",
+          message: `No tax code is set, so this is sold without Stripe Tax.`,
+          fix: `Choose the Stripe tax code that describes it (with your accountant) and set it in ${where}.`,
+        });
+        continue;
+      }
+      const tc = await getStripe().taxCodes.retrieve(code);
+      checks.push({ id, label, status: "pass", message: `Tax code ${code} resolves to “${tc.name}”.` });
+    }
+  } catch (err) {
+    checks.push({
+      id: "tax-code-digital",
+      label: "Digital tax codes",
+      status: "fail",
+      message: `A configured digital tax code is invalid: ${(err as Error)?.message ?? "error"}.`,
+      fix: "Set valid Stripe tax codes for ebooks and Spark packs.",
     });
   }
 
