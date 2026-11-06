@@ -17,6 +17,14 @@ export class StoredValueTooLargeError extends Error {
   }
 }
 
+/** A write was attempted with no signed-in user (the session ended, or was never made). */
+export class NotSignedInError extends Error {
+  constructor() {
+    super("Not signed in: storage operation requires authentication.");
+    this.name = "NotSignedInError";
+  }
+}
+
 export interface KeyValueStore {
   get<T>(key: string): Promise<T | null>;
   set<T>(key: string, value: T): Promise<void>;
@@ -36,6 +44,11 @@ export interface KeyValueStore {
    * it, and callers fall back to {@link set}.
    */
   update?<T>(key: string, mutator: (prev: T | null) => T): Promise<T>;
+  /**
+   * Hear the stored size of each value written, in bytes. Optional: only backends that serialize the
+   * value anyway can say it for free. Returns the function that stops listening.
+   */
+  onWrite?(listener: (key: string, bytes: number) => void): () => void;
 }
 
 export interface BlobStore {

@@ -162,6 +162,18 @@ export class ProjectRepository {
   async remove(id: string): Promise<void> {
     await this.backend.kv.remove(projectKey(id));
   }
+
+  /**
+   * Hear how big each stored book is after every save, in bytes, when the backend can say. Returns
+   * the function that stops listening; a no-op for backends that cannot measure.
+   */
+  onStoredSize(listener: (projectId: string, bytes: number) => void): () => void {
+    return (
+      this.backend.kv.onWrite?.((key, bytes) => {
+        if (isProjectKey(key)) listener(key.slice(PROJECT_KEY_PREFIX.length), bytes);
+      }) ?? (() => {})
+    );
+  }
 }
 
 /**

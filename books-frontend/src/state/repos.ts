@@ -28,3 +28,8 @@ export function getRepos() {
   }
   return reposPromise;
 }
+
+/** For checks: forget the repositories built so far, so the next call binds the backend now in use. */
+export function resetReposForChecks(): void {
+  reposPromise = null;
+}

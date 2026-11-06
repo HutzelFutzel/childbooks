@@ -15,7 +15,7 @@ import { Dashboard } from "@/ui/dashboard/Dashboard";
 import { TopBar } from "@/ui/layout/TopBar";
 import { LowSparksBanner } from "@/ui/layout/LowSparksBanner";
 import { JobProgress } from "@/ui/layout/JobProgress";
-import { ProjectConflictBanner, SaveFailureBanner } from "@/ui/layout/ProjectConflictBanner";
+import { ProjectConflictBanner, RecoveredChangesNotice, SaveFailureBanner } from "@/ui/layout/ProjectConflictBanner";
 import { OrdersDialog } from "@/ui/checkout/OrdersDialog";
 import { ContactDialog } from "@/ui/contact/ContactDialog";
 import { HelpButton } from "@/ui/contact/HelpButton";
@@ -542,6 +542,7 @@ export default function StudioApp() {
 
       <ProjectConflictBanner />
       <SaveFailureBanner />
+      <RecoveredChangesNotice />
       {accessLevel === "unverified" && <VerifyEmailBanner />}
       {!chatStudio && <LowSparksBanner />}
 

@@ -18,6 +18,7 @@ import {
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb, useEmulators } from "../lib/firebase";
 import { backendFetch } from "../platform/backend";
+import { forgetUserBooks } from "../platform/localOutbox";
 import { browserGeoHints } from "../core/analytics/geoHints";
 
 /**
@@ -400,8 +401,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   async signOutUser() {
     set({ pendingMigration: null });
+    const leaving = getFirebaseAuth().currentUser?.uid ?? null;
     await firebaseSignOut(getFirebaseAuth());
     forgetCachedPictures();
+    // Books kept on this device for unsaved changes belong to this person, not the next one.
+    if (leaving) void forgetUserBooks(leaving);
   },
 
   async resendVerification() {

@@ -9,6 +9,13 @@
 import type { StorageBackend } from "../core/storage/types";
 import { firebaseStorage } from "./storage-firebase";
 
+let replacement: StorageBackend | null = null;
+
+/** For checks: stand in another backend for the cloud one. Null puts the real one back. */
+export function useStorageBackendForChecks(backend: StorageBackend | null): void {
+  replacement = backend;
+}
+
 export function getStorage(): Promise<StorageBackend> {
-  return Promise.resolve(firebaseStorage);
+  return Promise.resolve(replacement ?? firebaseStorage);
 }

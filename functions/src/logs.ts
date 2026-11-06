@@ -415,7 +415,14 @@ export function registerClientLogRoute(app: Express): void {
             item.event === "ui.unhandled_error" ||
             item.severity === "fatal";
           const spike = isCrash && recordClientCrashAndCheckSpike(now);
-          const effectiveSeverity: LogSeverity = spike
+          // A book that can never be saved (too large, or refused outright) is a customer who is
+          // stuck, whatever else is happening: that is worth a page, once per book.
+          const reason = item.context?.reason;
+          const stuckSave =
+            Boolean(req.uid) &&
+            item.event === "project.save.failed" &&
+            (reason === "tooLarge" || reason === "rejected");
+          const effectiveSeverity: LogSeverity = spike || stuckSave
             ? "fatal"
             : item.severity === "fatal"
               ? "error"
@@ -439,7 +446,9 @@ export function registerClientLogRoute(app: Express): void {
             context: item.context ?? null,
             ref: spike
               ? `frontend_crash_spike_${Math.floor(now / CLIENT_CRASH_SPIKE_WINDOW_MS)}`
-              : null,
+              : stuckSave
+                ? `save_stuck_${req.uid}_${item.projectId ?? "unknown"}`
+                : null,
           });
         }),
       );

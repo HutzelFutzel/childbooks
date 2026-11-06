@@ -116,7 +116,11 @@ export function useChatJourney(project: Project): ChatJourney {
       if (redraw.target.kind !== "person") offered.add(redraw.target.unitId);
       for (const page of redraw.pages ?? []) offered.add(page.unitId);
     }
-    const stalePages = locked ? staleIllustrationSpreadIds(project).filter((id) => !offered.has(id)) : [];
+    // Nor does one that is being drawn right now: it is stale until the new picture lands, and a redraw
+    // button beside a redraw that is already running only confuses.
+    const stalePages = locked
+      ? staleIllustrationSpreadIds(project).filter((id) => !offered.has(id) && !activeUnitIds.has(id))
+      : [];
     const journey = deriveJourney(project, policies, {
       activeUnitIds,
       failedUnits,

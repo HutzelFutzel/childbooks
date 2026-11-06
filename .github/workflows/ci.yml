@@ -81,6 +81,11 @@ jobs:
       - name: Check page editing invariants
         run: yarn check:pages
 
+      # Saving a book: why a save fails, when it is retried, the copy kept on the
+      # device until the cloud has it, and putting it back on the next open.
+      - name: Check saving invariants
+        run: yarn check:save
+
       # App Hosting applies apphosting.yaml's env when it builds; a bare
       # `yarn build:web` here would not, and NEXT_PUBLIC_* are inlined at build
       # time. Load them so this really is the same build production gets.

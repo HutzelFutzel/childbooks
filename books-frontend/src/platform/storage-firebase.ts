@@ -31,7 +31,9 @@ import {
   uploadBytes,
 } from "firebase/storage";
 import { getFirebaseAuth, getFirebaseDb, getFirebaseStorage } from "../lib/firebase";
+import { STORED_BOOK_LIMIT_BYTES } from "../core/storage/bookSize";
 import {
+  NotSignedInError,
   StoredValueTooLargeError,
   type BlobStore,
   type KeyValueStore,
@@ -55,7 +57,7 @@ function currentUid(): string | null {
 
 function requireUid(): string {
   const uid = currentUid();
-  if (!uid) throw new Error("Not signed in: storage operation requires authentication.");
+  if (!uid) throw new NotSignedInError();
   return uid;
 }
 
@@ -75,16 +77,38 @@ interface KvDoc {
  * document path included). Checked here so an oversized book fails as itself,
  * before the network, instead of as a generic write error.
  */
-const MAX_JSON_BYTES = 1_048_000;
+const MAX_JSON_BYTES = STORED_BOOK_LIMIT_BYTES;
 
-function encodeValue(key: string, value: unknown): KvDoc {
+/** Below this many characters the exact byte count is not worth computing (well under a quarter of the limit). */
+const EXACT_SIZE_FROM_CHARS = 200_000;
+
+interface Encoded {
+  doc: KvDoc;
+  bytes: number;
+}
+
+function encodeValue(key: string, value: unknown): Encoded {
   const json = JSON.stringify(value);
   // A UTF-16 unit is at most 3 UTF-8 bytes, so short strings can't be over.
-  if (json.length * 3 > MAX_JSON_BYTES) {
-    const bytes = new TextEncoder().encode(json).length;
+  let bytes = json.length;
+  if (json.length > EXACT_SIZE_FROM_CHARS || json.length * 3 > MAX_JSON_BYTES) {
+    bytes = new TextEncoder().encode(json).length;
     if (bytes > MAX_JSON_BYTES) throw new StoredValueTooLargeError(key, bytes, MAX_JSON_BYTES);
   }
-  return { key, json, updatedAt: Date.now() };
+  return { doc: { key, json, updatedAt: Date.now() }, bytes };
+}
+
+const writeListeners = new Set<(key: string, bytes: number) => void>();
+
+/** Tell listeners how big a value that was just stored is. A listener's failure never reaches the write. */
+function wrote(key: string, bytes: number): void {
+  for (const listener of writeListeners) {
+    try {
+      listener(key, bytes);
+    } catch {
+      // measuring must never break saving
+    }
+  }
 }
 
 const firestoreKv: KeyValueStore = {
@@ -103,7 +127,9 @@ const firestoreKv: KeyValueStore = {
 
   async set<T>(key: string, value: T): Promise<void> {
     const uid = requireUid();
-    await setDoc(doc(getFirebaseDb(), `users/${uid}/store`, docId(key)), encodeValue(key, value));
+    const { doc: encoded, bytes } = encodeValue(key, value);
+    await setDoc(doc(getFirebaseDb(), `users/${uid}/store`, docId(key)), encoded);
+    wrote(key, bytes);
   },
 
   async remove(key: string): Promise<void> {
@@ -114,7 +140,8 @@ const firestoreKv: KeyValueStore = {
   async update<T>(key: string, mutator: (prev: T | null) => T): Promise<T> {
     const uid = requireUid();
     const ref = doc(getFirebaseDb(), `users/${uid}/store`, docId(key));
-    return runTransaction(getFirebaseDb(), async (tx) => {
+    let size = 0;
+    const next = await runTransaction(getFirebaseDb(), async (tx) => {
       const snap = await tx.get(ref);
       let prev: T | null = null;
       if (snap.exists()) {
@@ -125,9 +152,20 @@ const firestoreKv: KeyValueStore = {
         }
       }
       const next = mutator(prev);
-      tx.set(ref, encodeValue(key, next));
+      const { doc: encoded, bytes } = encodeValue(key, next);
+      size = bytes;
+      tx.set(ref, encoded);
       return next;
     });
+    wrote(key, size);
+    return next;
+  },
+
+  onWrite(listener) {
+    writeListeners.add(listener);
+    return () => {
+      writeListeners.delete(listener);
+    };
   },
 
   async keys(): Promise<string[]> {
